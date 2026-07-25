@@ -8,7 +8,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import BinaryIO, Optional
+from typing import BinaryIO, cast, Optional
 
 
 MOVES = frozenset({"R", "P", "S"})
@@ -105,7 +105,9 @@ def _start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
         ) from error
 
     assert process.stderr is not None
-    capture = StderrCapture(process.stderr, config.stderr_limit_bytes)
+    capture = StderrCapture(
+        cast(BinaryIO, process.stderr), config.stderr_limit_bytes
+    )
     capture.start()
     return BotProcess(label, command, process, capture)
 
