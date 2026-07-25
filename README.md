@@ -1,4 +1,3 @@
-````markdown
 # Rock–Paper–Scissors Bot Tournament
 *A language-agnostic programming competition for internal engineering teams*
 
@@ -577,4 +576,3 @@ Whenever making implementation decisions, optimize for the participant experienc
 Participants should feel like they are solving an interesting AI/programming problem—not wrestling with infrastructure.
 
 If a feature increases organizer complexity but makes the participant experience significantly simpler, prefer the simpler participant experience.
-````
