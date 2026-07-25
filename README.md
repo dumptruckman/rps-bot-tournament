@@ -280,6 +280,54 @@ Playoffs:
 
 ---
 
+# Local Match Engine
+
+Create an isolated virtual environment and install the local command into it.
+The project has no third-party runtime dependencies:
+
+```text
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+Then run a match:
+
+```text
+rps-run \
+  --bot-a "python bots/random_bot.py" \
+  --bot-b "python bots/copycat_bot.py" \
+  --rounds 300 \
+  --seed 12345 \
+  --output results/demo.json
+```
+
+The result file contains the match status, winner, score, move histories,
+round-by-round replay data, bot faults, and bounded stderr captured from each
+bot. A normal win, loss, draw, or protocol forfeit exits successfully.
+Infrastructure failures, such as a bot command that cannot be started or a
+result file that cannot be written, return a nonzero exit code.
+
+The timing defaults follow the protocol draft: 250 ms for the first move,
+50 ms for later moves, and a total response budget of 2 seconds per bot.
+They can be changed locally with `--first-move-timeout-ms`,
+`--move-timeout-ms`, and `--total-timeout-ms`.
+
+## Python starter bot
+
+The starter bot keeps participant code focused on one strategy function:
+
+```python
+def choose_move(turn, my_history, opponent_history, rng):
+    return rng.choice(("R", "P", "S"))
+```
+
+The organizer-owned Python wrapper supplies a deterministic `rng`, translates
+the stdin/stdout protocol, and flushes each response. The complete runnable
+example is in `bots/random_bot.py`.
+
+---
+
 # Submission Format
 
 Participants submit source code only.
