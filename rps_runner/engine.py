@@ -8,7 +8,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import BinaryIO
+from typing import BinaryIO, Optional
 
 
 MOVES = frozenset({"R", "P", "S"})
@@ -38,7 +38,7 @@ class StderrCapture:
     limit: int
     captured: bytearray = field(default_factory=bytearray)
     truncated: bool = False
-    thread: threading.Thread | None = None
+    thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._drain, daemon=True)
@@ -359,7 +359,7 @@ def run_match(config: MatchConfig) -> dict[str, object]:
     moves = {"a": "", "b": ""}
     score = {"a": 0, "b": 0, "draws": 0}
     played_rounds: list[dict[str, object]] = []
-    faults: dict[str, dict[str, object] | None] = {"a": None, "b": None}
+    faults: dict[str, Optional[dict[str, object]]] = {"a": None, "b": None}
 
     try:
         for turn in range(config.rounds):
@@ -435,7 +435,7 @@ def run_match(config: MatchConfig) -> dict[str, object]:
     faulted = [label for label, fault in faults.items() if fault is not None]
     if len(faulted) == 2:
         status = "double_forfeit"
-        winner: str | None = None
+        winner: Optional[str] = None
     elif len(faulted) == 1:
         status = "forfeit"
         winner = "b" if faulted[0] == "a" else "a"

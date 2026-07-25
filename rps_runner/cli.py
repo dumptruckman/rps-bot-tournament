@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Optional
 
 from rps_runner.engine import InfrastructureError, MatchConfig, run_match
 
@@ -57,7 +58,7 @@ def _write_result(path: Path, result: dict[str, object]) -> None:
     path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
 
 
-def main(arguments: list[str] | None = None) -> int:
+def main(arguments: Optional[list[str]] = None) -> int:
     options = build_parser().parse_args(arguments)
     config = MatchConfig(
         bot_a=options.bot_a,

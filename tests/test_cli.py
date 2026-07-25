@@ -8,7 +8,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from typing import get_type_hints, Optional
 import unittest
+
+from rps_runner.cli import main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -19,14 +22,19 @@ def bot_command(path: Path) -> str:
 
 
 class MatchEngineCliTests(unittest.TestCase):
+    def test_cli_type_hints_resolve_on_supported_python_versions(self) -> None:
+        hints = get_type_hints(main)
+
+        self.assertEqual(hints["return"], int)
+
     def run_match(
         self,
         bot_a: str,
         bot_b: str,
         *,
         rounds: int = 1,
-        extra_arguments: list[str] | None = None,
-    ) -> tuple[subprocess.CompletedProcess[str], dict[str, object] | None]:
+        extra_arguments: Optional[list[str]] = None,
+    ) -> tuple[subprocess.CompletedProcess[str], Optional[dict[str, object]]]:
         output = self.directory / "result.json"
         command = [
             sys.executable,
