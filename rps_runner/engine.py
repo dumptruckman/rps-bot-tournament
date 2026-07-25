@@ -120,13 +120,7 @@ def _stop_bots(bots: list[BotProcess]) -> None:
 
     for bot in bots:
         if bot.process.poll() is None:
-            try:
-                os.killpg(bot.process.pid, signal.SIGTERM)
-            except OSError:
-                try:
-                    bot.process.terminate()
-                except OSError:
-                    pass
+            _signal_bot(bot, signal.SIGTERM)
 
     deadline_ns = time.monotonic_ns() + 200_000_000
     for bot in bots:
@@ -138,13 +132,7 @@ def _stop_bots(bots: list[BotProcess]) -> None:
 
     for bot in bots:
         if bot.process.poll() is None:
-            try:
-                os.killpg(bot.process.pid, signal.SIGKILL)
-            except OSError:
-                try:
-                    bot.process.kill()
-                except OSError:
-                    pass
+            _signal_bot(bot, signal.SIGKILL)
 
     for bot in bots:
         try:
@@ -152,6 +140,52 @@ def _stop_bots(bots: list[BotProcess]) -> None:
         except subprocess.TimeoutExpired:
             pass
         bot.stderr.finish()
+
+
+def _signal_bot(bot: BotProcess, requested_signal: signal.Signals) -> None:
+    try:
+        os.killpg(bot.process.pid, requested_signal)
+    except OSError:
+        try:
+            bot.process.send_signal(requested_signal)
+        except OSError:
+            pass
+
+
+def _pre_request_faults(
+    bots: dict[str, BotProcess], turn: int
+) -> dict[str, dict[str, object]]:
+    faults: dict[str, dict[str, object]] = {}
+    selector = selectors.DefaultSelector()
+    try:
+        for label, bot in bots.items():
+            assert bot.process.stdout is not None
+            os.set_blocking(bot.process.stdout.fileno(), False)
+            selector.register(bot.process.stdout, selectors.EVENT_READ, label)
+
+        for key, _ in selector.select(0):
+            label = key.data
+            bot = bots[label]
+            try:
+                output = os.read(key.fd, MAX_STDOUT_RESPONSE_BYTES + 1)
+            except BlockingIOError:
+                continue
+            if output:
+                faults[label] = _fault(
+                    "unexpected_output",
+                    turn,
+                    "Bot wrote output before receiving this turn's request",
+                )
+            else:
+                faults[label] = _fault(
+                    "unexpected_exit",
+                    turn,
+                    "Bot closed stdout before receiving this turn's request",
+                )
+            _signal_bot(bot, signal.SIGTERM)
+    finally:
+        selector.close()
+    return faults
 
 
 def _history_line(history: str) -> str:
@@ -175,9 +209,12 @@ def _read_responses(
     sent_ns: int,
     timeout_ns: int,
     total_budget_ns: int,
-) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
+) -> tuple[
+    dict[str, str], dict[str, dict[str, object]], dict[str, int]
+]:
     responses: dict[str, str] = {}
     faults: dict[str, dict[str, object]] = {}
+    response_times_ns: dict[str, int] = {}
     pending = set(bots)
     deadlines: dict[str, int] = {}
     selector = selectors.DefaultSelector()
@@ -206,6 +243,7 @@ def _read_responses(
                     faults[label] = _fault(
                         "timeout", turn, "Bot exceeded its response-time limit"
                     )
+                    _signal_bot(bots[label], signal.SIGTERM)
                     pending.remove(label)
                     stream = bots[label].process.stdout
                     if stream is not None:
@@ -247,6 +285,7 @@ def _read_responses(
                         turn,
                         "Bot response exceeded the stdout limit",
                     )
+                    _signal_bot(bot, signal.SIGTERM)
                     pending.remove(label)
                     selector.unregister(key.fileobj)
                     continue
@@ -256,7 +295,9 @@ def _read_responses(
                 response_bytes, remainder = bot.stdout_buffer.split(b"\n", 1)
                 bot.stdout_buffer = bytearray(remainder)
                 response_ns = time.monotonic_ns()
-                bot.total_response_ns += response_ns - sent_ns
+                response_time_ns = response_ns - sent_ns
+                response_times_ns[label] = response_time_ns
+                bot.total_response_ns += response_time_ns
                 pending.remove(label)
                 selector.unregister(key.fileobj)
 
@@ -266,6 +307,7 @@ def _read_responses(
                         turn,
                         "Bot returned more than one line for a request",
                     )
+                    _signal_bot(bot, signal.SIGTERM)
                     continue
                 try:
                     response = response_bytes.decode("utf-8")
@@ -273,6 +315,7 @@ def _read_responses(
                     faults[label] = _fault(
                         "invalid_response", turn, "Bot response was not valid UTF-8"
                     )
+                    _signal_bot(bot, signal.SIGTERM)
                     continue
                 if response not in MOVES:
                     faults[label] = _fault(
@@ -280,12 +323,13 @@ def _read_responses(
                         turn,
                         f"Expected exactly R, P, or S; received {response!r}",
                     )
+                    _signal_bot(bot, signal.SIGTERM)
                     continue
                 responses[label] = response
     finally:
         selector.close()
 
-    return responses, faults
+    return responses, faults, response_times_ns
 
 
 def _round_winner(move_a: str, move_b: str) -> str:
@@ -319,6 +363,12 @@ def run_match(config: MatchConfig) -> dict[str, object]:
 
     try:
         for turn in range(config.rounds):
+            before_request_faults = _pre_request_faults(bots_by_label, turn)
+            if before_request_faults:
+                for label, fault in before_request_faults.items():
+                    faults[label] = fault
+                break
+
             requests = {
                 "a": _request(turn, moves["a"], moves["b"]),
                 "b": _request(turn, moves["b"], moves["a"]),
@@ -336,6 +386,7 @@ def run_match(config: MatchConfig) -> dict[str, object]:
                         turn,
                         "Bot exited or closed stdin before receiving the request",
                     )
+                    _signal_bot(bots_by_label[label], signal.SIGTERM)
 
             sent_ns = time.monotonic_ns()
             waiting_bots = {
@@ -348,7 +399,7 @@ def run_match(config: MatchConfig) -> dict[str, object]:
                 if turn == 0
                 else config.move_timeout_ms
             )
-            responses, response_faults = _read_responses(
+            responses, response_faults, response_times_ns = _read_responses(
                 waiting_bots,
                 turn,
                 sent_ns,
@@ -368,7 +419,13 @@ def run_match(config: MatchConfig) -> dict[str, object]:
             moves["b"] += move_b
             score["draws" if winner == "draw" else winner] += 1
             played_rounds.append(
-                {"turn": turn, "a": move_a, "b": move_b, "winner": winner}
+                {
+                    "turn": turn,
+                    "a": move_a,
+                    "b": move_b,
+                    "winner": winner,
+                    "response_time_ns": response_times_ns,
+                }
             )
     except OSError as error:
         raise InfrastructureError(f"Match runner failed: {error}") from error
@@ -400,6 +457,13 @@ def run_match(config: MatchConfig) -> dict[str, object]:
         "moves": moves,
         "rounds": played_rounds,
         "faults": faults,
+        "timing": {
+            "clock": "monotonic",
+            "total_response_ns": {
+                label: bot.total_response_ns
+                for label, bot in bots_by_label.items()
+            },
+        },
         "bots": {
             "a": _bot_result(bots_by_label["a"]),
             "b": _bot_result(bots_by_label["b"]),

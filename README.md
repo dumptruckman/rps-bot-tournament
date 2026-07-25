@@ -303,8 +303,9 @@ rps-run \
 ```
 
 The result file contains the match status, winner, score, move histories,
-round-by-round replay data, bot faults, and bounded stderr captured from each
-bot. A normal win, loss, draw, or protocol forfeit exits successfully.
+round-by-round replay data with monotonic response timings, bot faults, and
+bounded stderr captured from each bot. A normal win, loss, draw, or protocol
+forfeit exits successfully.
 Infrastructure failures, such as a bot command that cannot be started or a
 result file that cannot be written, return a nonzero exit code.
 

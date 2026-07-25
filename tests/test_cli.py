@@ -111,7 +111,14 @@ class MatchEngineCliTests(unittest.TestCase):
         self.assertEqual(result["score"], {"a": 2, "b": 0, "draws": 1})
         self.assertEqual(result["moves"], {"a": "RPS", "b": "SPP"})
         self.assertEqual(
-            result["rounds"],
+            [
+                {
+                    key: value
+                    for key, value in played_round.items()
+                    if key != "response_time_ns"
+                }
+                for played_round in result["rounds"]
+            ],
             [
                 {"turn": 0, "a": "R", "b": "S", "winner": "a"},
                 {"turn": 1, "a": "P", "b": "P", "winner": "draw"},
@@ -291,6 +298,112 @@ class MatchEngineCliTests(unittest.TestCase):
         self.assertEqual(first_result["status"], "completed")
         self.assertEqual(first_result["moves"], second_result["moves"])
         self.assertEqual(first_result["score"], second_result["score"])
+
+    def test_output_between_requests_is_a_protocol_fault(self) -> None:
+        eager_bot = self.write_bot(
+            "eager.py",
+            """
+            import sys
+            import time
+
+            for _ in range(3):
+                sys.stdin.readline()
+            print("R", flush=True)
+            time.sleep(0.02)
+            print("P", flush=True)
+            while True:
+                time.sleep(1)
+            """,
+        )
+        delaying_bot = self.write_bot(
+            "delaying.py",
+            """
+            import sys
+            import time
+
+            for turn in range(2):
+                for _ in range(3):
+                    sys.stdin.readline()
+                if turn == 0:
+                    time.sleep(0.1)
+                print("S", flush=True)
+            """,
+        )
+
+        completed, result = self.run_match(
+            bot_command(eager_bot), bot_command(delaying_bot), rounds=2
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(result["status"], "forfeit")
+        self.assertEqual(result["winner"], "b")
+        self.assertEqual(result["faults"]["a"]["kind"], "unexpected_output")
+        self.assertEqual(result["faults"]["a"]["turn"], 1)
+
+    def test_faulted_bot_is_terminated_while_opponent_response_is_pending(self) -> None:
+        terminated_marker = self.directory / "terminated"
+        faulting_bot = self.write_bot(
+            "faulting.py",
+            f"""
+            import pathlib
+            import signal
+            import sys
+            import time
+
+            marker = pathlib.Path({str(terminated_marker)!r})
+            signal.signal(signal.SIGTERM, lambda *_: (marker.touch(), sys.exit(0)))
+            for _ in range(3):
+                sys.stdin.readline()
+            print("invalid", flush=True)
+            while True:
+                time.sleep(1)
+            """,
+        )
+        observing_bot = self.write_bot(
+            "observing.py",
+            f"""
+            import pathlib
+            import sys
+            import time
+
+            marker = pathlib.Path({str(terminated_marker)!r})
+            for _ in range(3):
+                sys.stdin.readline()
+            deadline = time.monotonic() + 0.2
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            print("R" if marker.exists() else "invalid", flush=True)
+            """,
+        )
+
+        completed, result = self.run_match(
+            bot_command(faulting_bot), bot_command(observing_bot)
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(result["status"], "forfeit")
+        self.assertEqual(result["winner"], "b")
+        self.assertEqual(result["faults"]["a"]["kind"], "invalid_response")
+        self.assertIsNone(result["faults"]["b"])
+
+    def test_replay_contains_monotonic_response_durations(self) -> None:
+        random_bot = PROJECT_ROOT / "bots" / "random_bot.py"
+        copycat_bot = PROJECT_ROOT / "bots" / "copycat_bot.py"
+
+        completed, result = self.run_match(
+            bot_command(random_bot), bot_command(copycat_bot), rounds=2
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(set(result["timing"]["total_response_ns"]), {"a", "b"})
+        for duration in result["timing"]["total_response_ns"].values():
+            self.assertIsInstance(duration, int)
+            self.assertGreaterEqual(duration, 0)
+        for played_round in result["rounds"]:
+            self.assertEqual(set(played_round["response_time_ns"]), {"a", "b"})
+            for duration in played_round["response_time_ns"].values():
+                self.assertIsInstance(duration, int)
+                self.assertGreaterEqual(duration, 0)
 
 
 if __name__ == "__main__":
