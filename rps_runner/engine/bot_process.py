@@ -179,6 +179,198 @@ def pre_request_faults(
     return faults
 
 
+@dataclass
+class _ResponseReader:
+    bots: dict[str, BotProcess]
+    turn: int
+    sent_ns: int
+    timeout_ns: int
+    total_budget_ns: int
+    responses: dict[str, str] = field(default_factory=dict)
+    faults: dict[str, dict[str, object]] = field(default_factory=dict)
+    response_times_ns: dict[str, int] = field(default_factory=dict)
+    pending: set[str] = field(default_factory=set)
+    deadlines: dict[str, int] = field(default_factory=dict)
+
+    def read(self) -> tuple[
+        dict[str, str], dict[str, dict[str, object]], dict[str, int]
+    ]:
+        selector = selectors.DefaultSelector()
+        try:
+            self._register_bots(selector)
+            while self.pending:
+                self._expire_timeouts(selector)
+                if self.pending:
+                    self._read_ready_streams(selector)
+        finally:
+            selector.close()
+
+        return self.responses, self.faults, self.response_times_ns
+
+    def _register_bots(self, selector: selectors.BaseSelector) -> None:
+        for label, bot in self.bots.items():
+            if bot.stdout_buffer:
+                self.faults[label] = fault(
+                    "unexpected_output",
+                    self.turn,
+                    "Bot wrote output before receiving this turn's request",
+                )
+                continue
+
+            remaining_budget = self.total_budget_ns - bot.total_response_ns
+            self.deadlines[label] = self.sent_ns + min(
+                self.timeout_ns, max(0, remaining_budget)
+            )
+            assert bot.process.stdout is not None
+            os.set_blocking(bot.process.stdout.fileno(), False)
+            selector.register(bot.process.stdout, selectors.EVENT_READ, label)
+            self.pending.add(label)
+
+    def _expire_timeouts(self, selector: selectors.BaseSelector) -> None:
+        now_ns = time.monotonic_ns()
+        expired = [
+            label
+            for label in self.pending
+            if now_ns >= self.deadlines[label]
+        ]
+        for label in expired:
+            self._record_fault(
+                selector,
+                label,
+                "timeout",
+                "Bot exceeded its response-time limit",
+                terminate=True,
+            )
+
+    def _read_ready_streams(self, selector: selectors.BaseSelector) -> None:
+        nearest_deadline = min(
+            self.deadlines[label] for label in self.pending
+        )
+        wait_seconds = max(
+            0, nearest_deadline - time.monotonic_ns()
+        ) / 1_000_000_000
+        for key, _ in selector.select(wait_seconds):
+            label = key.data
+            if label in self.pending:
+                self._read_stream(selector, key, label)
+
+    def _read_stream(
+        self,
+        selector: selectors.BaseSelector,
+        key: selectors.SelectorKey,
+        label: str,
+    ) -> None:
+        try:
+            chunk = os.read(key.fd, MAX_STDOUT_RESPONSE_BYTES + 1)
+        except BlockingIOError:
+            return
+
+        if not chunk:
+            self._record_fault(
+                selector,
+                label,
+                "unexpected_exit",
+                "Bot closed stdout before returning a move",
+            )
+            return
+
+        bot = self.bots[label]
+        bot.stdout_buffer.extend(chunk)
+        if len(bot.stdout_buffer) > MAX_STDOUT_RESPONSE_BYTES:
+            self._record_fault(
+                selector,
+                label,
+                "excessive_output",
+                "Bot response exceeded the stdout limit",
+                terminate=True,
+            )
+            return
+        if b"\n" in bot.stdout_buffer:
+            self._process_line(selector, label)
+
+    def _process_line(
+        self, selector: selectors.BaseSelector, label: str
+    ) -> None:
+        bot = self.bots[label]
+        response_bytes, remainder = bot.stdout_buffer.split(b"\n", 1)
+        bot.stdout_buffer = bytearray(remainder)
+        self._record_response_time(label)
+        self._complete(selector, label)
+
+        if remainder:
+            self._record_fault(
+                selector,
+                label,
+                "unexpected_output",
+                "Bot returned more than one line for a request",
+                terminate=True,
+            )
+            return
+
+        response = self._decode_response(selector, label, response_bytes)
+        if response is None:
+            return
+        if response not in MOVES:
+            self._record_fault(
+                selector,
+                label,
+                "invalid_response",
+                f"Expected exactly R, P, or S; received {response!r}",
+                terminate=True,
+            )
+            return
+        self.responses[label] = response
+
+    def _decode_response(
+        self,
+        selector: selectors.BaseSelector,
+        label: str,
+        response_bytes: bytes,
+    ) -> Optional[str]:
+        try:
+            return response_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            self._record_fault(
+                selector,
+                label,
+                "invalid_response",
+                "Bot response was not valid UTF-8",
+                terminate=True,
+            )
+            return None
+
+    def _record_response_time(self, label: str) -> None:
+        response_time_ns = time.monotonic_ns() - self.sent_ns
+        self.response_times_ns[label] = response_time_ns
+        self.bots[label].total_response_ns += response_time_ns
+
+    def _record_fault(
+        self,
+        selector: selectors.BaseSelector,
+        label: str,
+        kind: str,
+        detail: str,
+        *,
+        terminate: bool = False,
+    ) -> None:
+        self.faults[label] = fault(kind, self.turn, detail)
+        self._complete(selector, label)
+        if terminate:
+            signal_bot(self.bots[label], signal.SIGTERM)
+
+    def _complete(
+        self, selector: selectors.BaseSelector, label: str
+    ) -> None:
+        self.pending.discard(label)
+        stream = self.bots[label].process.stdout
+        if stream is None:
+            return
+        try:
+            selector.unregister(stream)
+        except KeyError:
+            pass
+
+
 def read_responses(
     bots: dict[str, BotProcess],
     turn: int,
@@ -188,121 +380,6 @@ def read_responses(
 ) -> tuple[
     dict[str, str], dict[str, dict[str, object]], dict[str, int]
 ]:
-    responses: dict[str, str] = {}
-    faults: dict[str, dict[str, object]] = {}
-    response_times_ns: dict[str, int] = {}
-    pending = set(bots)
-    deadlines: dict[str, int] = {}
-    selector = selectors.DefaultSelector()
-
-    try:
-        for label, bot in bots.items():
-            if bot.stdout_buffer:
-                faults[label] = fault(
-                    "unexpected_output",
-                    turn,
-                    "Bot wrote output before receiving this turn's request",
-                )
-                pending.remove(label)
-                continue
-
-            remaining_budget = total_budget_ns - bot.total_response_ns
-            deadlines[label] = sent_ns + min(timeout_ns, max(0, remaining_budget))
-            assert bot.process.stdout is not None
-            os.set_blocking(bot.process.stdout.fileno(), False)
-            selector.register(bot.process.stdout, selectors.EVENT_READ, label)
-
-        while pending:
-            now_ns = time.monotonic_ns()
-            for label in list(pending):
-                if now_ns >= deadlines[label]:
-                    faults[label] = fault(
-                        "timeout", turn, "Bot exceeded its response-time limit"
-                    )
-                    signal_bot(bots[label], signal.SIGTERM)
-                    pending.remove(label)
-                    stream = bots[label].process.stdout
-                    if stream is not None:
-                        try:
-                            selector.unregister(stream)
-                        except KeyError:
-                            pass
-
-            if not pending:
-                break
-
-            nearest_deadline = min(deadlines[label] for label in pending)
-            wait_seconds = max(
-                0, nearest_deadline - time.monotonic_ns()
-            ) / 1_000_000_000
-            for key, _ in selector.select(wait_seconds):
-                label = key.data
-                if label not in pending:
-                    continue
-                bot = bots[label]
-                try:
-                    chunk = os.read(key.fd, MAX_STDOUT_RESPONSE_BYTES + 1)
-                except BlockingIOError:
-                    continue
-                if not chunk:
-                    faults[label] = fault(
-                        "unexpected_exit",
-                        turn,
-                        "Bot closed stdout before returning a move",
-                    )
-                    pending.remove(label)
-                    selector.unregister(key.fileobj)
-                    continue
-
-                bot.stdout_buffer.extend(chunk)
-                if len(bot.stdout_buffer) > MAX_STDOUT_RESPONSE_BYTES:
-                    faults[label] = fault(
-                        "excessive_output",
-                        turn,
-                        "Bot response exceeded the stdout limit",
-                    )
-                    signal_bot(bot, signal.SIGTERM)
-                    pending.remove(label)
-                    selector.unregister(key.fileobj)
-                    continue
-                if b"\n" not in bot.stdout_buffer:
-                    continue
-
-                response_bytes, remainder = bot.stdout_buffer.split(b"\n", 1)
-                bot.stdout_buffer = bytearray(remainder)
-                response_ns = time.monotonic_ns()
-                response_time_ns = response_ns - sent_ns
-                response_times_ns[label] = response_time_ns
-                bot.total_response_ns += response_time_ns
-                pending.remove(label)
-                selector.unregister(key.fileobj)
-
-                if remainder:
-                    faults[label] = fault(
-                        "unexpected_output",
-                        turn,
-                        "Bot returned more than one line for a request",
-                    )
-                    signal_bot(bot, signal.SIGTERM)
-                    continue
-                try:
-                    response = response_bytes.decode("utf-8")
-                except UnicodeDecodeError:
-                    faults[label] = fault(
-                        "invalid_response", turn, "Bot response was not valid UTF-8"
-                    )
-                    signal_bot(bot, signal.SIGTERM)
-                    continue
-                if response not in MOVES:
-                    faults[label] = fault(
-                        "invalid_response",
-                        turn,
-                        f"Expected exactly R, P, or S; received {response!r}",
-                    )
-                    signal_bot(bot, signal.SIGTERM)
-                    continue
-                responses[label] = response
-    finally:
-        selector.close()
-
-    return responses, faults, response_times_ns
+    return _ResponseReader(
+        bots, turn, sent_ns, timeout_ns, total_budget_ns
+    ).read()
