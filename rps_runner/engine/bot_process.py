@@ -15,6 +15,8 @@ from rps_runner.engine.models import InfrastructureError, MatchConfig
 
 MOVES = frozenset({"R", "P", "S"})
 MAX_STDOUT_RESPONSE_BYTES = 4096
+TERMINATION_GRACE_NS = 200_000_000
+FINAL_WAIT_SECONDS = 1
 
 
 @dataclass
@@ -98,18 +100,37 @@ def start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
 
 
 def stop_bots(bots: list[BotProcess]) -> None:
-    for bot in bots:
-        if bot.process.stdin is not None:
-            try:
-                bot.process.stdin.close()
-            except OSError:
-                pass
+    _close_bot_inputs(bots)
+    _signal_running_bots(bots, signal.SIGTERM)
+    _wait_for_bots_until(
+        bots, time.monotonic_ns() + TERMINATION_GRACE_NS
+    )
+    _signal_running_bots(bots, signal.SIGKILL)
+    _reap_bots(bots)
 
+
+def _close_bot_inputs(bots: list[BotProcess]) -> None:
+    for bot in bots:
+        process_input = bot.process.stdin
+        if process_input is None:
+            continue
+        try:
+            process_input.close()
+        except OSError:
+            pass
+
+
+def _signal_running_bots(
+    bots: list[BotProcess], requested_signal: signal.Signals
+) -> None:
     for bot in bots:
         if bot.process.poll() is None:
-            signal_bot(bot, signal.SIGTERM)
+            signal_bot(bot, requested_signal)
 
-    deadline_ns = time.monotonic_ns() + 200_000_000
+
+def _wait_for_bots_until(
+    bots: list[BotProcess], deadline_ns: int
+) -> None:
     for bot in bots:
         remaining = max(0, deadline_ns - time.monotonic_ns()) / 1_000_000_000
         try:
@@ -117,13 +138,11 @@ def stop_bots(bots: list[BotProcess]) -> None:
         except subprocess.TimeoutExpired:
             pass
 
-    for bot in bots:
-        if bot.process.poll() is None:
-            signal_bot(bot, signal.SIGKILL)
 
+def _reap_bots(bots: list[BotProcess]) -> None:
     for bot in bots:
         try:
-            bot.process.wait(timeout=1)
+            bot.process.wait(timeout=FINAL_WAIT_SECONDS)
         except subprocess.TimeoutExpired:
             pass
         bot.stderr.finish()
