@@ -28,8 +28,9 @@ class StderrCapture:
     thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        self.thread = threading.Thread(target=self._drain, daemon=True)
-        self.thread.start()
+        thread = threading.Thread(target=self._drain, daemon=True)
+        self.thread = thread
+        thread.start()
 
     def _drain(self) -> None:
         while True:
