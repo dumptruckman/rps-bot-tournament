@@ -8,28 +8,13 @@ import signal
 import subprocess
 import threading
 import time
-from typing import BinaryIO, cast, Optional
+from typing import BinaryIO, Optional, cast
+
+from rps_runner.engine.models import InfrastructureError, MatchConfig
 
 
 MOVES = frozenset({"R", "P", "S"})
-WINNING_MATCHUPS = {("R", "S"), ("S", "P"), ("P", "R")}
 MAX_STDOUT_RESPONSE_BYTES = 4096
-
-
-class InfrastructureError(RuntimeError):
-    """The runner could not create or operate the match infrastructure."""
-
-
-@dataclass(frozen=True)
-class MatchConfig:
-    bot_a: str
-    bot_b: str
-    rounds: int
-    seed: int
-    first_move_timeout_ms: int = 250
-    move_timeout_ms: int = 50
-    total_timeout_ms: int = 2000
-    stderr_limit_bytes: int = 65_536
 
 
 @dataclass
@@ -72,7 +57,7 @@ class BotProcess:
     total_response_ns: int = 0
 
 
-def _start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
+def start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
     try:
         arguments = shlex.split(command)
     except ValueError as error:
@@ -112,7 +97,7 @@ def _start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
     return BotProcess(label, command, process, capture)
 
 
-def _stop_bots(bots: list[BotProcess]) -> None:
+def stop_bots(bots: list[BotProcess]) -> None:
     for bot in bots:
         if bot.process.stdin is not None:
             try:
@@ -122,7 +107,7 @@ def _stop_bots(bots: list[BotProcess]) -> None:
 
     for bot in bots:
         if bot.process.poll() is None:
-            _signal_bot(bot, signal.SIGTERM)
+            signal_bot(bot, signal.SIGTERM)
 
     deadline_ns = time.monotonic_ns() + 200_000_000
     for bot in bots:
@@ -134,7 +119,7 @@ def _stop_bots(bots: list[BotProcess]) -> None:
 
     for bot in bots:
         if bot.process.poll() is None:
-            _signal_bot(bot, signal.SIGKILL)
+            signal_bot(bot, signal.SIGKILL)
 
     for bot in bots:
         try:
@@ -144,7 +129,7 @@ def _stop_bots(bots: list[BotProcess]) -> None:
         bot.stderr.finish()
 
 
-def _signal_bot(bot: BotProcess, requested_signal: signal.Signals) -> None:
+def signal_bot(bot: BotProcess, requested_signal: signal.Signals) -> None:
     try:
         os.killpg(bot.process.pid, requested_signal)
     except OSError:
@@ -154,7 +139,11 @@ def _signal_bot(bot: BotProcess, requested_signal: signal.Signals) -> None:
             pass
 
 
-def _pre_request_faults(
+def fault(kind: str, turn: int, detail: str) -> dict[str, object]:
+    return {"kind": kind, "turn": turn, "detail": detail}
+
+
+def pre_request_faults(
     bots: dict[str, BotProcess], turn: int
 ) -> dict[str, dict[str, object]]:
     faults: dict[str, dict[str, object]] = {}
@@ -173,39 +162,24 @@ def _pre_request_faults(
             except BlockingIOError:
                 continue
             if output:
-                faults[label] = _fault(
+                faults[label] = fault(
                     "unexpected_output",
                     turn,
                     "Bot wrote output before receiving this turn's request",
                 )
             else:
-                faults[label] = _fault(
+                faults[label] = fault(
                     "unexpected_exit",
                     turn,
                     "Bot closed stdout before receiving this turn's request",
                 )
-            _signal_bot(bot, signal.SIGTERM)
+            signal_bot(bot, signal.SIGTERM)
     finally:
         selector.close()
     return faults
 
 
-def _history_line(history: str) -> str:
-    return history if history else "-"
-
-
-def _request(turn: int, own_history: str, opponent_history: str) -> bytes:
-    return (
-        f"{turn}\n{_history_line(own_history)}\n"
-        f"{_history_line(opponent_history)}\n"
-    ).encode("utf-8")
-
-
-def _fault(kind: str, turn: int, detail: str) -> dict[str, object]:
-    return {"kind": kind, "turn": turn, "detail": detail}
-
-
-def _read_responses(
+def read_responses(
     bots: dict[str, BotProcess],
     turn: int,
     sent_ns: int,
@@ -224,7 +198,7 @@ def _read_responses(
     try:
         for label, bot in bots.items():
             if bot.stdout_buffer:
-                faults[label] = _fault(
+                faults[label] = fault(
                     "unexpected_output",
                     turn,
                     "Bot wrote output before receiving this turn's request",
@@ -242,10 +216,10 @@ def _read_responses(
             now_ns = time.monotonic_ns()
             for label in list(pending):
                 if now_ns >= deadlines[label]:
-                    faults[label] = _fault(
+                    faults[label] = fault(
                         "timeout", turn, "Bot exceeded its response-time limit"
                     )
-                    _signal_bot(bots[label], signal.SIGTERM)
+                    signal_bot(bots[label], signal.SIGTERM)
                     pending.remove(label)
                     stream = bots[label].process.stdout
                     if stream is not None:
@@ -271,7 +245,7 @@ def _read_responses(
                 except BlockingIOError:
                     continue
                 if not chunk:
-                    faults[label] = _fault(
+                    faults[label] = fault(
                         "unexpected_exit",
                         turn,
                         "Bot closed stdout before returning a move",
@@ -282,12 +256,12 @@ def _read_responses(
 
                 bot.stdout_buffer.extend(chunk)
                 if len(bot.stdout_buffer) > MAX_STDOUT_RESPONSE_BYTES:
-                    faults[label] = _fault(
+                    faults[label] = fault(
                         "excessive_output",
                         turn,
                         "Bot response exceeded the stdout limit",
                     )
-                    _signal_bot(bot, signal.SIGTERM)
+                    signal_bot(bot, signal.SIGTERM)
                     pending.remove(label)
                     selector.unregister(key.fileobj)
                     continue
@@ -304,170 +278,31 @@ def _read_responses(
                 selector.unregister(key.fileobj)
 
                 if remainder:
-                    faults[label] = _fault(
+                    faults[label] = fault(
                         "unexpected_output",
                         turn,
                         "Bot returned more than one line for a request",
                     )
-                    _signal_bot(bot, signal.SIGTERM)
+                    signal_bot(bot, signal.SIGTERM)
                     continue
                 try:
                     response = response_bytes.decode("utf-8")
                 except UnicodeDecodeError:
-                    faults[label] = _fault(
+                    faults[label] = fault(
                         "invalid_response", turn, "Bot response was not valid UTF-8"
                     )
-                    _signal_bot(bot, signal.SIGTERM)
+                    signal_bot(bot, signal.SIGTERM)
                     continue
                 if response not in MOVES:
-                    faults[label] = _fault(
+                    faults[label] = fault(
                         "invalid_response",
                         turn,
                         f"Expected exactly R, P, or S; received {response!r}",
                     )
-                    _signal_bot(bot, signal.SIGTERM)
+                    signal_bot(bot, signal.SIGTERM)
                     continue
                 responses[label] = response
     finally:
         selector.close()
 
     return responses, faults, response_times_ns
-
-
-def _round_winner(move_a: str, move_b: str) -> str:
-    if move_a == move_b:
-        return "draw"
-    return "a" if (move_a, move_b) in WINNING_MATCHUPS else "b"
-
-
-def _bot_result(bot: BotProcess) -> dict[str, object]:
-    return {
-        "command": bot.command,
-        "stderr": bot.stderr.text(),
-        "stderr_truncated": bot.stderr.truncated,
-    }
-
-
-def run_match(config: MatchConfig) -> dict[str, object]:
-    bots: list[BotProcess] = []
-    try:
-        bots.append(_start_bot("a", config.bot_a, config))
-        bots.append(_start_bot("b", config.bot_b, config))
-    except InfrastructureError:
-        _stop_bots(bots)
-        raise
-
-    bots_by_label = {bot.label: bot for bot in bots}
-    moves = {"a": "", "b": ""}
-    score = {"a": 0, "b": 0, "draws": 0}
-    played_rounds: list[dict[str, object]] = []
-    faults: dict[str, Optional[dict[str, object]]] = {"a": None, "b": None}
-
-    try:
-        for turn in range(config.rounds):
-            before_request_faults = _pre_request_faults(bots_by_label, turn)
-            if before_request_faults:
-                for label, fault in before_request_faults.items():
-                    faults[label] = fault
-                break
-
-            requests = {
-                "a": _request(turn, moves["a"], moves["b"]),
-                "b": _request(turn, moves["b"], moves["a"]),
-            }
-            send_faults: dict[str, dict[str, object]] = {}
-            for label in ("a", "b"):
-                process_input = bots_by_label[label].process.stdin
-                assert process_input is not None
-                try:
-                    process_input.write(requests[label])
-                    process_input.flush()
-                except (BrokenPipeError, OSError):
-                    send_faults[label] = _fault(
-                        "unexpected_exit",
-                        turn,
-                        "Bot exited or closed stdin before receiving the request",
-                    )
-                    _signal_bot(bots_by_label[label], signal.SIGTERM)
-
-            sent_ns = time.monotonic_ns()
-            waiting_bots = {
-                label: bot
-                for label, bot in bots_by_label.items()
-                if label not in send_faults
-            }
-            timeout_ms = (
-                config.first_move_timeout_ms
-                if turn == 0
-                else config.move_timeout_ms
-            )
-            responses, response_faults, response_times_ns = _read_responses(
-                waiting_bots,
-                turn,
-                sent_ns,
-                timeout_ms * 1_000_000,
-                config.total_timeout_ms * 1_000_000,
-            )
-            turn_faults = send_faults | response_faults
-            if turn_faults:
-                for label, fault in turn_faults.items():
-                    faults[label] = fault
-                break
-
-            move_a = responses["a"]
-            move_b = responses["b"]
-            winner = _round_winner(move_a, move_b)
-            moves["a"] += move_a
-            moves["b"] += move_b
-            score["draws" if winner == "draw" else winner] += 1
-            played_rounds.append(
-                {
-                    "turn": turn,
-                    "a": move_a,
-                    "b": move_b,
-                    "winner": winner,
-                    "response_time_ns": response_times_ns,
-                }
-            )
-    except OSError as error:
-        raise InfrastructureError(f"Match runner failed: {error}") from error
-    finally:
-        _stop_bots(bots)
-
-    faulted = [label for label, fault in faults.items() if fault is not None]
-    if len(faulted) == 2:
-        status = "double_forfeit"
-        winner: Optional[str] = None
-    elif len(faulted) == 1:
-        status = "forfeit"
-        winner = "b" if faulted[0] == "a" else "a"
-    else:
-        status = "completed"
-        if score["a"] == score["b"]:
-            winner = "draw"
-        else:
-            winner = "a" if score["a"] > score["b"] else "b"
-
-    return {
-        "protocol_version": 1,
-        "scheduled_rounds": config.rounds,
-        "seed": config.seed,
-        "status": status,
-        "winner": winner,
-        "score": score,
-        "completed_rounds": len(played_rounds),
-        "moves": moves,
-        "rounds": played_rounds,
-        "faults": faults,
-        "timing": {
-            "clock": "monotonic",
-            "total_response_ns": {
-                label: bot.total_response_ns
-                for label, bot in bots_by_label.items()
-            },
-        },
-        "bots": {
-            "a": _bot_result(bots_by_label["a"]),
-            "b": _bot_result(bots_by_label["b"]),
-        },
-    }
