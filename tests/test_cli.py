@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-from typing import get_type_hints, Optional
+from typing import Any, get_type_hints, Optional
 import unittest
 
 from rps_runner.cli import main
@@ -34,7 +34,7 @@ class MatchEngineCliTests(unittest.TestCase):
         *,
         rounds: int = 1,
         extra_arguments: Optional[list[str]] = None,
-    ) -> tuple[subprocess.CompletedProcess[str], Optional[dict[str, object]]]:
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
         output = self.directory / "result.json"
         command = [
             sys.executable,
@@ -59,7 +59,13 @@ class MatchEngineCliTests(unittest.TestCase):
             text=True,
             timeout=10,
         )
-        result = json.loads(output.read_text()) if output.exists() else None
+        if not output.exists():
+            self.fail(
+                "CLI did not write a result file.\n"
+                f"stdout:\n{completed.stdout}\n"
+                f"stderr:\n{completed.stderr}"
+            )
+        result: dict[str, Any] = json.loads(output.read_text())
         return completed, result
 
     def setUp(self) -> None:
