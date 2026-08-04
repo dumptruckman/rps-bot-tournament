@@ -3,9 +3,9 @@
 **Protocol version:** 1  
 **Status:** Draft
 
-This document defines the interface between a Rock–Paper–Scissors bot and the tournament match runner.
+This document defines the interface between a Rock–Paper–Scissors Bot Artifact process and the match runner. Tournament domain terms follow [`CONTEXT.md`](../CONTEXT.md).
 
-A bot is a long-lived process that participates in one match. For each turn, the match runner sends the bot its current state through standard input. The bot must respond with one move through standard output.
+A bot process is a running instance of a Bot Artifact and participates in one Match. For brevity, subsequent references to a "bot" mean that process, not the Team or Bot Artifact. For each Turn, the match runner sends the bot its current state through standard input. The bot must respond with one move through standard output.
 
 The protocol is language-neutral and line-based.
 
@@ -13,7 +13,7 @@ The protocol is language-neutral and line-based.
 
 ## 1. Overview
 
-Each match consists of a fixed number of turns.
+Each Match consists of a fixed number of Turns. A Turn completes a Round only after both bots return valid moves; a fault can end a Turn without completing a Round.
 
 For every turn:
 
@@ -26,7 +26,7 @@ For every turn:
 
 A bot process remains running for the entire match.
 
-A fresh bot process is started for each new match or playoff set.
+A fresh bot process is started for each new Match, including every Match in a Series.
 
 ---
 
@@ -261,7 +261,7 @@ Bots should avoid:
 
 Bots may use randomness, but all tournament behavior must be reproducible.
 
-The runner provides a deterministic seed through the environment variable:
+The runner provides each bot with a deterministic bot-visible seed through the environment variable:
 
 ```text
 RPS_SEED
@@ -275,6 +275,8 @@ Example:
 RPS_SEED=123456789
 ```
 
+The organizer-owned wrapper's Seed Adapter deterministically maps this value into the language's seeded random-number generator. Different language wrappers are not required to produce identical random streams.
+
 Bots must use the organizer-provided seeded random-number generator from their language template.
 
 Bots must not seed randomness from:
@@ -285,7 +287,7 @@ Bots must not seed randomness from:
 - Network services.
 - Unspecified runtime behavior.
 
-Given the same bot artifact, opponent artifact, match configuration, and seed, a bot must produce the same sequence of moves.
+Given the same Bot Artifact, opponent Bot Artifact, Match configuration, bot-visible seed, wrapper, and runtime, a bot must produce the same sequence of moves.
 
 The tournament validator may execute the same match more than once to check determinism.
 
@@ -323,11 +325,11 @@ RPS_ROUNDS=300
 
 ### `RPS_SEED`
 
-The deterministic random seed assigned to the bot for the match.
+The deterministic bot-visible seed assigned to the Bot Artifact for the Match. Opposing Bot Artifacts are not required to receive the same seed.
 
 Bots must not depend on undocumented environment variables.
 
-The runner does not provide the opponent’s team name, bot name, ranking, artifact identifier, or implementation language.
+The runner does not provide the opponent's Team name or ID, Bot Artifact identifier, ranking, or implementation language.
 
 ---
 
@@ -356,7 +358,7 @@ The runner terminates the bot process immediately because any remaining output c
 
 If both bots fault during the same request, the match is recorded as a double fault.
 
-A bot that faults in one fixture may still participate in later fixtures. A fresh process is started for every fixture.
+A Bot Artifact that faults in one Match may still participate in later Matches, subject to Tournament rules. A fresh bot process is started for every Match.
 
 ---
 
@@ -427,7 +429,7 @@ The wrapper is responsible for:
 
 - Reading requests from standard input.
 - Parsing the turn and histories.
-- Constructing the seeded random-number generator.
+- Constructing the seeded random-number generator through the Seed Adapter.
 - Calling the team’s strategy function.
 - Validating the returned move.
 - Writing and flushing the protocol response.
