@@ -7,7 +7,6 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import textwrap
 from typing import Any, get_type_hints, Optional
 import unittest
 
@@ -15,10 +14,18 @@ from rps_runner.cli import main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TEST_BOTS = PROJECT_ROOT / "tests" / "fixtures" / "bots"
 
 
-def bot_command(path: Path) -> str:
-    return f"{shlex.quote(sys.executable)} {shlex.quote(str(path))}"
+def bot_command(path: Path, *arguments: object) -> str:
+    return shlex.join(
+        [sys.executable, str(path)]
+        + [str(argument) for argument in arguments]
+    )
+
+
+def test_bot(name: str, *arguments: object) -> str:
+    return bot_command(TEST_BOTS / name, *arguments)
 
 
 class MatchEngineCliTests(unittest.TestCase):
@@ -33,6 +40,7 @@ class MatchEngineCliTests(unittest.TestCase):
         bot_b: str,
         *,
         rounds: int = 1,
+        seed: int = 12345,
         extra_arguments: Optional[list[str]] = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
         output = self.directory / "result.json"
@@ -47,7 +55,7 @@ class MatchEngineCliTests(unittest.TestCase):
             "--rounds",
             str(rounds),
             "--seed",
-            "12345",
+            str(seed),
             "--output",
             str(output),
         ]
@@ -75,55 +83,33 @@ class MatchEngineCliTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
-    def write_bot(self, name: str, source: str) -> Path:
-        path = self.directory / name
-        path.write_text(textwrap.dedent(source))
-        return path
-
     def test_completed_match_records_rounds_score_histories_and_environment(self) -> None:
-        bot_a = self.write_bot(
-            "bot_a.py",
-            """
-            import os
-            import sys
-
-            expected = ("1", "3", "12345")
-            actual = (
-                os.environ["RPS_PROTOCOL_VERSION"],
-                os.environ["RPS_ROUNDS"],
-                os.environ["RPS_SEED"],
-            )
-            moves = ["R", "P", "S"]
-            for turn, move in enumerate(moves):
-                request = [sys.stdin.readline().rstrip("\\n") for _ in range(3)]
-                if actual != expected or request[0] != str(turn):
-                    print("invalid")
-                else:
-                    print(move)
-                sys.stdout.flush()
-            """,
-        )
-        bot_b = self.write_bot(
-            "bot_b.py",
-            """
-            import sys
-
-            for move in ["S", "P", "P"]:
-                for _ in range(3):
-                    sys.stdin.readline()
-                print(move, flush=True)
-            """,
-        )
+        protocol_version = 1
+        rounds = 3
+        seed = 12345
+        bot_a_moves = "RPS"
+        bot_b_moves = "SPP"
 
         completed, result = self.run_match(
-            bot_command(bot_a), bot_command(bot_b), rounds=3
+            test_bot(
+                "checks_protocol.py",
+                bot_a_moves,
+                protocol_version,
+                rounds,
+                seed,
+            ),
+            test_bot("plays_moves.py", bot_b_moves),
+            rounds=rounds,
+            seed=seed,
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["winner"], "a")
         self.assertEqual(result["score"], {"a": 2, "b": 0, "draws": 1})
-        self.assertEqual(result["moves"], {"a": "RPS", "b": "SPP"})
+        self.assertEqual(
+            result["moves"], {"a": bot_a_moves, "b": bot_b_moves}
+        )
         self.assertEqual(
             [
                 {
@@ -143,64 +129,34 @@ class MatchEngineCliTests(unittest.TestCase):
     def test_sends_both_requests_before_waiting_for_responses(self) -> None:
         ready_a = self.directory / "a.ready"
         ready_b = self.directory / "b.ready"
-        bot_source = """
-            import pathlib
-            import sys
-            import time
+        move = "R"
 
-            mine = pathlib.Path({mine!r})
-            other = pathlib.Path({other!r})
-            for _ in range(3):
-                sys.stdin.readline()
-            mine.touch()
-            deadline = time.monotonic() + 1
-            while not other.exists() and time.monotonic() < deadline:
-                time.sleep(0.005)
-            print("R" if other.exists() else "invalid", flush=True)
-        """
-        bot_a = self.write_bot(
-            "bot_a.py",
-            bot_source.format(mine=str(ready_a), other=str(ready_b)),
+        completed, result = self.run_match(
+            test_bot("waits_for_peer.py", ready_a, ready_b, move),
+            test_bot("waits_for_peer.py", ready_b, ready_a, move),
         )
-        bot_b = self.write_bot(
-            "bot_b.py",
-            bot_source.format(mine=str(ready_b), other=str(ready_a)),
-        )
-
-        completed, result = self.run_match(bot_command(bot_a), bot_command(bot_b))
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["score"], {"a": 0, "b": 0, "draws": 1})
 
     def test_slow_bot_fault_does_not_make_fast_bot_fault(self) -> None:
-        slow_bot = self.write_bot(
-            "slow.py",
-            """
-            import sys
-            import time
-
-            for _ in range(3):
-                sys.stdin.readline()
-            time.sleep(0.2)
-            print("R", flush=True)
-            """,
-        )
-        fast_bot = self.write_bot(
-            "fast.py",
-            """
-            import sys
-
-            for _ in range(3):
-                sys.stdin.readline()
-            print("P", flush=True)
-            """,
-        )
+        slow_bot_move = "R"
+        fast_bot_move = "P"
+        slow_response_seconds = 0.2
+        first_move_timeout_ms = 75
 
         completed, result = self.run_match(
-            bot_command(slow_bot),
-            bot_command(fast_bot),
-            extra_arguments=["--first-move-timeout-ms", "75"],
+            test_bot(
+                "responds_slowly.py",
+                slow_bot_move,
+                slow_response_seconds,
+            ),
+            test_bot("plays_moves.py", fast_bot_move),
+            extra_arguments=[
+                "--first-move-timeout-ms",
+                str(first_move_timeout_ms),
+            ],
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -210,54 +166,36 @@ class MatchEngineCliTests(unittest.TestCase):
         self.assertIsNone(result["faults"]["b"])
 
     def test_stderr_is_drained_and_capture_is_bounded(self) -> None:
-        noisy_bot = self.write_bot(
-            "noisy.py",
-            """
-            import sys
-
-            sys.stderr.write("x" * 100_000)
-            sys.stderr.flush()
-            for _ in range(3):
-                sys.stdin.readline()
-            print("R", flush=True)
-            """,
-        )
-        quiet_bot = self.write_bot(
-            "quiet.py",
-            """
-            import sys
-
-            for _ in range(3):
-                sys.stdin.readline()
-            print("S", flush=True)
-            """,
-        )
+        noisy_bot_move = "R"
+        quiet_bot_move = "S"
+        emitted_stderr_bytes = 100_000
+        captured_stderr_bytes = 128
 
         completed, result = self.run_match(
-            bot_command(noisy_bot),
-            bot_command(quiet_bot),
-            extra_arguments=["--stderr-limit-bytes", "128"],
+            test_bot(
+                "writes_excessive_stderr.py",
+                noisy_bot_move,
+                emitted_stderr_bytes,
+            ),
+            test_bot("plays_moves.py", quiet_bot_move),
+            extra_arguments=[
+                "--stderr-limit-bytes",
+                str(captured_stderr_bytes),
+            ],
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(result["status"], "completed")
-        self.assertEqual(len(result["bots"]["a"]["stderr"]), 128)
+        self.assertEqual(
+            len(result["bots"]["a"]["stderr"]), captured_stderr_bytes
+        )
         self.assertTrue(result["bots"]["a"]["stderr_truncated"])
 
     def test_process_start_failure_is_an_infrastructure_failure(self) -> None:
-        valid_bot = self.write_bot(
-            "valid.py",
-            """
-            import sys
-
-            for _ in range(3):
-                sys.stdin.readline()
-            print("R", flush=True)
-            """,
-        )
+        valid_bot = test_bot("plays_moves.py", "R")
 
         completed, result = self.run_match(
-            "/definitely/not/a/program", bot_command(valid_bot)
+            "/definitely/not/a/program", valid_bot
         )
 
         self.assertNotEqual(completed.returncode, 0)
@@ -267,27 +205,12 @@ class MatchEngineCliTests(unittest.TestCase):
     def test_both_bot_processes_are_stopped_after_a_match(self) -> None:
         pid_a = self.directory / "a.pid"
         pid_b = self.directory / "b.pid"
-        bot_source = """
-            import os
-            import pathlib
-            import sys
-            import time
+        move = "R"
 
-            pathlib.Path({pid_path!r}).write_text(str(os.getpid()))
-            for _ in range(3):
-                sys.stdin.readline()
-            print("R", flush=True)
-            while True:
-                time.sleep(1)
-        """
-        bot_a = self.write_bot(
-            "bot_a.py", bot_source.format(pid_path=str(pid_a))
+        completed, result = self.run_match(
+            test_bot("stays_alive.py", pid_a, move),
+            test_bot("stays_alive.py", pid_b, move),
         )
-        bot_b = self.write_bot(
-            "bot_b.py", bot_source.format(pid_path=str(pid_b))
-        )
-
-        completed, result = self.run_match(bot_command(bot_a), bot_command(bot_b))
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(result["status"], "completed")
@@ -314,38 +237,23 @@ class MatchEngineCliTests(unittest.TestCase):
         self.assertEqual(first_result["score"], second_result["score"])
 
     def test_output_between_requests_is_a_protocol_fault(self) -> None:
-        eager_bot = self.write_bot(
-            "eager.py",
-            """
-            import sys
-            import time
-
-            for _ in range(3):
-                sys.stdin.readline()
-            print("R", flush=True)
-            time.sleep(0.02)
-            print("P", flush=True)
-            while True:
-                time.sleep(1)
-            """,
-        )
-        delaying_bot = self.write_bot(
-            "delaying.py",
-            """
-            import sys
-            import time
-
-            for turn in range(2):
-                for _ in range(3):
-                    sys.stdin.readline()
-                if turn == 0:
-                    time.sleep(0.1)
-                print("S", flush=True)
-            """,
-        )
+        early_bot_moves = "RP"
+        opponent_moves = "SS"
+        delay_between_early_responses_seconds = 0.02
+        opponent_first_response_delay_seconds = 0.1
 
         completed, result = self.run_match(
-            bot_command(eager_bot), bot_command(delaying_bot), rounds=2
+            test_bot(
+                "responds_before_request.py",
+                early_bot_moves,
+                delay_between_early_responses_seconds,
+            ),
+            test_bot(
+                "delays_first_response.py",
+                opponent_moves,
+                opponent_first_response_delay_seconds,
+            ),
+            rounds=2,
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -356,42 +264,22 @@ class MatchEngineCliTests(unittest.TestCase):
 
     def test_faulted_bot_is_terminated_while_opponent_response_is_pending(self) -> None:
         terminated_marker = self.directory / "terminated"
-        faulting_bot = self.write_bot(
-            "faulting.py",
-            f"""
-            import pathlib
-            import signal
-            import sys
-            import time
-
-            marker = pathlib.Path({str(terminated_marker)!r})
-            signal.signal(signal.SIGTERM, lambda *_: (marker.touch(), sys.exit(0)))
-            for _ in range(3):
-                sys.stdin.readline()
-            print("invalid", flush=True)
-            while True:
-                time.sleep(1)
-            """,
-        )
-        observing_bot = self.write_bot(
-            "observing.py",
-            f"""
-            import pathlib
-            import sys
-            import time
-
-            marker = pathlib.Path({str(terminated_marker)!r})
-            for _ in range(3):
-                sys.stdin.readline()
-            deadline = time.monotonic() + 0.2
-            while not marker.exists() and time.monotonic() < deadline:
-                time.sleep(0.005)
-            print("R" if marker.exists() else "invalid", flush=True)
-            """,
-        )
+        faulting_response = "invalid"
+        observing_bot_move = "R"
+        observation_timeout_seconds = 0.2
 
         completed, result = self.run_match(
-            bot_command(faulting_bot), bot_command(observing_bot)
+            test_bot(
+                "marks_when_terminated.py",
+                terminated_marker,
+                faulting_response,
+            ),
+            test_bot(
+                "waits_for_termination.py",
+                terminated_marker,
+                observing_bot_move,
+                observation_timeout_seconds,
+            ),
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
