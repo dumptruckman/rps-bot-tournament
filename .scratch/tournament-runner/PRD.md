@@ -8,9 +8,10 @@ Implementation status: in progress
 
 Last updated: 2026-08-05
 
-The implemented foundation is covered by 123 passing tests under the repository's
-Python 3.9 virtual environment. The work is recorded in commits `2703c20`,
-`7f1a17a`, and `4e1b307`.
+The implemented foundation is covered by 136 passing tests under the repository's
+Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
+`7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
+contract, authoritative state fold, and qualification-to-playoff transition.
 
 ### Complete
 
@@ -48,16 +49,21 @@ Python 3.9 virtual environment. The work is recorded in commits `2703c20`,
   Artifact identities, creates or resumes a durable Tournament, advances one
   Match or all qualification, and reports inspectable artifacts without implying
   playoff or Tournament Champion completion.
+- [x] Seal every scoring, tie-break, Disqualification, and playoff rule explicitly
+  in the Tournament Manifest and reject a validly resealed incompatible ruleset.
+- [x] Reconstruct qualifying Series, standings, and the next canonical Match
+  through one authoritative state fold that rejects semantically impossible
+  Competition Record histories.
+- [x] Commit and project the deterministic seeded playoff bracket when
+  qualification completes, including idempotent recovery when the final
+  qualifying Match commits before the phase-transition record.
 
 ### Partially complete
 
-- [ ] Seal every scoring, tie-break, Disqualification, and playoff rule explicitly
-  in the Tournament Manifest. The implemented rules are fixed in versioned code,
-  while the Manifest currently records only their relevant compatibility and
-  Series-format values.
 - [ ] Execute the Playoff Phase. Series, bracket, reduced-playoff, advancement,
-  and Disqualification rules exist as tested domain behavior, but the Tournament
-  Runner currently schedules and commits only the Qualifying Phase.
+  and Disqualification rules exist as tested domain behavior, and the Tournament
+  Runner now commits the standard seeded bracket transition; canonical Bracket
+  Lock, playoff Match execution, advancement, final, and champion remain.
 - [ ] Apply qualification and playoff Disqualifications through the Tournament
   Runner. Standing and bracket transformations exist, but administrative ruling
   records and scheduler integration do not.
@@ -89,8 +95,8 @@ Python 3.9 virtual environment. The work is recorded in commits `2703c20`,
 
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
-| Complete | 1, 3–16, 23–28 | Implemented and covered at the creation, domain, Match, storage, Step Mode, and recovery seams. |
-| Partial | 2, 17–18, 21–22, 29–30, 34 | Core rules or one execution mode exist; Manifest completeness, runner integration, projection coverage, or capacity verification remains. |
+| Complete | 1–16, 23–28 | Implemented and covered at the creation, domain, Match, storage, Step Mode, and recovery seams. |
+| Partial | 17–18, 21–22, 29–30, 34 | Core rules or one execution mode exist; runner integration, projection coverage, or capacity verification remains. |
 | Not started | 19–20, 31–33, 35 | Security workflow, Continuous Mode controls, administrative controls/abort, and capacity benchmarks remain. |
 
 ## Problem Statement

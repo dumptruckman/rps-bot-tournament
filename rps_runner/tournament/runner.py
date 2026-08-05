@@ -11,12 +11,11 @@ from typing import Any, Optional, Union
 from .competition import (
     MatchOutcome,
     MatchResult,
-    Phase,
-    Series,
-    calculate_qualifying_standings,
+    Standing,
 )
 from .locking import TournamentRunLock
 from .match_executor import MatchExecutionRequest, MatchExecutionResult
+from .rules import manifest_rules
 from .schedule import (
     Fixture,
     FixtureBatch,
@@ -29,8 +28,12 @@ from .seeding import (
     derive_match_seed,
     derive_tiebreak_key,
 )
+from .state import (
+    TournamentState,
+    build_playoff_bracket_record,
+    fold_tournament_state,
+)
 from .storage import (
-    IntegrityError,
     StoredCompetitionRecord,
     append_competition_record,
     append_operational_telemetry,
@@ -181,15 +184,11 @@ class TournamentRunner:
                 sealed_manifest_verifier(stored.manifest)
             records = load_competition_records(directory)
             load_operational_telemetry(directory)
-            try:
-                projection = load_scoreboard_projection(directory)
-            except IntegrityError:
-                projection = None
-            if projection is None:
-                write_scoreboard_projection(
-                    directory,
-                    _projection_from_records(stored.manifest, records),
-                )
+            state = fold_tournament_state(stored.manifest, records)
+            write_scoreboard_projection(
+                directory,
+                _projection_from_records(stored.manifest, records, state),
+            )
         return cls(directory, match_executor, stored.manifest)
 
     @property
@@ -202,8 +201,31 @@ class TournamentRunner:
     def play_next_match(self) -> Optional[StoredCompetitionRecord]:
         with TournamentRunLock(self.tournament_directory):
             records = load_competition_records(self.tournament_directory)
-            selected = _select_next_match(self._manifest, records)
+            state = fold_tournament_state(self._manifest, records)
+            selected = _select_next_match(self._manifest, state)
             if selected is None:
+                if (
+                    state.qualification_complete
+                    and state.phase.value == "qualifying"
+                ):
+                    bracket = append_competition_record(
+                        self.tournament_directory,
+                        build_playoff_bracket_record(
+                            self._manifest, state.standings
+                        ),
+                    )
+                    recovered_records = records + [bracket]
+                    recovered_state = fold_tournament_state(
+                        self._manifest, recovered_records
+                    )
+                    write_scoreboard_projection(
+                        self.tournament_directory,
+                        _projection_from_records(
+                            self._manifest,
+                            recovered_records,
+                            recovered_state,
+                        ),
+                    )
                 return None
             fixture, match_ordinal = selected
             match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
@@ -276,9 +298,28 @@ class TournamentRunner:
                     ),
                 )
                 all_records = records + [stored]
+                state_after_match = fold_tournament_state(
+                    self._manifest, all_records
+                )
+                if (
+                    state_after_match.qualification_complete
+                    and state_after_match.phase.value == "qualifying"
+                ):
+                    bracket = append_competition_record(
+                        self.tournament_directory,
+                        build_playoff_bracket_record(
+                            self._manifest, state_after_match.standings
+                        ),
+                    )
+                    all_records.append(bracket)
+                    state_after_match = fold_tournament_state(
+                        self._manifest, all_records
+                    )
                 write_scoreboard_projection(
                     self.tournament_directory,
-                    _projection_from_records(self._manifest, all_records),
+                    _projection_from_records(
+                        self._manifest, all_records, state_after_match
+                    ),
                 )
                 return stored
 
@@ -338,6 +379,7 @@ def _build_manifest_payload(
         "execution_mode": config.execution_mode,
         "match_limits": _serialize_match_limits(config.match_limits),
         "series_format": "best_of_three",
+        "rules": manifest_rules(),
         "roster": [_serialize_team(team) for team in canonical_roster],
         "tie_break_keys": {
             team.team_id: str(
@@ -439,6 +481,7 @@ def _verify_compatibility(manifest: dict[str, Any]) -> None:
         "scoreboard_version": SCOREBOARD_VERSION,
         "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
         "series_format": "best_of_three",
+        "rules": manifest_rules(),
     }
     for field, expected in expected_values.items():
         actual = manifest.get(field)
@@ -532,7 +575,9 @@ def _initial_projection(manifest: dict[str, Any]) -> dict[str, Any]:
             }
             for fixture in fixtures
         ],
-        "standings": _standing_projection(manifest, {}),
+        "standings": _standing_projection(
+            fold_tournament_state(manifest, ()).standings
+        ),
         "champion": None,
     }
 
@@ -547,26 +592,15 @@ def _manifest_fixtures(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _select_next_match(
     manifest: dict[str, Any],
-    records: list[StoredCompetitionRecord],
+    state: TournamentState,
 ) -> Optional[tuple[dict[str, Any], int]]:
-    terminal_by_fixture: dict[str, list[dict[str, Any]]] = {}
-    for stored in records:
-        record = stored.record
-        if record.get("type") == "match_terminal":
-            terminal_by_fixture.setdefault(record["fixture_id"], []).append(
-                record
-            )
-
+    selected = state.next_qualifying_match
+    if selected is None:
+        return None
     for fixture in _manifest_fixtures(manifest):
-        fixture_records = sorted(
-            terminal_by_fixture.get(fixture["fixture_id"], ()),
-            key=lambda record: record["match_ordinal"],
-        )
-        series = _series_from_records(fixture, fixture_records)
-        if series.is_complete:
-            continue
-        return fixture, len(fixture_records) + 1
-    return None
+        if fixture["fixture_id"] == selected.fixture_id:
+            return fixture, selected.match_ordinal
+    raise AssertionError("Folded state selected a Fixture outside the Manifest")
 
 
 def _next_attempt_number(
@@ -587,52 +621,6 @@ def _next_attempt_number(
             )
         latest_attempt = max(latest_attempt, attempt_number)
     return latest_attempt + 1
-
-
-def _series_from_records(
-    fixture: dict[str, Any], records: Iterable[dict[str, Any]]
-) -> Series:
-    team_one_id, team_two_id = fixture["team_ids"]
-    series = Series(team_one_id, team_two_id, Phase.QUALIFYING)
-    for record in records:
-        series = series.record(_match_result_from_record(record))
-    return series
-
-
-def _match_result_from_record(record: dict[str, Any]) -> MatchResult:
-    team_one_id, team_two_id = record["team_ids"]
-    round_wins = record["round_wins"]
-    completed_round_wins = (
-        round_wins[team_one_id],
-        round_wins[team_two_id],
-    )
-    outcome = MatchOutcome(record["outcome"])
-    if outcome is MatchOutcome.DOUBLE_FORFEIT:
-        return MatchResult.double_forfeit(
-            team_one_id,
-            team_two_id,
-            completed_round_wins=completed_round_wins,
-        )
-    if outcome is MatchOutcome.DRAW:
-        return MatchResult.draw(
-            team_one_id,
-            team_two_id,
-            round_wins=completed_round_wins,
-        )
-    faulting_team_id = record["protocol_forfeit_team_id"]
-    if faulting_team_id is not None:
-        return MatchResult.protocol_forfeit(
-            team_one_id,
-            team_two_id,
-            faulting_team_id=faulting_team_id,
-            completed_round_wins=completed_round_wins,
-        )
-    return MatchResult.win(
-        team_one_id,
-        team_two_id,
-        record["winner_team_id"],
-        round_wins=completed_round_wins,
-    )
 
 
 def _build_match_request(
@@ -860,8 +848,11 @@ def _competitive_details(
 
 
 def _projection_from_records(
-    manifest: dict[str, Any], records: list[StoredCompetitionRecord]
+    manifest: dict[str, Any],
+    records: list[StoredCompetitionRecord],
+    state: Optional[TournamentState] = None,
 ) -> dict[str, Any]:
+    folded = state or fold_tournament_state(manifest, records)
     projection = _initial_projection(manifest)
     terminal_by_fixture: dict[str, list[dict[str, Any]]] = {}
     for stored in records:
@@ -870,16 +861,15 @@ def _projection_from_records(
                 stored.record["fixture_id"], []
             ).append(stored.record)
 
-    for fixture_projection, fixture in zip(
-        projection["fixtures"], _manifest_fixtures(manifest)
+    for fixture_projection, series in zip(
+        projection["fixtures"], folded.qualifying_series
     ):
         fixture_records = sorted(
-            terminal_by_fixture.get(fixture["fixture_id"], ()),
+            terminal_by_fixture.get(fixture_projection["fixture_id"], ()),
             key=lambda record: record["match_ordinal"],
         )
         if not fixture_records:
             continue
-        series = _series_from_records(fixture, fixture_records)
         fixture_projection["status"] = (
             "complete" if series.is_complete else "in_progress"
         )
@@ -891,9 +881,24 @@ def _projection_from_records(
             }
             for record in fixture_records
         ]
-    projection["standings"] = _standing_projection(
-        manifest, terminal_by_fixture
-    )
+    projection["standings"] = _standing_projection(folded.standings)
+    projection["phase"] = folded.phase.value
+    if folded.phase.value == "playoff":
+        projection["bracket"] = {
+            "seeds": [
+                {"seed": seed.seed, "team_id": seed.team_id}
+                for seed in folded.playoff_seeds
+            ],
+            "fixtures": [
+                {
+                    "fixture_id": fixture.fixture_id,
+                    "stage": fixture.stage,
+                    "team_ids": list(fixture.team_ids),
+                    "fixture_seed": str(fixture.fixture_seed),
+                }
+                for fixture in folded.playoff_fixtures
+            ],
+        }
     return projection
 
 
@@ -913,27 +918,8 @@ def _projection_at_match_start(
 
 
 def _standing_projection(
-    manifest: dict[str, Any],
-    terminal_by_fixture: dict[str, list[dict[str, Any]]],
+    standings: Iterable[Standing],
 ) -> list[dict[str, Any]]:
-    series_results: list[Series] = []
-    for fixture in _manifest_fixtures(manifest):
-        fixture_records = sorted(
-            terminal_by_fixture.get(fixture["fixture_id"], ()),
-            key=lambda record: record["match_ordinal"],
-        )
-        if not fixture_records:
-            continue
-        series_results.append(_series_from_records(fixture, fixture_records))
-
-    standings = calculate_qualifying_standings(
-        [team["team_id"] for team in manifest["roster"]],
-        series_results,
-        {
-            team_id: int(tie_break_key)
-            for team_id, tie_break_key in manifest["tie_break_keys"].items()
-        },
-    )
     return [
         {
             "team_id": standing.team_id,

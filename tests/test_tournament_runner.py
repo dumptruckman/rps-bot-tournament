@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Optional
@@ -17,17 +18,22 @@ from rps_runner.tournament.runner import (
     TournamentConfig,
     TournamentRunner,
 )
+from rps_runner.tournament.state import TournamentStateError
+from rps_runner.tournament.seeding import derive_fixture_seed
 from rps_runner.tournament.match_executor import MatchExecutionResult
+from rps_runner.tournament.immutable import thaw_json
 from rps_runner.tournament.locking import (
     TournamentRunLock,
     TournamentRunLockHeldError,
 )
 from rps_runner.tournament.storage import (
+    append_competition_record,
     load_competition_records,
     load_manifest,
     load_operational_telemetry,
     load_scoreboard_projection,
     seal_manifest,
+    write_scoreboard_projection,
 )
 
 
@@ -113,6 +119,143 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(manifest["scoreboard_version"], 1)
         self.assertEqual(manifest["scheduled_turns_per_match"], 300)
         self.assertEqual(manifest["execution_mode"], "step")
+        self.assertEqual(
+            manifest["rules"],
+            {
+                "scoring": {
+                    "series": {
+                        "maximum_matches": 3,
+                        "match_wins_to_end_early": 2,
+                        "series_points": {
+                            "match_win": {"numerator": 1, "denominator": 1},
+                            "match_draw": {
+                                "numerator": 1,
+                                "denominator": 2,
+                            },
+                            "double_forfeit": {
+                                "numerator": 0,
+                                "denominator": 1,
+                            },
+                        },
+                        "winner": "most_series_points",
+                        "qualifying_tie": "series_draw",
+                        "playoff_tie": "higher_qualifying_seed_advances",
+                    },
+                    "qualifying_standing_points": {
+                        "series_win": 3,
+                        "series_draw": 1,
+                        "series_loss": 0,
+                    },
+                    "protocol_fault_forfeit": {
+                        "opponent_receives_match_win": True,
+                        "opponent_receives_series_point": True,
+                        "retain_completed_rounds_only": True,
+                        "counts_in_match_differential": True,
+                        "counts_in_protocol_fault_forfeits": True,
+                        "synthesize_unplayed_rounds": False,
+                    },
+                    "double_forfeit": {
+                        "winner": None,
+                        "series_points_each": {
+                            "numerator": 0,
+                            "denominator": 1,
+                        },
+                        "consumes_match_ordinal": True,
+                        "retain_completed_rounds_only": True,
+                    },
+                    "administrative_series_win": {
+                        "standing_points": 3,
+                        "series_wins": 1,
+                        "match_statistics": False,
+                        "round_statistics": False,
+                        "fault_statistics": False,
+                    },
+                },
+                "tie_breaks": {
+                    "phase": "qualifying",
+                    "criteria": [
+                        {"field": "standing_points", "direction": "descending"},
+                        {"field": "series_wins", "direction": "descending"},
+                        {
+                            "field": "head_to_head_series_result",
+                            "direction": "winner_first",
+                            "applies_when": "exactly_two_teams_remain_tied",
+                        },
+                        {
+                            "field": "match_differential",
+                            "direction": "descending",
+                            "definition": "match_wins_minus_match_losses",
+                        },
+                        {
+                            "field": "round_differential",
+                            "direction": "descending",
+                            "definition": "round_wins_minus_round_losses",
+                        },
+                        {
+                            "field": "protocol_fault_forfeits",
+                            "direction": "ascending",
+                        },
+                        {"field": "tie_break_key", "direction": "ascending"},
+                    ],
+                    "disqualified_team_series": {
+                        "preserve_played_records": True,
+                        "exclude_match_statistics": True,
+                        "exclude_round_statistics": True,
+                        "exclude_fault_statistics": True,
+                    },
+                    "administrative_series_wins_excluded_from_lower_statistics": True,
+                },
+                "disqualification": {
+                    "cause": "confirmed_security_violation",
+                    "scope": "entire_tournament",
+                    "rejected_attribution": "infrastructure_failure",
+                    "qualifying": {
+                        "eligible_opponents_receive_administrative_series_win": True,
+                        "skip_future_fixtures": True,
+                        "preserve_played_records": True,
+                        "exclude_affected_lower_tie_break_statistics": True,
+                    },
+                    "before_bracket_lock": {
+                        "remove_disqualified_team": True,
+                        "reselect_playoff_field": True,
+                        "reseed_playoff_field": True,
+                    },
+                    "after_bracket_lock": {
+                        "allow_new_qualifying_team": False,
+                        "reseed": False,
+                        "current_series_opponent_receives_administrative_win": True,
+                        (
+                            "reinstate_most_recently_eliminated_team_when_next_"
+                            "series_not_started"
+                        ): True,
+                        "after_final_starts_remaining_finalist_is_champion": True,
+                    },
+                },
+                "playoffs": {
+                    "field_selection": "highest_ranked_eligible_teams",
+                    "maximum_field_size": 4,
+                    "bracket_lock": "start_of_first_playoff_match",
+                    "formats": {
+                        "four_or_more_eligible": {
+                            "semifinals": [[1, 4], [2, 3]],
+                            "semifinal_winners_play_final": True,
+                        },
+                        "three_eligible": {
+                            "seed_one_advances_to_final": True,
+                            "semifinal": [2, 3],
+                        },
+                        "two_eligible": {"direct_final": [1, 2]},
+                        "one_eligible": {
+                            "declare_tournament_champion": True,
+                            "play_matches": False,
+                        },
+                        "no_eligible": {
+                            "abort_without_champion": True,
+                        },
+                    },
+                },
+            },
+        )
         self.assertEqual(
             manifest["match_limits"],
             {
@@ -387,6 +530,158 @@ class TournamentStepModeTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
+
+    def test_final_qualifying_step_creates_playoff_bracket_without_running_playoff_match(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+        strength = {"alpha": 0, "beta": 1, "gamma": 2, "delta": 3}
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            winner = min(
+                (request.team_a_id, request.team_b_id),
+                key=strength.__getitem__,
+            )
+            return executor_result(request, winner_team_id=winner)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="playoff-transition-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=execute,
+        )
+
+        for _ in range(12):
+            committed = runner.play_next_match()
+            self.assertIsNotNone(committed)
+
+        self.assertEqual(len(requests), 12)
+        self.assertTrue(
+            all(request.fixture_id.startswith("qualifying-") for request in requests)
+        )
+        records = load_competition_records(self.directory)
+        self.assertEqual(len(records), 13)
+        bracket_record = records[-1].record
+        self.assertEqual(
+            bracket_record,
+            {
+                "type": "playoff_bracket_created",
+                "phase": "playoff",
+                "seeds": [
+                    {"seed": 1, "team_id": "alpha"},
+                    {"seed": 2, "team_id": "beta"},
+                    {"seed": 3, "team_id": "gamma"},
+                    {"seed": 4, "team_id": "delta"},
+                ],
+                "fixtures": [
+                    {
+                        "fixture_id": "playoff-semifinal-1",
+                        "stage": "semifinal",
+                        "team_ids": ["alpha", "delta"],
+                        "fixture_seed": str(
+                            derive_fixture_seed(
+                                123456789, "playoff-semifinal-1"
+                            )
+                        ),
+                    },
+                    {
+                        "fixture_id": "playoff-semifinal-2",
+                        "stage": "semifinal",
+                        "team_ids": ["beta", "gamma"],
+                        "fixture_seed": str(
+                            derive_fixture_seed(
+                                123456789, "playoff-semifinal-2"
+                            )
+                        ),
+                    },
+                    {
+                        "fixture_id": "playoff-final",
+                        "stage": "final",
+                        "team_ids": [None, None],
+                        "fixture_seed": str(
+                            derive_fixture_seed(123456789, "playoff-final")
+                        ),
+                    },
+                ],
+            },
+        )
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["phase"], "playoff")
+        self.assertEqual(projection["bracket"]["seeds"], bracket_record["seeds"])
+        self.assertEqual(
+            projection["bracket"]["fixtures"], bracket_record["fixtures"]
+        )
+
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Opening a Tournament must not execute a playoff Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        self.assertEqual(load_competition_records(self.directory), records)
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["bracket"],
+            projection["bracket"],
+        )
+
+    def test_next_step_recovers_missing_playoff_transition_without_executing_match(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="interrupted-playoff-transition-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=execute,
+        )
+        for _ in range(11):
+            runner.play_next_match()
+
+        def fail_bracket_append(
+            directory: Path, record: dict[str, object]
+        ) -> object:
+            if record.get("type") == "playoff_bracket_created":
+                raise RuntimeError("interrupted before bracket commit")
+            return append_competition_record(directory, record)
+
+        with patch(
+            "rps_runner.tournament.runner.append_competition_record",
+            side_effect=fail_bracket_append,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "before bracket commit"):
+                runner.play_next_match()
+
+        self.assertEqual(len(requests), 12)
+        self.assertEqual(len(load_competition_records(self.directory)), 12)
+        runner.match_executor = lambda request: self.fail(
+            "Recovering a phase transition must not execute a Match"
+        )
+
+        self.assertIsNone(runner.play_next_match())
+        recovered_records = load_competition_records(self.directory)
+        self.assertEqual(len(recovered_records), 13)
+        self.assertEqual(
+            recovered_records[-1].record["type"], "playoff_bracket_created"
+        )
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["phase"], "playoff"
+        )
+
+        self.assertIsNone(runner.play_next_match())
+        self.assertEqual(load_competition_records(self.directory), recovered_records)
 
     def test_step_executes_exactly_the_next_canonical_match_and_commits_it(
         self,
@@ -781,6 +1076,26 @@ class TournamentResumeTests(unittest.TestCase):
         self.assertEqual(caught.exception.expected, 1)
         self.assertEqual(caught.exception.actual, 2)
 
+    def test_open_rejects_changed_nested_manifest_rule(self) -> None:
+        manifest = thaw_json(load_manifest(self.directory).manifest)
+        manifest["rules"]["scoring"]["qualifying_standing_points"][
+            "series_win"
+        ] = 2
+        manifest_path = self.directory / "manifest.json"
+        manifest_path.unlink()
+        seal_manifest(self.directory, manifest)
+
+        with self.assertRaises(TournamentCompatibilityError) as caught:
+            TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: executor_result(
+                    request, winner_team_id="beta"
+                ),
+                artifact_digest_verifier=lambda team_id, digest: True,
+            )
+
+        self.assertEqual(caught.exception.field, "rules")
+
     def test_open_requires_every_bot_artifact_digest_to_verify(self) -> None:
         checked: list[tuple[str, str]] = []
 
@@ -799,6 +1114,67 @@ class TournamentResumeTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.team_id, "delta")
         self.assertIn(("delta", "d" * 64), checked)
+
+    def test_open_rejects_a_hashed_but_semantically_impossible_record(self) -> None:
+        fixture = load_manifest(self.directory).manifest[
+            "qualifying_schedule"
+        ][0]["fixtures"][0]
+        team_one_id, team_two_id = fixture["team_ids"]
+        append_competition_record(
+            self.directory,
+            {
+                "type": "match_terminal",
+                "phase": "qualifying",
+                "fixture_id": fixture["fixture_id"],
+                "match_id": f"{fixture['fixture_id']}-match-2",
+                "match_ordinal": 2,
+                "team_ids": [team_one_id, team_two_id],
+                "outcome": "win",
+                "winner_team_id": team_one_id,
+                "round_wins": {team_one_id: 1, team_two_id: 0},
+                "protocol_forfeit_team_id": None,
+            },
+        )
+
+        with self.assertRaisesRegex(TournamentStateError, "Match ordinal"):
+            TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: executor_result(
+                    request, winner_team_id="beta"
+                ),
+                artifact_digest_verifier=lambda team_id, digest: True,
+            )
+
+    def test_open_rebuilds_a_valid_but_stale_projection_from_records(self) -> None:
+        self.runner.play_next_match()
+        write_scoreboard_projection(
+            self.directory,
+            {
+                "version": 1,
+                "tournament_id": "resume-verification-cup",
+                "status": "running",
+                "phase": "qualifying",
+                "teams": [],
+                "fixtures": [],
+                "standings": [],
+                "champion": None,
+            },
+        )
+
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="beta"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        rebuilt = load_scoreboard_projection(self.directory)
+        self.assertEqual(rebuilt["status"], "paused")
+        self.assertEqual(
+            rebuilt["fixtures"][0]["matches"][0]["match_id"],
+            "qualifying-0001-match-1",
+        )
 
     def test_open_verifies_the_sealed_manifest_under_the_run_lock(self) -> None:
         verified_tournament_ids: list[str] = []
