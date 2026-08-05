@@ -70,12 +70,16 @@ def start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
     if not arguments:
         raise InfrastructureError(f"Could not start bot {label}: command is empty")
 
-    environment = os.environ.copy()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("RPS_")
+    }
     environment.update(
         {
             "RPS_PROTOCOL_VERSION": "1",
             "RPS_ROUNDS": str(config.rounds),
-            "RPS_SEED": str(config.seed),
+            "RPS_SEED": str(config.seed_for_bot_position(label)),
         }
     )
     try:
@@ -147,6 +151,13 @@ def _reap_bots(bots: list[BotProcess]) -> None:
         except subprocess.TimeoutExpired:
             pass
         bot.stderr.finish()
+        for stream in (bot.process.stdout, bot.process.stderr):
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except OSError:
+                pass
 
 
 def signal_bot(bot: BotProcess, requested_signal: signal.Signals) -> None:
