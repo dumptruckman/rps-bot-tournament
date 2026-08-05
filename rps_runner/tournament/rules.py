@@ -46,6 +46,7 @@ def manifest_rules() -> dict[str, Any]:
                 "series_wins": 1,
                 "match_statistics": False,
                 "round_statistics": False,
+                "timing_statistics": False,
                 "fault_statistics": False,
             },
         },

@@ -38,23 +38,32 @@ def winning_result(
     loser = (
         request.team_b_id if winner == request.team_a_id else request.team_a_id
     )
-    moves = {
+    round_moves = {
         winner: "R",
         loser: "S",
+    }
+    moves = {
+        team_id: move * request.scheduled_turns
+        for team_id, move in round_moves.items()
     }
     return MatchExecutionResult(
         infrastructure_failure=False,
         competitive_outcome={
             "outcome": "win",
             "winner_team_id": winner,
-            "score": {winner: 1, loser: 0, "draws": 0},
+            "score": {
+                winner: request.scheduled_turns,
+                loser: 0,
+                "draws": 0,
+            },
             "moves": moves,
             "rounds": [
                 {
-                    "turn": 0,
-                    "moves": moves,
+                    "turn": turn,
+                    "moves": round_moves,
                     "winner_team_id": winner,
                 }
+                for turn in range(request.scheduled_turns)
             ],
             "faults": {request.team_a_id: None, request.team_b_id: None},
         },

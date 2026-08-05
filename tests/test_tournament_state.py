@@ -22,6 +22,7 @@ _ARTIFACT_MARKERS = {
 def manifest() -> dict[str, object]:
     return {
         "tournament_seed": "123",
+        "scheduled_turns_per_match": 300,
         "roster": [
             {
                 "team_id": team_id,
@@ -126,14 +127,17 @@ def terminal_record(
         (fixture_seed, match_ordinal)
     ]
     if winner is None:
-        moves = {team_ids[0]: "R", team_ids[1]: "R"}
+        round_moves = {team_ids[0]: "R", team_ids[1]: "R"}
         round_wins = {team_ids[0]: 0, team_ids[1]: 0}
     elif winner == team_ids[0]:
-        moves = {team_ids[0]: "R", team_ids[1]: "S"}
-        round_wins = {team_ids[0]: 1, team_ids[1]: 0}
+        round_moves = {team_ids[0]: "R", team_ids[1]: "S"}
+        round_wins = {team_ids[0]: 300, team_ids[1]: 0}
     else:
-        moves = {team_ids[0]: "S", team_ids[1]: "R"}
-        round_wins = {team_ids[0]: 0, team_ids[1]: 1}
+        round_moves = {team_ids[0]: "S", team_ids[1]: "R"}
+        round_wins = {team_ids[0]: 0, team_ids[1]: 300}
+    moves = {
+        team_id: move * 300 for team_id, move in round_moves.items()
+    }
     return StoredCompetitionRecord(
         sequence=sequence,
         content_hash=f"hash-{sequence}",
@@ -151,10 +155,11 @@ def terminal_record(
             "moves": moves,
             "rounds": [
                 {
-                    "turn": 0,
-                    "moves": moves,
+                    "turn": turn,
+                    "moves": round_moves,
                     "winner_team_id": winner,
                 }
+                for turn in range(300)
             ],
             "faults": {team_ids[0]: None, team_ids[1]: None},
             "match_seed": str(match_seed),
@@ -279,7 +284,7 @@ class TournamentStateFoldTests(unittest.TestCase):
         record = thaw_json(invalid.record)
         record["protocol_forfeit_team_id"] = "alpha"
         record["faults"] = dict(record["faults"])
-        record["faults"]["alpha"] = {"kind": "timeout", "turn": 1}
+        record["faults"]["alpha"] = {"kind": "timeout", "turn": 300}
         invalid = StoredCompetitionRecord(
             sequence=1, content_hash="invalid-hash", record=record
         )
@@ -347,6 +352,64 @@ class TournamentStateFoldTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(TournamentStateError, description):
                     fold_tournament_state(manifest(), (invalid,))
+
+    def test_rejects_truncated_unfaulted_match(self) -> None:
+        valid = terminal_record(
+            1, "qualifying-0001", 1, ("alpha", "beta"), winner="alpha"
+        )
+        record = thaw_json(valid.record)
+        record["moves"] = {"alpha": "R", "beta": "S"}
+        record["rounds"] = record["rounds"][:1]
+        record["round_wins"] = {"alpha": 1, "beta": 0}
+
+        with self.assertRaisesRegex(TournamentStateError, "number of completed"):
+            fold_tournament_state(
+                manifest(),
+                (
+                    StoredCompetitionRecord(
+                        sequence=1,
+                        content_hash="invalid-hash",
+                        record=record,
+                    ),
+                ),
+            )
+
+    def test_rejects_noncanonical_record_and_nested_fields(self) -> None:
+        valid = terminal_record(
+            1, "qualifying-0001", 1, ("alpha", "beta"), winner="alpha"
+        )
+        invalid_values = []
+        telemetry = thaw_json(valid.record)
+        telemetry["stderr"] = "operational detail"
+        invalid_values.append(("Competition Record fields", telemetry))
+
+        round_detail = thaw_json(valid.record)
+        round_detail["rounds"][0]["duration_ms"] = 5
+        invalid_values.append(("completed Rounds", round_detail))
+
+        fault_detail = thaw_json(valid.record)
+        fault_detail["protocol_forfeit_team_id"] = "alpha"
+        fault_detail["winner_team_id"] = "beta"
+        fault_detail["faults"]["alpha"] = {
+            "kind": "timeout",
+            "turn": 300,
+            "raw_error": "secret",
+        }
+        invalid_values.append(("normalized faults", fault_detail))
+
+        for description, record in invalid_values:
+            with self.subTest(description=description):
+                with self.assertRaisesRegex(TournamentStateError, description):
+                    fold_tournament_state(
+                        manifest(),
+                        (
+                            StoredCompetitionRecord(
+                                sequence=1,
+                                content_hash="invalid-hash",
+                                record=record,
+                            ),
+                        ),
+                    )
 
     def test_rejects_duplicate_gapped_and_out_of_order_match_ordinals(self) -> None:
         first = terminal_record(1, "qualifying-0001", 1, ("alpha", "beta"), winner=None)

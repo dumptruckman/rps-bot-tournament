@@ -70,21 +70,28 @@ def executor_result(
         team_b_move = "R" if winner_team_id is None else "S"
         if winner_team_id == request.team_b_id:
             team_a_move, team_b_move = team_b_move, team_a_move
-        moves = {
+        round_moves = {
             request.team_a_id: team_a_move,
             request.team_b_id: team_b_move,
         }
+        moves = {
+            team_id: move * request.scheduled_turns
+            for team_id, move in round_moves.items()
+        }
         rounds = [
             {
-                "turn": 0,
-                "moves": moves,
+                "turn": turn,
+                "moves": round_moves,
                 "winner_team_id": winner_team_id,
             }
+            for turn in range(request.scheduled_turns)
         ]
     if score is None:
         score = (
-            int(winner_team_id == request.team_a_id),
-            int(winner_team_id == request.team_b_id),
+            request.scheduled_turns
+            * int(winner_team_id == request.team_a_id),
+            request.scheduled_turns
+            * int(winner_team_id == request.team_b_id),
         )
     return MatchExecutionResult(
         infrastructure_failure=False,
@@ -187,6 +194,7 @@ class TournamentCreationTests(unittest.TestCase):
                         "series_wins": 1,
                         "match_statistics": False,
                         "round_statistics": False,
+                        "timing_statistics": False,
                         "fault_statistics": False,
                     },
                 },

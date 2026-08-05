@@ -29,6 +29,27 @@ class TournamentStateError(ValueError):
     """A stored record cannot belong to the canonical Tournament history."""
 
 
+_MATCH_TERMINAL_FIELDS = {
+    "type",
+    "phase",
+    "fixture_id",
+    "match_id",
+    "match_ordinal",
+    "team_ids",
+    "outcome",
+    "winner_team_id",
+    "round_wins",
+    "protocol_forfeit_team_id",
+    "moves",
+    "rounds",
+    "faults",
+    "match_seed",
+    "bot_positions",
+    "bot_visible_seeds",
+    "artifact_digests",
+}
+
+
 @dataclass(frozen=True)
 class QualifyingMatch:
     """The scheduler-selected next canonical qualifying Match."""
@@ -164,7 +185,7 @@ def fold_tournament_state(
                 "Competition Record Match ordinal is duplicate, gapped, or out of order"
             )
         _validate_match_identity(manifest, record, fixture, match_ordinal)
-        _validate_competitive_details(record, fixture)
+        _validate_competitive_details(manifest, record, fixture)
         result = _match_result(record, fixture, match_ordinal)
         try:
             series[current_fixture_index] = current_series.record(result)
@@ -499,8 +520,14 @@ def _artifact_digests(manifest: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _validate_competitive_details(
-    record: Mapping[str, Any], fixture: _FixtureDefinition
+    manifest: Mapping[str, Any],
+    record: Mapping[str, Any],
+    fixture: _FixtureDefinition,
 ) -> None:
+    if set(record) != _MATCH_TERMINAL_FIELDS:
+        raise TournamentStateError(
+            "Qualifying Match has non-canonical Competition Record fields"
+        )
     team_ids = set(fixture.team_ids)
     moves = record.get("moves")
     if (
@@ -525,7 +552,8 @@ def _validate_competitive_details(
             raise TournamentStateError("Qualifying Match has invalid completed Rounds")
         round_moves = round_record.get("moves")
         if (
-            not isinstance(round_record.get("turn"), int)
+            set(round_record) != {"turn", "moves", "winner_team_id"}
+            or not isinstance(round_record.get("turn"), int)
             or isinstance(round_record.get("turn"), bool)
             or round_record.get("turn") != expected_turn
             or not isinstance(round_moves, Mapping)
@@ -561,6 +589,7 @@ def _validate_competitive_details(
             continue
         if (
             not isinstance(fault, Mapping)
+            or set(fault) != {"kind", "turn"}
             or not isinstance(fault.get("kind"), str)
             or not fault.get("kind")
             or not isinstance(fault.get("turn"), int)
@@ -596,6 +625,22 @@ def _validate_competitive_details(
     ):
         raise TournamentStateError(
             "Qualifying Match has contradictory normalized faults"
+        )
+
+    scheduled_turns = manifest.get("scheduled_turns_per_match")
+    if (
+        not isinstance(scheduled_turns, int)
+        or isinstance(scheduled_turns, bool)
+        or scheduled_turns <= 0
+    ):
+        raise TournamentStateError(
+            "Manifest contains invalid scheduled Turns per Match"
+        )
+    if (not present_faults and len(rounds) != scheduled_turns) or len(
+        rounds
+    ) > scheduled_turns:
+        raise TournamentStateError(
+            "Qualifying Match has an invalid number of completed Rounds"
         )
 
     winner_team_id = record.get("winner_team_id")
