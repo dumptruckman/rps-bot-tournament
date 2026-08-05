@@ -79,6 +79,7 @@ def manifest_rules() -> dict[str, Any]:
                 "preserve_played_records": True,
                 "exclude_match_statistics": True,
                 "exclude_round_statistics": True,
+                "exclude_timing_statistics": True,
                 "exclude_fault_statistics": True,
             },
             "administrative_series_wins_excluded_from_lower_statistics": True,

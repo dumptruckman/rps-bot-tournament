@@ -8,10 +8,10 @@ Implementation status: in progress
 
 Last updated: 2026-08-05
 
-The implemented foundation is covered by 136 passing tests under the repository's
+The implemented foundation is covered by 139 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
-contract, authoritative state fold, and qualification-to-playoff transition.
+contract, authoritative state fold, and Qualifying-to-Playoff Phase transition.
 
 ### Complete
 
@@ -53,9 +53,10 @@ contract, authoritative state fold, and qualification-to-playoff transition.
   in the Tournament Manifest and reject a validly resealed incompatible ruleset.
 - [x] Reconstruct qualifying Series, standings, and the next canonical Match
   through one authoritative state fold that rejects semantically impossible
-  Competition Record histories.
-- [x] Commit and project the deterministic seeded playoff bracket when
-  qualification completes, including idempotent recovery when the final
+  Competition Record histories, including contradictory outcomes, play facts,
+  faults, seeds, Bot Positions, and Bot Artifact identities.
+- [x] Commit and project the deterministic seeded playoff bracket when the
+  Qualifying Phase completes, including idempotent recovery when the final
   qualifying Match commits before the phase-transition record.
 
 ### Partially complete

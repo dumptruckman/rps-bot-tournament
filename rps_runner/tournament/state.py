@@ -15,11 +15,13 @@ from .competition import (
     MatchOutcome,
     MatchResult,
     Phase,
+    PlayoffStage,
     Series,
     Standing,
     calculate_qualifying_standings,
 )
-from .seeding import derive_fixture_seed
+from .schedule import bot_positions
+from .seeding import derive_bot_seed, derive_fixture_seed, derive_match_seed
 from .storage import StoredCompetitionRecord
 
 
@@ -46,7 +48,7 @@ class PlayoffSeed:
 @dataclass(frozen=True)
 class PlayoffFixtureDefinition:
     fixture_id: str
-    stage: str
+    stage: PlayoffStage
     team_ids: tuple[Optional[str], Optional[str]]
     fixture_seed: int
 
@@ -63,7 +65,7 @@ class TournamentState:
     playoff_fixtures: tuple[PlayoffFixtureDefinition, ...]
 
     @property
-    def qualification_complete(self) -> bool:
+    def qualifying_phase_complete(self) -> bool:
         return self.next_qualifying_match is None
 
 
@@ -78,7 +80,7 @@ def fold_tournament_state(
     manifest: Mapping[str, Any],
     records: Iterable[StoredCompetitionRecord],
 ) -> TournamentState:
-    """Fold verified stored bytes into semantically verified qualification state."""
+    """Fold verified stored bytes into semantically verified Tournament state."""
 
     fixtures = _qualifying_fixtures(manifest)
     fixture_indexes = {
@@ -112,7 +114,7 @@ def fold_tournament_state(
         if record_type == "playoff_bracket_created":
             if current_fixture_index != len(fixtures):
                 raise TournamentStateError(
-                    "Playoff bracket was created before qualification completed"
+                    "Playoff bracket was created before the Qualifying Phase completed"
                 )
             if playoff_bracket_created:
                 raise TournamentStateError(
@@ -161,6 +163,8 @@ def fold_tournament_state(
             raise TournamentStateError(
                 "Competition Record Match ordinal is duplicate, gapped, or out of order"
             )
+        _validate_match_identity(manifest, record, fixture, match_ordinal)
+        _validate_competitive_details(record, fixture)
         result = _match_result(record, fixture, match_ordinal)
         try:
             series[current_fixture_index] = current_series.record(result)
@@ -231,7 +235,9 @@ def build_playoff_bracket_record(
             {
                 "fixture_id": fixture_id,
                 "stage": (
-                    "final" if fixture_id == "playoff-final" else "semifinal"
+                    PlayoffStage.FINAL.value
+                    if fixture_id == "playoff-final"
+                    else PlayoffStage.SEMIFINAL.value
                 ),
                 "team_ids": list(team_ids),
                 "fixture_seed": str(
@@ -253,7 +259,7 @@ def _playoff_values(
     fixtures = tuple(
         PlayoffFixtureDefinition(
             fixture_id=value["fixture_id"],
-            stage=value["stage"],
+            stage=PlayoffStage(value["stage"]),
             team_ids=(value["team_ids"][0], value["team_ids"][1]),
             fixture_seed=int(value["fixture_seed"]),
         )
@@ -374,19 +380,43 @@ def _match_result(
     try:
         outcome = MatchOutcome(record.get("outcome"))
         if outcome is MatchOutcome.DOUBLE_FORFEIT:
+            if (
+                record.get("winner_team_id") is not None
+                or record.get("protocol_forfeit_team_id") is not None
+            ):
+                raise TournamentStateError(
+                    "Qualifying Match has contradictory outcome fields"
+                )
             return MatchResult.double_forfeit(
                 *fixture.team_ids,
                 completed_round_wins=completed_round_wins,
             )
         if outcome is MatchOutcome.DRAW:
-            if record.get("winner_team_id") is not None:
-                raise TournamentStateError("Drawn Match cannot name a winner")
+            if (
+                record.get("winner_team_id") is not None
+                or record.get("protocol_forfeit_team_id") is not None
+            ):
+                raise TournamentStateError(
+                    "Qualifying Match has contradictory outcome fields"
+                )
             return MatchResult.draw(
                 *fixture.team_ids,
                 round_wins=completed_round_wins,
             )
         faulting_team_id = record.get("protocol_forfeit_team_id")
         if faulting_team_id is not None:
+            expected_winner = next(
+                (
+                    team_id
+                    for team_id in fixture.team_ids
+                    if team_id != faulting_team_id
+                ),
+                None,
+            )
+            if record.get("winner_team_id") != expected_winner:
+                raise TournamentStateError(
+                    "Qualifying Match has contradictory outcome fields"
+                )
             return MatchResult.protocol_forfeit(
                 *fixture.team_ids,
                 faulting_team_id=faulting_team_id,
@@ -404,3 +434,199 @@ def _match_result(
         if isinstance(error, TournamentStateError):
             raise
         raise TournamentStateError("Qualifying Match outcome is invalid") from error
+
+
+def _validate_match_identity(
+    manifest: Mapping[str, Any],
+    record: Mapping[str, Any],
+    fixture: _FixtureDefinition,
+    match_ordinal: int,
+) -> None:
+    match_seed = derive_match_seed(fixture.fixture_seed, match_ordinal)
+    if record.get("match_seed") != str(match_seed):
+        raise TournamentStateError("Qualifying Match has a non-canonical Match Seed")
+
+    positions = bot_positions(
+        fixture.fixture_seed,
+        match_ordinal,
+        fixture.team_ids[0],
+        fixture.team_ids[1],
+    )
+    expected_positions = {
+        "a": positions.team_a_id,
+        "b": positions.team_b_id,
+    }
+    if record.get("bot_positions") != expected_positions:
+        raise TournamentStateError("Qualifying Match has non-canonical Bot Positions")
+
+    expected_bot_seeds = {
+        team_id: str(derive_bot_seed(match_seed, team_id))
+        for team_id in fixture.team_ids
+    }
+    if record.get("bot_visible_seeds") != expected_bot_seeds:
+        raise TournamentStateError(
+            "Qualifying Match has non-canonical bot-visible Seeds"
+        )
+
+    artifacts = _artifact_digests(manifest)
+    expected_artifacts = {
+        team_id: artifacts[team_id] for team_id in fixture.team_ids
+    }
+    if record.get("artifact_digests") != expected_artifacts:
+        raise TournamentStateError(
+            "Qualifying Match has non-canonical Bot Artifact digests"
+        )
+
+
+def _artifact_digests(manifest: Mapping[str, Any]) -> dict[str, str]:
+    roster = manifest.get("roster")
+    if not isinstance(roster, (list, tuple)):
+        raise TournamentStateError("Manifest has no canonical roster")
+    artifacts: dict[str, str] = {}
+    for team in roster:
+        if not isinstance(team, Mapping):
+            raise TournamentStateError("Manifest contains an invalid Team")
+        team_id = team.get("team_id")
+        bot_artifact = team.get("bot_artifact")
+        if (
+            not isinstance(team_id, str)
+            or not isinstance(bot_artifact, Mapping)
+            or not isinstance(bot_artifact.get("artifact_digest"), str)
+        ):
+            raise TournamentStateError("Manifest contains an invalid Bot Artifact")
+        artifacts[team_id] = bot_artifact["artifact_digest"]
+    return artifacts
+
+
+def _validate_competitive_details(
+    record: Mapping[str, Any], fixture: _FixtureDefinition
+) -> None:
+    team_ids = set(fixture.team_ids)
+    moves = record.get("moves")
+    if (
+        not isinstance(moves, Mapping)
+        or set(moves) != team_ids
+        or any(
+            not isinstance(value, str)
+            or any(move not in "RPS" for move in value)
+            for value in moves.values()
+        )
+    ):
+        raise TournamentStateError("Qualifying Match has invalid completed moves")
+
+    rounds = record.get("rounds")
+    if not isinstance(rounds, (list, tuple)):
+        raise TournamentStateError("Qualifying Match has invalid completed Rounds")
+    if any(len(moves[team_id]) != len(rounds) for team_id in team_ids):
+        raise TournamentStateError("Qualifying Match has invalid completed moves")
+    calculated_round_wins = {team_id: 0 for team_id in fixture.team_ids}
+    for expected_turn, round_record in enumerate(rounds):
+        if not isinstance(round_record, Mapping):
+            raise TournamentStateError("Qualifying Match has invalid completed Rounds")
+        round_moves = round_record.get("moves")
+        if (
+            not isinstance(round_record.get("turn"), int)
+            or isinstance(round_record.get("turn"), bool)
+            or round_record.get("turn") != expected_turn
+            or not isinstance(round_moves, Mapping)
+            or set(round_moves) != team_ids
+            or any(
+                round_moves.get(team_id) not in {"R", "P", "S"}
+                for team_id in team_ids
+            )
+            or any(
+                expected_turn >= len(moves[team_id])
+                or moves[team_id][expected_turn] != round_moves[team_id]
+                for team_id in team_ids
+            )
+            or round_record.get("winner_team_id")
+            != _round_winner(fixture.team_ids, round_moves)
+        ):
+            raise TournamentStateError("Qualifying Match has invalid completed Rounds")
+        winner_team_id = round_record.get("winner_team_id")
+        if winner_team_id is not None:
+            calculated_round_wins[winner_team_id] += 1
+
+    if record.get("round_wins") != calculated_round_wins:
+        raise TournamentStateError("Qualifying Match has invalid Round wins")
+
+    faults = record.get("faults")
+    if not isinstance(faults, Mapping) or set(faults) != team_ids:
+        raise TournamentStateError("Qualifying Match has invalid normalized faults")
+    normalized_faults: dict[str, Optional[Mapping[str, Any]]] = {}
+    for team_id in fixture.team_ids:
+        fault = faults[team_id]
+        if fault is None:
+            normalized_faults[team_id] = None
+            continue
+        if (
+            not isinstance(fault, Mapping)
+            or not isinstance(fault.get("kind"), str)
+            or not fault.get("kind")
+            or not isinstance(fault.get("turn"), int)
+            or isinstance(fault.get("turn"), bool)
+            or fault["turn"] < 0
+        ):
+            raise TournamentStateError("Qualifying Match has invalid normalized faults")
+        normalized_faults[team_id] = fault
+
+    outcome = record.get("outcome")
+    faulting_team_id = record.get("protocol_forfeit_team_id")
+    present_faults = [
+        team_id for team_id, fault in normalized_faults.items() if fault is not None
+    ]
+    if outcome == MatchOutcome.DOUBLE_FORFEIT.value:
+        fault_turns = {
+            fault["turn"]
+            for fault in normalized_faults.values()
+            if fault is not None
+        }
+        valid_faults = len(present_faults) == 2 and len(fault_turns) == 1
+    elif faulting_team_id is not None:
+        valid_faults = present_faults == [faulting_team_id]
+    else:
+        valid_faults = not present_faults
+    if not valid_faults:
+        raise TournamentStateError(
+            "Qualifying Match has contradictory normalized faults"
+        )
+    if present_faults and any(
+        normalized_faults[team_id]["turn"] != len(rounds)
+        for team_id in present_faults
+    ):
+        raise TournamentStateError(
+            "Qualifying Match has contradictory normalized faults"
+        )
+
+    winner_team_id = record.get("winner_team_id")
+    if (
+        outcome == MatchOutcome.DRAW.value
+        and len(set(calculated_round_wins.values())) != 1
+    ):
+        raise TournamentStateError(
+            "Qualifying Match has contradictory outcome fields"
+        )
+    if (
+        outcome == MatchOutcome.WIN.value
+        and faulting_team_id is None
+        and winner_team_id in team_ids
+        and calculated_round_wins[winner_team_id]
+        <= calculated_round_wins[
+            next(team_id for team_id in fixture.team_ids if team_id != winner_team_id)
+        ]
+    ):
+        raise TournamentStateError(
+            "Qualifying Match has contradictory outcome fields"
+        )
+
+
+def _round_winner(
+    team_ids: tuple[str, str], moves: Mapping[str, Any]
+) -> Optional[str]:
+    team_one_move = moves[team_ids[0]]
+    team_two_move = moves[team_ids[1]]
+    if team_one_move == team_two_move:
+        return None
+    if (team_one_move, team_two_move) in {("R", "S"), ("S", "P"), ("P", "R")}:
+        return team_ids[0]
+    return team_ids[1]

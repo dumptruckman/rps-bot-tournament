@@ -11,6 +11,7 @@ from typing import Any, Optional, Union
 from .competition import (
     MatchOutcome,
     MatchResult,
+    Phase,
     Standing,
 )
 from .locking import TournamentRunLock
@@ -185,6 +186,9 @@ class TournamentRunner:
             records = load_competition_records(directory)
             load_operational_telemetry(directory)
             state = fold_tournament_state(stored.manifest, records)
+            records, state = _commit_playoff_transition_if_ready(
+                directory, stored.manifest, records, state
+            )
             write_scoreboard_projection(
                 directory,
                 _projection_from_records(stored.manifest, records, state),
@@ -204,28 +208,6 @@ class TournamentRunner:
             state = fold_tournament_state(self._manifest, records)
             selected = _select_next_match(self._manifest, state)
             if selected is None:
-                if (
-                    state.qualification_complete
-                    and state.phase.value == "qualifying"
-                ):
-                    bracket = append_competition_record(
-                        self.tournament_directory,
-                        build_playoff_bracket_record(
-                            self._manifest, state.standings
-                        ),
-                    )
-                    recovered_records = records + [bracket]
-                    recovered_state = fold_tournament_state(
-                        self._manifest, recovered_records
-                    )
-                    write_scoreboard_projection(
-                        self.tournament_directory,
-                        _projection_from_records(
-                            self._manifest,
-                            recovered_records,
-                            recovered_state,
-                        ),
-                    )
                 return None
             fixture, match_ordinal = selected
             match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
@@ -301,20 +283,14 @@ class TournamentRunner:
                 state_after_match = fold_tournament_state(
                     self._manifest, all_records
                 )
-                if (
-                    state_after_match.qualification_complete
-                    and state_after_match.phase.value == "qualifying"
-                ):
-                    bracket = append_competition_record(
+                all_records, state_after_match = (
+                    _commit_playoff_transition_if_ready(
                         self.tournament_directory,
-                        build_playoff_bracket_record(
-                            self._manifest, state_after_match.standings
-                        ),
+                        self._manifest,
+                        all_records,
+                        state_after_match,
                     )
-                    all_records.append(bracket)
-                    state_after_match = fold_tournament_state(
-                        self._manifest, all_records
-                    )
+                )
                 write_scoreboard_projection(
                     self.tournament_directory,
                     _projection_from_records(
@@ -325,6 +301,26 @@ class TournamentRunner:
 
             # The loop either commits a Match or raises for intervention.
             raise AssertionError("unreachable Match Attempt state")
+
+
+def _commit_playoff_transition_if_ready(
+    tournament_directory: Path,
+    manifest: dict[str, Any],
+    records: list[StoredCompetitionRecord],
+    state: TournamentState,
+) -> tuple[list[StoredCompetitionRecord], TournamentState]:
+    if not (
+        state.qualifying_phase_complete and state.phase is Phase.QUALIFYING
+    ):
+        return records, state
+    bracket = append_competition_record(
+        tournament_directory,
+        build_playoff_bracket_record(manifest, state.standings),
+    )
+    transitioned_records = records + [bracket]
+    return transitioned_records, fold_tournament_state(
+        manifest, transitioned_records
+    )
 
 
 def tournament_manifest_incompatibilities(
@@ -892,7 +888,7 @@ def _projection_from_records(
             "fixtures": [
                 {
                     "fixture_id": fixture.fixture_id,
-                    "stage": fixture.stage,
+                    "stage": fixture.stage.value,
                     "team_ids": list(fixture.team_ids),
                     "fixture_seed": str(fixture.fixture_seed),
                 }

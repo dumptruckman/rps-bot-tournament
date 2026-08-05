@@ -60,11 +60,32 @@ def executor_result(
     request: MatchExecutionRequest,
     *,
     winner_team_id: Optional[str],
-    score: tuple[int, int] = (0, 0),
+    score: Optional[tuple[int, int]] = None,
     moves: Optional[dict[str, str]] = None,
     rounds: Optional[list[dict[str, object]]] = None,
     faults: Optional[dict[str, Optional[dict[str, object]]]] = None,
 ) -> MatchExecutionResult:
+    if moves is None and rounds is None:
+        team_a_move = "R"
+        team_b_move = "R" if winner_team_id is None else "S"
+        if winner_team_id == request.team_b_id:
+            team_a_move, team_b_move = team_b_move, team_a_move
+        moves = {
+            request.team_a_id: team_a_move,
+            request.team_b_id: team_b_move,
+        }
+        rounds = [
+            {
+                "turn": 0,
+                "moves": moves,
+                "winner_team_id": winner_team_id,
+            }
+        ]
+    if score is None:
+        score = (
+            int(winner_team_id == request.team_a_id),
+            int(winner_team_id == request.team_b_id),
+        )
     return MatchExecutionResult(
         infrastructure_failure=False,
         competitive_outcome={
@@ -75,10 +96,8 @@ def executor_result(
                 request.team_b_id: score[1],
                 "draws": 0,
             },
-            "moves": moves
-            if moves is not None
-            else {request.team_a_id: "", request.team_b_id: ""},
-            "rounds": rounds if rounds is not None else [],
+            "moves": moves,
+            "rounds": rounds,
             "faults": faults
             if faults is not None
             else {request.team_a_id: None, request.team_b_id: None},
@@ -201,6 +220,7 @@ class TournamentCreationTests(unittest.TestCase):
                         "preserve_played_records": True,
                         "exclude_match_statistics": True,
                         "exclude_round_statistics": True,
+                        "exclude_timing_statistics": True,
                         "exclude_fault_statistics": True,
                     },
                     "administrative_series_wins_excluded_from_lower_statistics": True,
@@ -628,7 +648,7 @@ class TournamentStepModeTests(unittest.TestCase):
             projection["bracket"],
         )
 
-    def test_next_step_recovers_missing_playoff_transition_without_executing_match(
+    def test_resume_recovers_missing_playoff_transition_before_the_next_step(
         self,
     ) -> None:
         requests: list[MatchExecutionRequest] = []
@@ -666,11 +686,13 @@ class TournamentStepModeTests(unittest.TestCase):
 
         self.assertEqual(len(requests), 12)
         self.assertEqual(len(load_competition_records(self.directory)), 12)
-        runner.match_executor = lambda request: self.fail(
-            "Recovering a phase transition must not execute a Match"
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Resuming a phase transition must not execute a Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
         )
-
-        self.assertIsNone(runner.play_next_match())
         recovered_records = load_competition_records(self.directory)
         self.assertEqual(len(recovered_records), 13)
         self.assertEqual(
@@ -680,7 +702,13 @@ class TournamentStepModeTests(unittest.TestCase):
             load_scoreboard_projection(self.directory)["phase"], "playoff"
         )
 
-        self.assertIsNone(runner.play_next_match())
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Repeated resume must not execute a Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
         self.assertEqual(load_competition_records(self.directory), recovered_records)
 
     def test_step_executes_exactly_the_next_canonical_match_and_commits_it(
@@ -697,7 +725,7 @@ class TournamentStepModeTests(unittest.TestCase):
             return executor_result(
                 request,
                 winner_team_id="beta",
-                score=(1, 0),
+                score=(1, 1),
                 moves={"beta": "RP", "delta": "SS"},
                 rounds=[
                     {
@@ -772,7 +800,7 @@ class TournamentStepModeTests(unittest.TestCase):
                 "team_ids": ["beta", "delta"],
                 "outcome": "win",
                 "winner_team_id": "beta",
-                "round_wins": {"beta": 1, "delta": 0},
+                "round_wins": {"beta": 1, "delta": 1},
                 "protocol_forfeit_team_id": "delta",
                 "moves": {"beta": "RP", "delta": "SS"},
                 "rounds": [
@@ -829,8 +857,24 @@ class TournamentStepModeTests(unittest.TestCase):
                     "outcome": "double_forfeit",
                     "winner_team_id": None,
                     "score": {"beta": 3, "delta": 2, "draws": 1},
-                    "moves": {"beta": "RPS", "delta": "SSR"},
-                    "rounds": [],
+                    "moves": {"beta": "RPSRPS", "delta": "SRPPSS"},
+                    "rounds": [
+                        {
+                            "turn": turn,
+                            "moves": {"beta": beta, "delta": delta},
+                            "winner_team_id": winner,
+                        }
+                        for turn, (beta, delta, winner) in enumerate(
+                            (
+                                ("R", "S", "beta"),
+                                ("P", "R", "beta"),
+                                ("S", "P", "beta"),
+                                ("R", "P", "delta"),
+                                ("P", "S", "delta"),
+                                ("S", "S", None),
+                            )
+                        )
+                    ],
                     "faults": {
                         "beta": {"kind": "timeout", "turn": 6},
                         "delta": {"kind": "invalid_move", "turn": 6},
