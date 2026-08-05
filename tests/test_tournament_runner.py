@@ -18,7 +18,7 @@ from rps_runner.tournament.runner import (
     TournamentConfig,
     TournamentRunner,
 )
-from rps_runner.tournament.state import TournamentStateError
+from rps_runner.tournament.state import TournamentStateError, fold_tournament_state
 from rps_runner.tournament.seeding import derive_fixture_seed
 from rps_runner.tournament.match_executor import MatchExecutionResult
 from rps_runner.tournament.immutable import thaw_json
@@ -28,6 +28,7 @@ from rps_runner.tournament.locking import (
 )
 from rps_runner.tournament.storage import (
     append_competition_record,
+    append_operational_telemetry,
     load_competition_records,
     load_manifest,
     load_operational_telemetry,
@@ -559,6 +560,297 @@ class TournamentStepModeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def _runner_at_playoffs(
+        self,
+        playoff_executor,
+    ) -> TournamentRunner:
+        strength = {"alpha": 0, "beta": 1, "gamma": 2, "delta": 3}
+
+        def qualifying_executor(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            winner = min(
+                (request.team_a_id, request.team_b_id),
+                key=strength.__getitem__,
+            )
+            return executor_result(request, winner_team_id=winner)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="playoff-step-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=qualifying_executor,
+        )
+        for _ in range(12):
+            runner.play_next_match()
+        runner.match_executor = playoff_executor
+        return runner
+
+    def test_first_playoff_step_locks_bracket_before_running_canonical_semifinal(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            records = load_competition_records(self.directory)
+            self.assertEqual(
+                records[-1].record,
+                {
+                    "type": "playoff_bracket_locked",
+                    "phase": "playoff",
+                    "fixture_id": "playoff-semifinal-1",
+                    "match_id": "playoff-semifinal-1-match-1",
+                },
+            )
+            return executor_result(request, winner_team_id="alpha")
+
+        runner = self._runner_at_playoffs(execute)
+
+        committed = runner.play_next_match()
+
+        self.assertEqual(committed.record["phase"], "playoff")
+        self.assertEqual(
+            [
+                record.record["type"]
+                for record in load_competition_records(self.directory)[-2:]
+            ],
+            ["playoff_bracket_locked", "match_terminal"],
+        )
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request.fixture_id, "playoff-semifinal-1")
+        self.assertEqual(request.series_id, "playoff-semifinal-1-series")
+        self.assertEqual(request.match_id, "playoff-semifinal-1-match-1")
+        self.assertEqual(request.attempt_number, 1)
+        self.assertEqual((request.team_a_id, request.team_b_id), ("delta", "alpha"))
+        self.assertEqual(request.match_seed, 3331983333925575056)
+        self.assertEqual(request.bot_visible_seed_a, 17977130509488424725)
+        self.assertEqual(request.bot_visible_seed_b, 5192250245818424774)
+        self.assertEqual(request.artifact_digest_a, "d" * 64)
+        self.assertEqual(request.artifact_digest_b, "a" * 64)
+        self.assertEqual(request.protocol_version, 1)
+        self.assertEqual(request.scheduled_turns, 300)
+
+    def test_playoff_projection_shows_locked_active_and_completed_semifinal(
+        self,
+    ) -> None:
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            projection = load_scoreboard_projection(self.directory)
+            self.assertTrue(projection["bracket"]["locked"])
+            semifinal = projection["bracket"]["fixtures"][0]
+            self.assertEqual(semifinal["status"], "active")
+            self.assertEqual(
+                semifinal["active_match_id"],
+                "playoff-semifinal-1-match-1",
+            )
+            self.assertNotIn("match_seed", str(projection))
+            self.assertNotIn("artifact_digest", str(projection))
+            self.assertNotIn("attempt_number", str(projection))
+            return executor_result(request, winner_team_id="alpha")
+
+        runner = self._runner_at_playoffs(execute)
+
+        runner.play_next_match()
+
+        projection = load_scoreboard_projection(self.directory)
+        semifinal = projection["bracket"]["fixtures"][0]
+        self.assertEqual(semifinal["status"], "in_progress")
+        self.assertNotIn("active_match_id", semifinal)
+        self.assertEqual(
+            semifinal["matches"],
+            [
+                {
+                    "match_id": "playoff-semifinal-1-match-1",
+                    "outcome": "win",
+                    "winner_team_id": "alpha",
+                }
+            ],
+        )
+
+    def test_interrupted_playoff_attempt_preserves_lock_and_restarts_same_match(
+        self,
+    ) -> None:
+        interrupted_requests: list[MatchExecutionRequest] = []
+
+        def interrupt(request: MatchExecutionRequest) -> MatchExecutionResult:
+            interrupted_requests.append(request)
+            raise RuntimeError("executor interrupted before terminal commit")
+
+        runner = self._runner_at_playoffs(interrupt)
+
+        with self.assertRaisesRegex(RuntimeError, "before terminal commit"):
+            runner.play_next_match()
+
+        records_after_interruption = load_competition_records(self.directory)
+        self.assertEqual(
+            records_after_interruption[-1].record["type"],
+            "playoff_bracket_locked",
+        )
+        self.assertEqual(
+            sum(
+                record.record["type"] == "playoff_bracket_locked"
+                for record in records_after_interruption
+            ),
+            1,
+        )
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Opening must not execute an interrupted playoff Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        resumed_requests: list[MatchExecutionRequest] = []
+
+        def resume(request: MatchExecutionRequest) -> MatchExecutionResult:
+            resumed_requests.append(request)
+            return executor_result(request, winner_team_id="alpha")
+
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=resume,
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        reopened.play_next_match()
+
+        self.assertEqual(len(interrupted_requests), 1)
+        self.assertEqual(len(resumed_requests), 1)
+        self.assertEqual(interrupted_requests[0].match_id, resumed_requests[0].match_id)
+        self.assertEqual(
+            interrupted_requests[0].match_seed,
+            resumed_requests[0].match_seed,
+        )
+        self.assertEqual(
+            interrupted_requests[0].team_a_id,
+            resumed_requests[0].team_a_id,
+        )
+        self.assertEqual(
+            interrupted_requests[0].team_b_id,
+            resumed_requests[0].team_b_id,
+        )
+        self.assertEqual(interrupted_requests[0].attempt_number, 1)
+        self.assertEqual(resumed_requests[0].attempt_number, 2)
+        final_records = load_competition_records(self.directory)
+        self.assertEqual(
+            sum(
+                record.record["type"] == "playoff_bracket_locked"
+                for record in final_records
+            ),
+            1,
+        )
+
+        next_requests: list[MatchExecutionRequest] = []
+
+        def execute_next(request: MatchExecutionRequest) -> MatchExecutionResult:
+            next_requests.append(request)
+            return executor_result(request, winner_team_id="alpha")
+
+        reopened_after_commit = TournamentRunner.open(
+            self.directory,
+            match_executor=execute_next,
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        reopened_after_commit.play_next_match()
+        self.assertEqual(
+            [request.match_id for request in next_requests],
+            ["playoff-semifinal-1-match-2"],
+        )
+
+    def test_open_does_not_infer_bracket_lock_from_projection_or_telemetry(
+        self,
+    ) -> None:
+        runner = self._runner_at_playoffs(
+            lambda request: executor_result(request, winner_team_id="alpha")
+        )
+        stale_projection = load_scoreboard_projection(self.directory)
+        stale_projection["bracket"]["locked"] = True
+        stale_projection["bracket"]["fixtures"][0]["status"] = "active"
+        write_scoreboard_projection(self.directory, stale_projection)
+        append_operational_telemetry(
+            self.directory,
+            {
+                "type": "match_attempt_started",
+                "tournament_id": "playoff-step-cup",
+                "fixture_id": "playoff-semifinal-1",
+                "match_id": "playoff-semifinal-1-match-1",
+                "attempt_number": 1,
+            },
+        )
+
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="alpha"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        projection = load_scoreboard_projection(self.directory)
+        self.assertFalse(projection["bracket"]["locked"])
+        self.assertFalse(
+            any(
+                record.record["type"] == "playoff_bracket_locked"
+                for record in load_competition_records(self.directory)
+            )
+        )
+        reopened.play_next_match()
+        lock_records = [
+            record.record
+            for record in load_competition_records(self.directory)
+            if record.record["type"] == "playoff_bracket_locked"
+        ]
+        self.assertEqual(len(lock_records), 1)
+
+    def test_step_mode_completes_semifinals_in_canonical_series_order(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            winner = None if request.fixture_id == "playoff-semifinal-1" else "beta"
+            return executor_result(request, winner_team_id=winner)
+
+        runner = self._runner_at_playoffs(execute)
+
+        for expected_request_count in range(1, 6):
+            committed = runner.play_next_match()
+            self.assertIsNotNone(committed)
+            self.assertEqual(len(requests), expected_request_count)
+
+        self.assertEqual(
+            [(request.fixture_id, request.match_id) for request in requests],
+            [
+                ("playoff-semifinal-1", "playoff-semifinal-1-match-1"),
+                ("playoff-semifinal-1", "playoff-semifinal-1-match-2"),
+                ("playoff-semifinal-1", "playoff-semifinal-1-match-3"),
+                ("playoff-semifinal-2", "playoff-semifinal-2-match-1"),
+                ("playoff-semifinal-2", "playoff-semifinal-2-match-2"),
+            ],
+        )
+        self.assertIsNone(runner.play_next_match())
+        self.assertEqual(len(requests), 5)
+        records = load_competition_records(self.directory)
+        playoff_matches = [
+            record.record
+            for record in records
+            if record.record.get("type") == "match_terminal"
+            and record.record.get("phase") == "playoff"
+        ]
+        self.assertEqual(len(playoff_matches), 5)
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertEqual(
+            [series.winner for series in state.playoff_series],
+            ["alpha", "beta"],
+        )
+        self.assertIsNone(state.next_playoff_match)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(
+            [fixture["status"] for fixture in projection["bracket"]["fixtures"]],
+            ["complete", "complete", "scheduled"],
+        )
+
     def test_final_qualifying_step_creates_playoff_bracket_without_running_playoff_match(
         self,
     ) -> None:
@@ -637,9 +929,14 @@ class TournamentStepModeTests(unittest.TestCase):
         )
         projection = load_scoreboard_projection(self.directory)
         self.assertEqual(projection["phase"], "playoff")
+        self.assertFalse(projection["bracket"]["locked"])
         self.assertEqual(projection["bracket"]["seeds"], bracket_record["seeds"])
         self.assertEqual(
-            projection["bracket"]["fixtures"], bracket_record["fixtures"]
+            projection["bracket"]["fixtures"],
+            [
+                {**fixture, "status": "scheduled", "matches": []}
+                for fixture in bracket_record["fixtures"]
+            ],
         )
 
         TournamentRunner.open(

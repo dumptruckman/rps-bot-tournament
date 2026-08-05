@@ -8,11 +8,11 @@ Implementation status: in progress
 
 Last updated: 2026-08-05
 
-The implemented foundation is covered by 142 passing tests under the repository's
+The implemented foundation is covered by 147 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
-contract, authoritative state fold, and transition from the Qualifying Phase to
-the Playoff Phase.
+contract, authoritative state fold, transition from the Qualifying Phase to the
+Playoff Phase, canonical Bracket Lock, and Step Mode semifinal execution.
 
 ### Complete
 
@@ -59,19 +59,24 @@ the Playoff Phase.
 - [x] Commit and project the deterministic seeded playoff bracket when the
   Qualifying Phase completes, including idempotent recovery when the final
   qualifying Match commits before the phase-transition record.
+- [x] Commit Bracket Lock before the first playoff Match, preserve it across an
+  interrupted uncommitted attempt, and execute both semifinal Series through
+  one scheduler-selected playoff Match per Step Mode action with authoritative
+  fold and Scoreboard Projection recovery.
 
 ### Partially complete
 
 - [ ] Execute the Playoff Phase. Series, bracket, reduced-playoff, advancement,
-  and Disqualification rules exist as tested domain behavior, and the Tournament
-  Runner now commits the standard seeded bracket transition; canonical Bracket
-  Lock, playoff Match execution, advancement, final, and champion remain.
+  and Disqualification rules exist as tested domain behavior. The Tournament
+  Runner now locks the standard seeded bracket and executes its semifinals;
+  advancement into the final, final execution, and champion declaration remain.
 - [ ] Apply qualification and playoff Disqualifications through the Tournament
   Runner. Standing and bracket transformations exist, but administrative ruling
   records and scheduler integration do not.
 - [ ] Complete the Scoreboard Projection. Qualifying scheduling, Match progress,
-  standings, retries, and recovery are projected; playoff, Administrative Series
-  Win, Security Violation, and Tournament Champion views remain.
+  standings, retries, recovery, Bracket Lock, and semifinal Match progress are
+  projected; final advancement, Administrative Series Win, Security Violation,
+  and Tournament Champion views remain.
 - [ ] Complete operator execution controls. Step Mode and infrastructure pause
   behavior exist; explicit start, requested pause, resume-after-ruling, abort,
   mode switching, and record-restoration commands remain.

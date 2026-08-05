@@ -12,6 +12,7 @@ from .competition import (
     MatchOutcome,
     MatchResult,
     Phase,
+    Series,
     Standing,
 )
 from .locking import TournamentRunLock
@@ -211,6 +212,17 @@ class TournamentRunner:
                 return None
             fixture, match_ordinal = selected
             match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
+            if state.phase is Phase.PLAYOFF and not state.bracket_locked:
+                lock = append_competition_record(
+                    self.tournament_directory,
+                    {
+                        "type": "playoff_bracket_locked",
+                        "phase": Phase.PLAYOFF.value,
+                        "fixture_id": fixture["fixture_id"],
+                        "match_id": match_id,
+                    },
+                )
+                records = records + [lock]
             next_attempt_number = _next_attempt_number(
                 self.tournament_directory, match_id
             )
@@ -592,10 +604,20 @@ def _select_next_match(
 ) -> Optional[tuple[dict[str, Any], int]]:
     selected = state.next_qualifying_match
     if selected is None:
+        selected = state.next_playoff_match
+    if selected is None:
         return None
     for fixture in _manifest_fixtures(manifest):
         if fixture["fixture_id"] == selected.fixture_id:
             return fixture, selected.match_ordinal
+    for fixture in state.playoff_fixtures:
+        if fixture.fixture_id == selected.fixture_id:
+            return {
+                "fixture_id": fixture.fixture_id,
+                "team_ids": list(selected.team_ids),
+                "fixture_seed": str(fixture.fixture_seed),
+                "phase": Phase.PLAYOFF.value,
+            }, selected.match_ordinal
     raise AssertionError("Folded state selected a Fixture outside the Manifest")
 
 
@@ -753,7 +775,7 @@ def _terminal_record(
     team_one_id, team_two_id = fixture["team_ids"]
     return {
         "type": "match_terminal",
-        "phase": "qualifying",
+        "phase": fixture.get("phase", Phase.QUALIFYING.value),
         "fixture_id": request.fixture_id,
         "match_id": request.match_id,
         "match_ordinal": match_ordinal,
@@ -860,27 +882,14 @@ def _projection_from_records(
     for fixture_projection, series in zip(
         projection["fixtures"], folded.qualifying_series
     ):
-        fixture_records = sorted(
-            terminal_by_fixture.get(fixture_projection["fixture_id"], ()),
-            key=lambda record: record["match_ordinal"],
+        _apply_series_projection(
+            fixture_projection, series, terminal_by_fixture
         )
-        if not fixture_records:
-            continue
-        fixture_projection["status"] = (
-            "complete" if series.is_complete else "in_progress"
-        )
-        fixture_projection["matches"] = [
-            {
-                "match_id": record["match_id"],
-                "outcome": record["outcome"],
-                "winner_team_id": record["winner_team_id"],
-            }
-            for record in fixture_records
-        ]
     projection["standings"] = _standing_projection(folded.standings)
     projection["phase"] = folded.phase.value
     if folded.phase.value == "playoff":
         projection["bracket"] = {
+            "locked": folded.bracket_locked,
             "seeds": [
                 {"seed": seed.seed, "team_id": seed.team_id}
                 for seed in folded.playoff_seeds
@@ -891,11 +900,43 @@ def _projection_from_records(
                     "stage": fixture.stage.value,
                     "team_ids": list(fixture.team_ids),
                     "fixture_seed": str(fixture.fixture_seed),
+                    "status": "scheduled",
+                    "matches": [],
                 }
                 for fixture in folded.playoff_fixtures
             ],
         }
+        for fixture_projection, series in zip(
+            projection["bracket"]["fixtures"], folded.playoff_series
+        ):
+            _apply_series_projection(
+                fixture_projection, series, terminal_by_fixture
+            )
     return projection
+
+
+def _apply_series_projection(
+    fixture_projection: dict[str, Any],
+    series: Series,
+    terminal_by_fixture: dict[str, list[dict[str, Any]]],
+) -> None:
+    fixture_records = sorted(
+        terminal_by_fixture.get(fixture_projection["fixture_id"], ()),
+        key=lambda record: record["match_ordinal"],
+    )
+    if not fixture_records:
+        return
+    fixture_projection["status"] = (
+        "complete" if series.is_complete else "in_progress"
+    )
+    fixture_projection["matches"] = [
+        {
+            "match_id": record["match_id"],
+            "outcome": record["outcome"],
+            "winner_team_id": record["winner_team_id"],
+        }
+        for record in fixture_records
+    ]
 
 
 def _projection_at_match_start(
@@ -905,7 +946,10 @@ def _projection_at_match_start(
 ) -> dict[str, Any]:
     projection = _projection_from_records(manifest, records)
     projection["status"] = "running"
-    for fixture in projection["fixtures"]:
+    fixtures = projection["fixtures"] + projection.get("bracket", {}).get(
+        "fixtures", []
+    )
+    for fixture in fixtures:
         if fixture["fixture_id"] == request.fixture_id:
             fixture["status"] = "active"
             fixture["active_match_id"] = request.match_id

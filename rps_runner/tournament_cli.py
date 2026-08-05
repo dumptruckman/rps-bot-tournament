@@ -119,6 +119,13 @@ def main(
             disposition = "created"
         committed_records: list[StoredCompetitionRecord] = []
         while True:
+            projection = load_scoreboard_projection(directory)
+            if (
+                options.all_qualification
+                and projection is not None
+                and projection["phase"] != "qualifying"
+            ):
+                break
             committed = runner.play_next_match()
             if committed is None:
                 break

@@ -1,8 +1,8 @@
 """Deterministic Tournament state reconstructed from canonical records.
 
-The fold understands qualifying ``match_terminal`` records and the canonical
-transition into the Playoff Phase. It is the semantic verification seam between
-byte-valid storage and runner/projection behavior.
+The fold understands qualifying and semifinal ``match_terminal`` records plus
+the canonical Playoff Phase transition and Bracket Lock. It is the semantic
+verification seam between byte-valid storage and runner/projection behavior.
 """
 
 from __future__ import annotations
@@ -61,6 +61,16 @@ class QualifyingMatch:
 
 
 @dataclass(frozen=True)
+class PlayoffMatch:
+    """The scheduler-selected next canonical playoff Match."""
+
+    fixture_id: str
+    match_ordinal: int
+    team_ids: tuple[str, str]
+    fixture_seed: int
+
+
+@dataclass(frozen=True)
 class PlayoffSeed:
     seed: int
     team_id: str
@@ -84,6 +94,9 @@ class TournamentState:
     phase: Phase
     playoff_seeds: tuple[PlayoffSeed, ...]
     playoff_fixtures: tuple[PlayoffFixtureDefinition, ...]
+    playoff_series: tuple[Series, ...]
+    next_playoff_match: Optional[PlayoffMatch]
+    bracket_locked: bool
 
     @property
     def qualifying_phase_complete(self) -> bool:
@@ -122,6 +135,9 @@ def fold_tournament_state(
     playoff_bracket_created = False
     playoff_seeds: tuple[PlayoffSeed, ...] = ()
     playoff_fixtures: tuple[PlayoffFixtureDefinition, ...] = ()
+    playoff_series: list[Series] = []
+    current_playoff_index = 0
+    bracket_locked = False
 
     for expected_sequence, stored in enumerate(records, start=1):
         if not isinstance(stored, StoredCompetitionRecord):
@@ -149,15 +165,88 @@ def fold_tournament_state(
                 )
             playoff_bracket_created = True
             playoff_seeds, playoff_fixtures = _playoff_values(expected)
+            seed_by_team = {seed.team_id: seed.seed for seed in playoff_seeds}
+            playoff_series = [
+                Series(
+                    fixture.team_ids[0],
+                    fixture.team_ids[1],
+                    Phase.PLAYOFF,
+                    higher_seed_team_id=min(
+                        (fixture.team_ids[0], fixture.team_ids[1]),
+                        key=seed_by_team.__getitem__,
+                    ),
+                )
+                for fixture in playoff_fixtures
+                if fixture.stage is PlayoffStage.SEMIFINAL
+                and fixture.team_ids[0] is not None
+                and fixture.team_ids[1] is not None
+            ]
+            continue
+        if record_type == "playoff_bracket_locked":
+            if not playoff_bracket_created:
+                raise TournamentStateError(
+                    "Playoff bracket was locked before it was created"
+                )
+            if bracket_locked:
+                raise TournamentStateError(
+                    "Playoff bracket was locked more than once"
+                )
+            first_fixture = playoff_fixtures[0]
+            expected_lock = {
+                "type": "playoff_bracket_locked",
+                "phase": Phase.PLAYOFF.value,
+                "fixture_id": first_fixture.fixture_id,
+                "match_id": f"{first_fixture.fixture_id}-match-1",
+            }
+            if record != expected_lock:
+                raise TournamentStateError("Playoff Bracket Lock is non-canonical")
+            bracket_locked = True
             continue
         if record_type != "match_terminal":
             raise TournamentStateError(
                 "Unsupported Competition Record type in qualifying state"
             )
         if playoff_bracket_created:
-            raise TournamentStateError(
-                "A qualifying Match cannot follow the Playoff Phase transition"
+            if not bracket_locked:
+                raise TournamentStateError(
+                    "A playoff Match cannot precede Bracket Lock"
+                )
+            if current_playoff_index >= len(playoff_series):
+                raise TournamentStateError(
+                    "A playoff Match cannot follow the completed semifinals"
+                )
+            fixture_value = playoff_fixtures[current_playoff_index]
+            assert fixture_value.team_ids[0] is not None
+            assert fixture_value.team_ids[1] is not None
+            fixture = _FixtureDefinition(
+                fixture_value.fixture_id,
+                (fixture_value.team_ids[0], fixture_value.team_ids[1]),
+                fixture_value.fixture_seed,
             )
+            current_series = playoff_series[current_playoff_index]
+            match_ordinal = record.get("match_ordinal")
+            expected_match_ordinal = current_series.match_count + 1
+            if (
+                not isinstance(match_ordinal, int)
+                or isinstance(match_ordinal, bool)
+                or match_ordinal != expected_match_ordinal
+            ):
+                raise TournamentStateError(
+                    "Playoff Competition Record Match ordinal is duplicate, "
+                    "gapped, or out of order"
+                )
+            _validate_match_identity(manifest, record, fixture, match_ordinal)
+            _validate_competitive_details(manifest, record, fixture)
+            result = _match_result(
+                record, fixture, match_ordinal, phase=Phase.PLAYOFF
+            )
+            try:
+                playoff_series[current_playoff_index] = current_series.record(result)
+            except ValueError as error:
+                raise TournamentStateError(str(error)) from error
+            if playoff_series[current_playoff_index].is_complete:
+                current_playoff_index += 1
+            continue
         fixture_id = record.get("fixture_id")
         if not isinstance(fixture_id, str) or fixture_id not in fixture_indexes:
             raise TournamentStateError("Competition Record names an unknown Fixture")
@@ -208,6 +297,17 @@ def fold_tournament_state(
         )
 
     standings = _calculate_standings(manifest, series)
+    next_playoff_match: Optional[PlayoffMatch] = None
+    if playoff_bracket_created and current_playoff_index < len(playoff_series):
+        fixture = playoff_fixtures[current_playoff_index]
+        assert fixture.team_ids[0] is not None
+        assert fixture.team_ids[1] is not None
+        next_playoff_match = PlayoffMatch(
+            fixture.fixture_id,
+            playoff_series[current_playoff_index].match_count + 1,
+            (fixture.team_ids[0], fixture.team_ids[1]),
+            fixture.fixture_seed,
+        )
     return TournamentState(
         tuple(series),
         standings,
@@ -215,6 +315,9 @@ def fold_tournament_state(
         Phase.PLAYOFF if playoff_bracket_created else Phase.QUALIFYING,
         playoff_seeds,
         playoff_fixtures,
+        tuple(playoff_series),
+        next_playoff_match,
+        bracket_locked,
     )
 
 
@@ -375,9 +478,11 @@ def _match_result(
     record: Mapping[str, Any],
     fixture: _FixtureDefinition,
     match_ordinal: int,
+    *,
+    phase: Phase = Phase.QUALIFYING,
 ) -> MatchResult:
-    if record.get("phase") != Phase.QUALIFYING.value:
-        raise TournamentStateError("Qualifying Match has an invalid phase")
+    if record.get("phase") != phase.value:
+        raise TournamentStateError("Match has an invalid phase")
     if record.get("match_id") != (
         f"{fixture.fixture_id}-match-{match_ordinal}"
     ):
