@@ -222,8 +222,40 @@ class TournamentDemoCliTests(unittest.TestCase):
         output = self.stdout.getvalue()
         self.assertIn("Qualifying Fixtures: 6/6 complete", output)
         self.assertIn("Qualification has no unresolved Match", output)
-        self.assertIn("playoff orchestration is not implemented", output)
+        self.assertIn("Playoff Fixtures: 0/3 complete", output)
         self.assertIn("No Tournament Champion has been declared", output)
+
+    def test_all_finishes_tournament_and_reports_champion(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def stable_winner_executor(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            requests.append(request)
+            return winning_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        exit_code = self.run_demo("--all", match_executor=stable_winner_executor)
+
+        self.assertEqual(exit_code, 0, self.stderr.getvalue())
+        self.assertEqual(len(requests), 18)
+        projection = load_scoreboard_projection(self.directory)
+        assert projection is not None
+        self.assertEqual(projection["status"], "complete")
+        self.assertEqual(projection["champion"], "copycat-alpha")
+        self.assertEqual(
+            [fixture["status"] for fixture in projection["bracket"]["fixtures"]],
+            ["complete", "complete", "complete"],
+        )
+        records = load_competition_records(self.directory)
+        self.assertEqual(records[-1].record["type"], "tournament_champion_declared")
+        output = self.stdout.getvalue()
+        self.assertIn("Playoff Fixtures: 3/3 complete", output)
+        self.assertIn("Tournament Champion: copycat-alpha", output)
+        self.assertNotIn("artifact_digest", output)
+        self.assertNotIn("entrypoint", output)
 
     def test_corrupt_existing_tournament_fails_without_overwriting_it(self) -> None:
         self.assertEqual(self.run_demo(), 0, self.stderr.getvalue())

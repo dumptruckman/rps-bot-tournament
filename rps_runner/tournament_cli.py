@@ -64,7 +64,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo.add_argument("--directory", required=True, type=Path)
     demo.add_argument("--seed", required=True, type=unsigned_64_bit_integer)
-    demo.add_argument("--all-qualification", action="store_true")
+    execution_scope = demo.add_mutually_exclusive_group()
+    execution_scope.add_argument(
+        "--all-qualification",
+        dest="execution_scope",
+        action="store_const",
+        const="qualification",
+        default="next_match",
+    )
+    execution_scope.add_argument(
+        "--all",
+        dest="execution_scope",
+        action="store_const",
+        const="tournament",
+        help="run every remaining Match through Tournament Champion declaration",
+    )
     return parser
 
 
@@ -121,7 +135,7 @@ def main(
         while True:
             projection = load_scoreboard_projection(directory)
             if (
-                options.all_qualification
+                options.execution_scope == "qualification"
                 and projection is not None
                 and projection["phase"] != "qualifying"
             ):
@@ -130,7 +144,7 @@ def main(
             if committed is None:
                 break
             committed_records.append(committed)
-            if not options.all_qualification:
+            if options.execution_scope == "next_match":
                 break
         _print_summary(
             directory,
@@ -301,6 +315,24 @@ def _print_summary(
             f"Round diff {standing['round_differential']}",
             file=output,
         )
+    bracket = projection.get("bracket")
+    if bracket is not None:
+        playoff_fixtures = bracket["fixtures"]
+        playoff_complete = sum(
+            fixture["status"] == "complete" for fixture in playoff_fixtures
+        )
+        playoff_in_progress = sum(
+            fixture["status"] == "in_progress" for fixture in playoff_fixtures
+        )
+        playoff_scheduled = (
+            len(playoff_fixtures) - playoff_complete - playoff_in_progress
+        )
+        print(
+            f"Playoff Fixtures: {playoff_complete}/{len(playoff_fixtures)} "
+            f"complete, {playoff_in_progress} in progress, "
+            f"{playoff_scheduled} scheduled",
+            file=output,
+        )
     print("Artifacts:", file=output)
     print(f"  Sealed Manifest: {directory / 'manifest.json'}", file=output)
     print(f"  Competition Records: {directory / 'records'}", file=output)
@@ -308,12 +340,11 @@ def _print_summary(
     print(f"  Scoreboard Projection: {directory / 'scoreboard.json'}", file=output)
     if complete == len(fixtures):
         print("Qualification has no unresolved Match.", file=output)
-        print(
-            "The Qualifying Phase is complete; playoff orchestration is not "
-            "implemented.",
-            file=output,
-        )
+    champion = projection["champion"]
+    if champion is None:
         print("No Tournament Champion has been declared.", file=output)
+    else:
+        print(f"Tournament Champion: {champion}", file=output)
 
 
 if __name__ == "__main__":

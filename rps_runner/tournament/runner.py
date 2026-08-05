@@ -33,6 +33,7 @@ from .seeding import (
 from .state import (
     TournamentState,
     build_playoff_bracket_record,
+    build_tournament_champion_record,
     fold_tournament_state,
 )
 from .storage import (
@@ -187,7 +188,7 @@ class TournamentRunner:
             records = load_competition_records(directory)
             load_operational_telemetry(directory)
             state = fold_tournament_state(stored.manifest, records)
-            records, state = _commit_playoff_transition_if_ready(
+            records, state = _commit_canonical_transitions_if_ready(
                 directory, stored.manifest, records, state
             )
             write_scoreboard_projection(
@@ -296,7 +297,7 @@ class TournamentRunner:
                     self._manifest, all_records
                 )
                 all_records, state_after_match = (
-                    _commit_playoff_transition_if_ready(
+                    _commit_canonical_transitions_if_ready(
                         self.tournament_directory,
                         self._manifest,
                         all_records,
@@ -315,24 +316,42 @@ class TournamentRunner:
             raise AssertionError("unreachable Match Attempt state")
 
 
-def _commit_playoff_transition_if_ready(
+def _commit_canonical_transitions_if_ready(
     tournament_directory: Path,
     manifest: dict[str, Any],
     records: list[StoredCompetitionRecord],
     state: TournamentState,
 ) -> tuple[list[StoredCompetitionRecord], TournamentState]:
-    if not (
-        state.qualifying_phase_complete and state.phase is Phase.QUALIFYING
+    transitioned_records = records
+    transitioned_state = state
+    if (
+        transitioned_state.qualifying_phase_complete
+        and transitioned_state.phase is Phase.QUALIFYING
     ):
-        return records, state
-    bracket = append_competition_record(
-        tournament_directory,
-        build_playoff_bracket_record(manifest, state.standings),
-    )
-    transitioned_records = records + [bracket]
-    return transitioned_records, fold_tournament_state(
-        manifest, transitioned_records
-    )
+        bracket = append_competition_record(
+            tournament_directory,
+            build_playoff_bracket_record(manifest, transitioned_state.standings),
+        )
+        transitioned_records = transitioned_records + [bracket]
+        transitioned_state = fold_tournament_state(
+            manifest, transitioned_records
+        )
+    if (
+        transitioned_state.champion_team_id is None
+        and len(transitioned_state.playoff_series) == 3
+        and transitioned_state.playoff_series[-1].is_complete
+    ):
+        champion = transitioned_state.playoff_series[-1].winner
+        assert champion is not None
+        declaration = append_competition_record(
+            tournament_directory,
+            build_tournament_champion_record(champion),
+        )
+        transitioned_records = transitioned_records + [declaration]
+        transitioned_state = fold_tournament_state(
+            manifest, transitioned_records
+        )
+    return transitioned_records, transitioned_state
 
 
 def tournament_manifest_incompatibilities(
@@ -887,6 +906,9 @@ def _projection_from_records(
         )
     projection["standings"] = _standing_projection(folded.standings)
     projection["phase"] = folded.phase.value
+    projection["champion"] = folded.champion_team_id
+    if folded.champion_team_id is not None:
+        projection["status"] = "complete"
     if folded.phase.value == "playoff":
         projection["bracket"] = {
             "locked": folded.bracket_locked,

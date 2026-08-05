@@ -8,11 +8,12 @@ Implementation status: in progress
 
 Last updated: 2026-08-05
 
-The implemented foundation is covered by 147 passing tests under the repository's
+The implemented foundation is covered by 152 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
-Playoff Phase, canonical Bracket Lock, and Step Mode semifinal execution.
+Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
+execution through Tournament Champion declaration.
 
 ### Complete
 
@@ -63,20 +64,26 @@ Playoff Phase, canonical Bracket Lock, and Step Mode semifinal execution.
   interrupted uncommitted attempt, and execute both semifinal Series through
   one scheduler-selected playoff Match per Step Mode action with authoritative
   fold and Scoreboard Projection recovery.
+- [x] Derive the standard final competitors from completed semifinals, execute
+  its best-of-three Series with higher-seed tie advancement, and retain one
+  canonical, recoverable `tournament_champion_declared` Competition Record.
+- [x] Project resolved final competitors and Match progress through completed
+  Tournament status, rebuild that completed view from canonical records, and
+  expose an end-to-end CLI `--all` route while preserving `--all-qualification`.
 
 ### Partially complete
 
-- [ ] Execute the Playoff Phase. Series, bracket, reduced-playoff, advancement,
-  and Disqualification rules exist as tested domain behavior. The Tournament
-  Runner now locks the standard seeded bracket and executes its semifinals;
-  advancement into the final, final execution, and champion declaration remain.
+- [ ] Execute every Playoff Phase shape. The Tournament Runner now completes the
+  standard four-Team bracket through Tournament Champion declaration; reduced
+  brackets and Disqualification advancement remain pure domain behavior without
+  runner integration.
 - [ ] Apply qualification and playoff Disqualifications through the Tournament
   Runner. Standing and bracket transformations exist, but administrative ruling
   records and scheduler integration do not.
 - [ ] Complete the Scoreboard Projection. Qualifying scheduling, Match progress,
-  standings, retries, recovery, Bracket Lock, and semifinal Match progress are
-  projected; final advancement, Administrative Series Win, Security Violation,
-  and Tournament Champion views remain.
+  standings, retries, recovery, Bracket Lock, the standard final, and Tournament
+  Champion are projected; Administrative Series Win, Security Violation, and
+  reduced-bracket views remain.
 - [ ] Complete operator execution controls. Step Mode and infrastructure pause
   behavior exist; explicit start, requested pause, resume-after-ruling, abort,
   mode switching, and record-restoration commands remain.
@@ -93,8 +100,7 @@ Playoff Phase, canonical Bracket Lock, and Step Mode semifinal execution.
   Disqualification workflow.
 - [ ] Implement administrative ruling records with organizer identity, closed
   reason codes, and optional notes.
-- [ ] Implement Tournament abort and Tournament Champion declaration through the
-  Tournament Runner.
+- [ ] Implement Tournament abort through the Tournament Runner.
 - [ ] Implement hash-verified Competition Record restoration from backup.
 - [ ] Add the published capacity/preflight benchmark suite.
 

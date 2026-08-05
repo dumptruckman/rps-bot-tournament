@@ -1,14 +1,15 @@
 """Deterministic Tournament state reconstructed from canonical records.
 
-The fold understands qualifying and semifinal ``match_terminal`` records plus
-the canonical Playoff Phase transition and Bracket Lock. It is the semantic
-verification seam between byte-valid storage and runner/projection behavior.
+The fold understands qualifying and standard Playoff Phase ``match_terminal``
+records, phase transitions, Bracket Lock, and Tournament Champion declaration.
+It is the semantic verification seam between byte-valid storage and
+runner/projection behavior.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from .competition import (
@@ -97,6 +98,7 @@ class TournamentState:
     playoff_series: tuple[Series, ...]
     next_playoff_match: Optional[PlayoffMatch]
     bracket_locked: bool
+    champion_team_id: Optional[str]
 
     @property
     def qualifying_phase_complete(self) -> bool:
@@ -138,6 +140,7 @@ def fold_tournament_state(
     playoff_series: list[Series] = []
     current_playoff_index = 0
     bracket_locked = False
+    champion_team_id: Optional[str] = None
 
     for expected_sequence, stored in enumerate(records, start=1):
         if not isinstance(stored, StoredCompetitionRecord):
@@ -148,6 +151,28 @@ def fold_tournament_state(
             )
         record = stored.record
         record_type = record.get("type")
+        if playoff_bracket_created:
+            playoff_fixtures, playoff_series = _resolve_final_if_ready(
+                playoff_fixtures, playoff_series, playoff_seeds
+            )
+        if record_type == "tournament_champion_declared":
+            if champion_team_id is not None:
+                raise TournamentStateError(
+                    "Tournament Champion was declared more than once"
+                )
+            if len(playoff_series) != 3 or not playoff_series[-1].is_complete:
+                raise TournamentStateError(
+                    "Tournament Champion was declared before the final completed"
+                )
+            expected_champion = playoff_series[-1].winner
+            assert expected_champion is not None
+            expected = build_tournament_champion_record(expected_champion)
+            if record != expected:
+                raise TournamentStateError(
+                    "Tournament Champion declaration is non-canonical"
+                )
+            champion_team_id = expected_champion
+            continue
         if record_type == "playoff_bracket_created":
             if current_fixture_index != len(fixtures):
                 raise TournamentStateError(
@@ -207,14 +232,16 @@ def fold_tournament_state(
                 "Unsupported Competition Record type in qualifying state"
             )
         if playoff_bracket_created:
+            if champion_team_id is not None:
+                raise TournamentStateError(
+                    "A playoff Match cannot follow Tournament completion"
+                )
             if not bracket_locked:
                 raise TournamentStateError(
                     "A playoff Match cannot precede Bracket Lock"
                 )
             if current_playoff_index >= len(playoff_series):
-                raise TournamentStateError(
-                    "A playoff Match cannot follow the completed semifinals"
-                )
+                raise TournamentStateError("A playoff Match cannot follow the final")
             fixture_value = playoff_fixtures[current_playoff_index]
             assert fixture_value.team_ids[0] is not None
             assert fixture_value.team_ids[1] is not None
@@ -297,6 +324,9 @@ def fold_tournament_state(
         )
 
     standings = _calculate_standings(manifest, series)
+    playoff_fixtures, playoff_series = _resolve_final_if_ready(
+        playoff_fixtures, playoff_series, playoff_seeds
+    )
     next_playoff_match: Optional[PlayoffMatch] = None
     if playoff_bracket_created and current_playoff_index < len(playoff_series):
         fixture = playoff_fixtures[current_playoff_index]
@@ -318,7 +348,40 @@ def fold_tournament_state(
         tuple(playoff_series),
         next_playoff_match,
         bracket_locked,
+        champion_team_id,
     )
+
+
+def build_tournament_champion_record(team_id: str) -> dict[str, Any]:
+    """Create the sole canonical Tournament Champion declaration."""
+
+    return {
+        "type": "tournament_champion_declared",
+        "phase": Phase.PLAYOFF.value,
+        "fixture_id": "playoff-final",
+        "team_id": team_id,
+    }
+
+
+def _resolve_final_if_ready(
+    fixtures: tuple[PlayoffFixtureDefinition, ...],
+    series: list[Series],
+    seeds: tuple[PlayoffSeed, ...],
+) -> tuple[tuple[PlayoffFixtureDefinition, ...], list[Series]]:
+    if len(series) != 2 or not all(item.is_complete for item in series):
+        return fixtures, series
+    finalists = (series[0].winner, series[1].winner)
+    assert finalists[0] is not None and finalists[1] is not None
+    seed_by_team = {seed.team_id: seed.seed for seed in seeds}
+    final_fixture = fixtures[2]
+    resolved_fixture = replace(final_fixture, team_ids=finalists)
+    final_series = Series(
+        finalists[0],
+        finalists[1],
+        Phase.PLAYOFF,
+        higher_seed_team_id=min(finalists, key=seed_by_team.__getitem__),
+    )
+    return fixtures[:2] + (resolved_fixture,), series + [final_series]
 
 
 def build_playoff_bracket_record(
