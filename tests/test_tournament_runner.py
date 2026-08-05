@@ -18,6 +18,10 @@ from rps_runner.tournament.runner import (
     TournamentRunner,
 )
 from rps_runner.tournament.match_executor import MatchExecutionResult
+from rps_runner.tournament.locking import (
+    TournamentRunLock,
+    TournamentRunLockHeldError,
+)
 from rps_runner.tournament.storage import (
     load_competition_records,
     load_manifest,
@@ -795,6 +799,26 @@ class TournamentResumeTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.team_id, "delta")
         self.assertIn(("delta", "d" * 64), checked)
+
+    def test_open_verifies_the_sealed_manifest_under_the_run_lock(self) -> None:
+        verified_tournament_ids: list[str] = []
+
+        def verify_sealed_manifest(manifest: dict[str, object]) -> None:
+            verified_tournament_ids.append(str(manifest["tournament_id"]))
+            with self.assertRaises(TournamentRunLockHeldError):
+                with TournamentRunLock(self.directory):
+                    pass
+
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="beta"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+            sealed_manifest_verifier=verify_sealed_manifest,
+        )
+
+        self.assertEqual(verified_tournament_ids, ["resume-verification-cup"])
 
     def test_open_rebuilds_missing_and_corrupt_projection_from_records(
         self,

@@ -315,6 +315,39 @@ The timing defaults follow the protocol draft: 250 ms for the first move,
 They can be changed locally with `--first-move-timeout-ms`,
 `--move-timeout-ms`, and `--total-timeout-ms`.
 
+## Tournament Runner demo
+
+Run one scheduler-selected canonical Match in a deterministic four-Team demo
+Tournament:
+
+```text
+rps-tournament demo --directory results/demo-tournament --seed 12345
+```
+
+The first invocation seals a new Tournament from the bundled `random_bot.py` and
+`copycat_bot.py` Bot Artifacts and commits one real 300-Turn Match. Run the same
+command again to verify and resume the sealed Tournament, skip committed Matches,
+and execute the next unresolved canonical Match.
+
+To advance until every implemented Qualifying Phase Fixture is complete, run:
+
+```text
+rps-tournament demo \
+  --directory results/demo-tournament \
+  --seed 12345 \
+  --all-qualification
+```
+
+The Tournament Runner does not yet orchestrate the Playoff Phase, so completing
+qualification does not declare a Tournament Champion. The command prints current
+standings and leaves these artifacts available for inspection:
+
+- Sealed Tournament Manifest: `results/demo-tournament/manifest.json`
+- Competition Records and their index: `results/demo-tournament/records/` and
+  `results/demo-tournament/records.index.json`
+- Operational Telemetry: `results/demo-tournament/telemetry/`
+- Scoreboard Projection: `results/demo-tournament/scoreboard.json`
+
 ## Python starter bot
 
 The starter bot keeps participant code focused on one strategy function:

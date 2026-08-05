@@ -8,7 +8,7 @@ Implementation status: in progress
 
 Last updated: 2026-08-05
 
-The implemented foundation is covered by 110 passing tests under the repository's
+The implemented foundation is covered by 123 passing tests under the repository's
 Python 3.9 virtual environment. The work is recorded in commits `2703c20`,
 `7f1a17a`, and `4e1b307`.
 
@@ -44,6 +44,10 @@ Python 3.9 virtual environment. The work is recorded in commits `2703c20`,
 - [x] Resume under an exclusive run lock, verify compatibility and Bot Artifact
   digests, skip committed Matches, and rebuild a missing or corrupt Scoreboard
   Projection.
+- [x] Expose an installable four-Team demo CLI that derives real bundled Bot
+  Artifact identities, creates or resumes a durable Tournament, advances one
+  Match or all qualification, and reports inspectable artifacts without implying
+  playoff or Tournament Champion completion.
 
 ### Partially complete
 

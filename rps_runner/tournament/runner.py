@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -143,35 +143,12 @@ class TournamentRunner:
         config: TournamentConfig = TournamentConfig(),
         match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult],
     ) -> "TournamentRunner":
-        teams = tuple(roster)
-        _validate_creation_inputs(tournament_id, tournament_seed, teams)
-        _validate_tournament_config(config)
-        schedule = build_qualifying_schedule(
-            (team.team_id for team in teams), tournament_seed
+        manifest = _build_manifest_payload(
+            tournament_id=tournament_id,
+            tournament_seed=tournament_seed,
+            roster=roster,
+            config=config,
         )
-        canonical_roster = tuple(sorted(teams, key=lambda team: team.team_id))
-        manifest = {
-            "tournament_id": tournament_id,
-            "tournament_seed": str(tournament_seed),
-            "protocol_version": PROTOCOL_VERSION,
-            "seed_derivation_version": SEED_DERIVATION_VERSION,
-            "record_schema_version": RECORD_SCHEMA_VERSION,
-            "scoreboard_version": SCOREBOARD_VERSION,
-            "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
-            "execution_mode": config.execution_mode,
-            "match_limits": _serialize_match_limits(config.match_limits),
-            "series_format": "best_of_three",
-            "roster": [_serialize_team(team) for team in canonical_roster],
-            "tie_break_keys": {
-                team.team_id: str(
-                    derive_tiebreak_key(tournament_seed, team.team_id)
-                )
-                for team in canonical_roster
-            },
-            "qualifying_schedule": [
-                _serialize_batch(batch) for batch in schedule
-            ],
-        }
         directory = Path(tournament_directory)
         directory.mkdir(parents=True, exist_ok=True)
         with TournamentRunLock(directory):
@@ -189,6 +166,9 @@ class TournamentRunner:
         *,
         match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult],
         artifact_digest_verifier: Callable[[str, str], bool],
+        sealed_manifest_verifier: Optional[
+            Callable[[dict[str, Any]], None]
+        ] = None,
     ) -> "TournamentRunner":
         directory = Path(tournament_directory)
         with TournamentRunLock(directory):
@@ -197,6 +177,8 @@ class TournamentRunner:
             _verify_artifact_digests(
                 stored.manifest, artifact_digest_verifier
             )
+            if sealed_manifest_verifier is not None:
+                sealed_manifest_verifier(stored.manifest)
             records = load_competition_records(directory)
             load_operational_telemetry(directory)
             try:
@@ -302,6 +284,71 @@ class TournamentRunner:
 
             # The loop either commits a Match or raises for intervention.
             raise AssertionError("unreachable Match Attempt state")
+
+
+def tournament_manifest_incompatibilities(
+    sealed_manifest: Mapping[str, Any],
+    *,
+    tournament_id: str,
+    tournament_seed: int,
+    roster: Iterable[Team],
+    config: TournamentConfig = TournamentConfig(),
+) -> tuple[str, ...]:
+    """Return sealed Manifest fields incompatible with creation inputs."""
+
+    expected_payload = _build_manifest_payload(
+        tournament_id=tournament_id,
+        tournament_seed=tournament_seed,
+        roster=roster,
+        config=config,
+    )
+    return tuple(
+        sorted(
+            field
+            for field in set(sealed_manifest) | set(expected_payload)
+            if sealed_manifest.get(field) != expected_payload.get(field)
+        )
+    )
+
+
+def _build_manifest_payload(
+    *,
+    tournament_id: str,
+    tournament_seed: int,
+    roster: Iterable[Team],
+    config: TournamentConfig = TournamentConfig(),
+) -> dict[str, Any]:
+    """Build the validated JSON payload to seal as a Tournament Manifest."""
+
+    teams = tuple(roster)
+    _validate_creation_inputs(tournament_id, tournament_seed, teams)
+    _validate_tournament_config(config)
+    schedule = build_qualifying_schedule(
+        (team.team_id for team in teams), tournament_seed
+    )
+    canonical_roster = tuple(sorted(teams, key=lambda team: team.team_id))
+    return {
+        "tournament_id": tournament_id,
+        "tournament_seed": str(tournament_seed),
+        "protocol_version": PROTOCOL_VERSION,
+        "seed_derivation_version": SEED_DERIVATION_VERSION,
+        "record_schema_version": RECORD_SCHEMA_VERSION,
+        "scoreboard_version": SCOREBOARD_VERSION,
+        "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
+        "execution_mode": config.execution_mode,
+        "match_limits": _serialize_match_limits(config.match_limits),
+        "series_format": "best_of_three",
+        "roster": [_serialize_team(team) for team in canonical_roster],
+        "tie_break_keys": {
+            team.team_id: str(
+                derive_tiebreak_key(tournament_seed, team.team_id)
+            )
+            for team in canonical_roster
+        },
+        "qualifying_schedule": [
+            _serialize_batch(batch) for batch in schedule
+        ],
+    }
 
 
 def _validate_creation_inputs(
