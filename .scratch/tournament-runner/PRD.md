@@ -2,6 +2,93 @@
 
 Status: ready-for-agent
 
+Implementation status: in progress
+
+## Implementation Progress
+
+Last updated: 2026-08-05
+
+The implemented foundation is covered by 110 passing tests under the repository's
+Python 3.9 virtual environment. The work is recorded in commits `2703c20`,
+`7f1a17a`, and `4e1b307`.
+
+### Complete
+
+- [x] Validate the supported roster, Team identity, immutable Bot Artifact
+  identity, Tournament Seed, and configurable execution limits before creation.
+- [x] Seal and verify a deeply immutable, checksummed Tournament Manifest.
+- [x] Derive versioned Fixture, Match, bot-visible, schedule, Bot Position, and
+  Tie-break values with HMAC-SHA-256 and independent golden vectors.
+- [x] Generate deterministic even- and odd-roster round-robin Fixture Batches,
+  stable Fixture identities, byes, and canonical ordering for four through
+  thirty-two Teams.
+- [x] Implement best-of-three Series scoring, qualifying standings and all seven
+  tie-breakers, reduced playoff brackets, and Disqualification advancement rules
+  as pure domain behavior.
+- [x] Give each Bot Artifact its own position-independent bot-visible seed while
+  preserving the existing single-Match CLI contract.
+- [x] Carry the complete sealed resource and security-limit contract to the Match
+  execution boundary and enforce configurable response-output limits locally.
+- [x] Normalize Match results by Team identity and separate competitive facts
+  from Operational Telemetry.
+- [x] Store canonical Competition Records with deterministic serialization,
+  sequence numbers, hashes, atomic writes, and deeply immutable loaded values.
+- [x] Treat a terminal Competition Record as the Match commit boundary and retain
+  completed moves, Rounds, normalized faults, Double Forfeit facts, seeds, Bot
+  Positions, and Bot Artifact identities.
+- [x] Run one scheduler-selected qualifying Match per Step Mode action, including
+  Series early completion and Scoreboard Projection updates.
+- [x] Persist Match Attempt starts, retry Infrastructure Failures through the
+  automatic three-attempt allowance, preserve absolute attempt ordinals across
+  interruption, and pause for operator intervention.
+- [x] Resume under an exclusive run lock, verify compatibility and Bot Artifact
+  digests, skip committed Matches, and rebuild a missing or corrupt Scoreboard
+  Projection.
+
+### Partially complete
+
+- [ ] Seal every scoring, tie-break, Disqualification, and playoff rule explicitly
+  in the Tournament Manifest. The implemented rules are fixed in versioned code,
+  while the Manifest currently records only their relevant compatibility and
+  Series-format values.
+- [ ] Execute the Playoff Phase. Series, bracket, reduced-playoff, advancement,
+  and Disqualification rules exist as tested domain behavior, but the Tournament
+  Runner currently schedules and commits only the Qualifying Phase.
+- [ ] Apply qualification and playoff Disqualifications through the Tournament
+  Runner. Standing and bracket transformations exist, but administrative ruling
+  records and scheduler integration do not.
+- [ ] Complete the Scoreboard Projection. Qualifying scheduling, Match progress,
+  standings, retries, and recovery are projected; playoff, Administrative Series
+  Win, Security Violation, and Tournament Champion views remain.
+- [ ] Complete operator execution controls. Step Mode and infrastructure pause
+  behavior exist; explicit start, requested pause, resume-after-ruling, abort,
+  mode switching, and record-restoration commands remain.
+- [ ] Verify maximum capacity end to end. Schedule generation covers the
+  thirty-two-Team roster, but the full 1,497-Match/449,100-Round Tournament and
+  its non-binding performance objectives have not been benchmarked.
+
+### Remaining
+
+- [ ] Implement Continuous Mode, configured parallel Match execution, canonical
+  commit ordering under concurrency, and boundary-only mode switching.
+- [ ] Implement suspected Security Violation capture, organizer confirmation or
+  rejection, evidence linkage, and the resulting Tournament-level pause or
+  Disqualification workflow.
+- [ ] Implement administrative ruling records with organizer identity, closed
+  reason codes, and optional notes.
+- [ ] Implement Tournament abort and Tournament Champion declaration through the
+  Tournament Runner.
+- [ ] Implement hash-verified Competition Record restoration from backup.
+- [ ] Add the published capacity/preflight benchmark suite.
+
+### Acceptance criteria status
+
+| Status | Acceptance criteria | Notes |
+| --- | --- | --- |
+| Complete | 1, 3–16, 23–28 | Implemented and covered at the creation, domain, Match, storage, Step Mode, and recovery seams. |
+| Partial | 2, 17–18, 21–22, 29–30, 34 | Core rules or one execution mode exist; Manifest completeness, runner integration, projection coverage, or capacity verification remains. |
+| Not started | 19–20, 31–33, 35 | Security workflow, Continuous Mode controls, administrative controls/abort, and capacity benchmarks remain. |
+
 ## Problem Statement
 
 Organizers can currently execute and inspect one local Match, but they cannot run
