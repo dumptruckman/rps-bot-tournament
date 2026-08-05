@@ -112,7 +112,8 @@ No language should have an inherent advantage because of infrastructure.
 
 ## Determinism
 
-Running the same tournament twice should produce identical results.
+Running a tournament from the same immutable inputs with conforming Bot
+Artifacts should produce identical competitive results.
 
 This requires:
 
