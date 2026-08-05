@@ -14,7 +14,6 @@ from rps_runner.engine.models import InfrastructureError, MatchConfig
 
 
 MOVES = frozenset({"R", "P", "S"})
-MAX_STDOUT_RESPONSE_BYTES = 4096
 TERMINATION_GRACE_NS = 200_000_000
 FINAL_WAIT_SECONDS = 1
 
@@ -56,6 +55,7 @@ class BotProcess:
     command: str
     process: subprocess.Popen[bytes]
     stderr: StderrCapture
+    stdout_limit_bytes: int
     stdout_buffer: bytearray = field(default_factory=bytearray)
     total_response_ns: int = 0
 
@@ -101,7 +101,9 @@ def start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
         cast(BinaryIO, process.stderr), config.stderr_limit_bytes
     )
     capture.start()
-    return BotProcess(label, command, process, capture)
+    return BotProcess(
+        label, command, process, capture, config.stdout_limit_bytes
+    )
 
 
 def stop_bots(bots: list[BotProcess]) -> None:
@@ -189,7 +191,7 @@ def pre_request_faults(
             label = key.data
             bot = bots[label]
             try:
-                output = os.read(key.fd, MAX_STDOUT_RESPONSE_BYTES + 1)
+                output = os.read(key.fd, bot.stdout_limit_bytes + 1)
             except BlockingIOError:
                 continue
             if output:
@@ -292,7 +294,9 @@ class _ResponseReader:
         label: str,
     ) -> None:
         try:
-            chunk = os.read(key.fd, MAX_STDOUT_RESPONSE_BYTES + 1)
+            chunk = os.read(
+                key.fd, self.bots[label].stdout_limit_bytes + 1
+            )
         except BlockingIOError:
             return
 
@@ -307,7 +311,7 @@ class _ResponseReader:
 
         bot = self.bots[label]
         bot.stdout_buffer.extend(chunk)
-        if len(bot.stdout_buffer) > MAX_STDOUT_RESPONSE_BYTES:
+        if len(bot.stdout_buffer) > bot.stdout_limit_bytes:
             self._record_fault(
                 selector,
                 label,

@@ -51,6 +51,12 @@ def request(**overrides: object) -> MatchExecutionRequest:
         "move_timeout_ms": 902,
         "total_timeout_ms": 903,
         "stderr_limit_bytes": 904,
+        "stdout_limit_bytes": 905,
+        "cpu_limit_ms": 906,
+        "memory_limit_bytes": 907,
+        "process_limit": 2,
+        "filesystem_write_limit_bytes": 908,
+        "network_access_allowed": False,
     }
     values.update(overrides)
     return MatchExecutionRequest(**values)
@@ -96,6 +102,21 @@ class TournamentMatchExecutorTests(unittest.TestCase):
     def test_request_requires_protocol_version_one(self) -> None:
         with self.assertRaisesRegex(ValueError, "protocol version 1"):
             request(protocol_version=2)
+
+    def test_request_rejects_invalid_resource_and_security_limits(self) -> None:
+        cases = (
+            ("stdout_limit_bytes", 0),
+            ("cpu_limit_ms", 0),
+            ("memory_limit_bytes", 0),
+            ("process_limit", 0),
+            ("filesystem_write_limit_bytes", -1),
+            ("network_access_allowed", "no"),
+        )
+
+        for field_name, value in cases:
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, field_name):
+                    request(**{field_name: value})
 
     def test_request_is_translated_and_normalized_by_team_identity(self) -> None:
         captured_configs: list[MatchConfig] = []
@@ -158,6 +179,7 @@ class TournamentMatchExecutorTests(unittest.TestCase):
                     move_timeout_ms=902,
                     total_timeout_ms=903,
                     stderr_limit_bytes=904,
+                    stdout_limit_bytes=905,
                     bot_a_seed=111,
                     bot_b_seed=222,
                 )
@@ -217,6 +239,21 @@ class TournamentMatchExecutorTests(unittest.TestCase):
             result.operational_telemetry["bots"]["red-team"]["stderr"],
             "red diagnostic",
         )
+        self.assertEqual(
+            result.operational_telemetry["resource_limits"],
+            {
+                "first_move_timeout_ms": 901,
+                "move_timeout_ms": 902,
+                "total_timeout_ms": 903,
+                "stderr_limit_bytes": 904,
+                "stdout_limit_bytes": 905,
+                "cpu_limit_ms": 906,
+                "memory_limit_bytes": 907,
+                "process_limit": 2,
+                "filesystem_write_limit_bytes": 908,
+                "network_access_allowed": False,
+            },
+        )
 
     def test_wrong_engine_protocol_becomes_an_infrastructure_failure(self) -> None:
         raw_result = engine_result(
@@ -242,6 +279,10 @@ class TournamentMatchExecutorTests(unittest.TestCase):
         self.assertIn(
             "protocol_version",
             result.operational_telemetry["infrastructure_failure"]["message"],
+        )
+        self.assertEqual(
+            result.operational_telemetry["resource_limits"]["cpu_limit_ms"],
+            906,
         )
 
     def test_wrong_engine_turn_count_becomes_an_infrastructure_failure(self) -> None:
@@ -421,6 +462,18 @@ class TournamentMatchExecutorTests(unittest.TestCase):
                 "fixture_id": "qualifying-001",
                 "match_id": "qualifying-001-match-1",
                 "attempt_number": 2,
+                "resource_limits": {
+                    "first_move_timeout_ms": 901,
+                    "move_timeout_ms": 902,
+                    "total_timeout_ms": 903,
+                    "stderr_limit_bytes": 904,
+                    "stdout_limit_bytes": 905,
+                    "cpu_limit_ms": 906,
+                    "memory_limit_bytes": 907,
+                    "process_limit": 2,
+                    "filesystem_write_limit_bytes": 908,
+                    "network_access_allowed": False,
+                },
                 "commands": {
                     "red-team": "/red-team/sha256:red",
                     "blue-team": "/blue-team/sha256:blue",

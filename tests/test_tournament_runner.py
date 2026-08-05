@@ -366,6 +366,12 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(requests[0].move_timeout_ms, 102)
         self.assertEqual(requests[0].total_timeout_ms, 103)
         self.assertEqual(requests[0].stderr_limit_bytes, 104)
+        self.assertEqual(requests[0].stdout_limit_bytes, 105)
+        self.assertEqual(requests[0].cpu_limit_ms, 106)
+        self.assertEqual(requests[0].memory_limit_bytes, 107)
+        self.assertEqual(requests[0].process_limit, 2)
+        self.assertEqual(requests[0].filesystem_write_limit_bytes, 108)
+        self.assertFalse(requests[0].network_access_allowed)
         with self.assertRaises(FrozenInstanceError):
             config.execution_mode = "continuous"  # type: ignore[misc]
 
@@ -448,6 +454,12 @@ class TournamentStepModeTests(unittest.TestCase):
                 move_timeout_ms=50,
                 total_timeout_ms=2000,
                 stderr_limit_bytes=65536,
+                stdout_limit_bytes=4096,
+                cpu_limit_ms=2000,
+                memory_limit_bytes=268435456,
+                process_limit=1,
+                filesystem_write_limit_bytes=0,
+                network_access_allowed=False,
             ),
         )
         self.assertEqual(
@@ -507,6 +519,46 @@ class TournamentStepModeTests(unittest.TestCase):
                 ],
             },
         )
+
+    def test_double_forfeit_record_and_projection_keep_completed_rounds(
+        self,
+    ) -> None:
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome={
+                    "outcome": "double_forfeit",
+                    "winner_team_id": None,
+                    "score": {"beta": 3, "delta": 2, "draws": 1},
+                    "moves": {"beta": "RPS", "delta": "SSR"},
+                    "rounds": [],
+                    "faults": {
+                        "beta": {"kind": "timeout", "turn": 6},
+                        "delta": {"kind": "invalid_move", "turn": 6},
+                    },
+                },
+                operational_telemetry={},
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="double-forfeit-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=execute,
+        )
+
+        stored = runner.play_next_match()
+
+        self.assertEqual(stored.record["round_wins"], {"beta": 3, "delta": 2})
+        projection = load_scoreboard_projection(self.directory)
+        standings = {
+            standing["team_id"]: standing for standing in projection["standings"]
+        }
+        self.assertEqual(standings["beta"]["round_differential"], 1)
+        self.assertEqual(standings["delta"]["round_differential"], -1)
+        self.assertEqual(standings["beta"]["match_differential"], 0)
+        self.assertEqual(standings["delta"]["match_differential"], 0)
 
     def test_resume_skips_committed_matches_and_early_finished_series(self) -> None:
         first_requests: list[str] = []
@@ -607,13 +659,86 @@ class TournamentStepModeTests(unittest.TestCase):
             [first_without_attempt, first_without_attempt, first_without_attempt],
         )
         self.assertEqual(load_competition_records(self.directory), [])
+        telemetry = load_operational_telemetry(self.directory)
         self.assertEqual(
-            [entry["attempt_number"] for entry in load_operational_telemetry(self.directory)],
-            [1, 2, 3],
+            [(entry["type"], entry["attempt_number"]) for entry in telemetry],
+            [
+                ("match_attempt_started", 1),
+                ("match_attempt_failed", 1),
+                ("match_attempt_started", 2),
+                ("match_attempt_failed", 2),
+                ("match_attempt_started", 3),
+                ("match_attempt_failed", 3),
+            ],
         )
         projection = load_scoreboard_projection(self.directory)
         self.assertEqual(projection["status"], "paused")
         self.assertEqual(projection["fixtures"][0]["status"], "scheduled")
+
+        recovery_requests: list[MatchExecutionRequest] = []
+
+        def recover(request: MatchExecutionRequest) -> MatchExecutionResult:
+            recovery_requests.append(request)
+            return executor_result(request, winner_team_id="beta")
+
+        runner.match_executor = recover
+        recovered = runner.play_next_match()
+
+        self.assertEqual(recovery_requests[0].attempt_number, 4)
+        self.assertEqual(recovered.record["match_id"], "qualifying-0001-match-1")
+
+    def test_interrupted_started_attempt_is_consumed_when_resuming(self) -> None:
+        interrupted_requests: list[MatchExecutionRequest] = []
+
+        def interrupt(request: MatchExecutionRequest) -> MatchExecutionResult:
+            interrupted_requests.append(request)
+            raise RuntimeError("worker interrupted")
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="interrupted-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=interrupt,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "worker interrupted"):
+            runner.play_next_match()
+
+        self.assertEqual(interrupted_requests[0].attempt_number, 1)
+        self.assertEqual(load_competition_records(self.directory), [])
+        self.assertEqual(
+            [
+                (entry["type"], entry["attempt_number"])
+                for entry in load_operational_telemetry(self.directory)
+            ],
+            [("match_attempt_started", 1)],
+        )
+
+        resumed_requests: list[MatchExecutionRequest] = []
+
+        def succeed(request: MatchExecutionRequest) -> MatchExecutionResult:
+            resumed_requests.append(request)
+            return executor_result(request, winner_team_id="beta")
+
+        resumed = TournamentRunner.open(
+            self.directory,
+            match_executor=succeed,
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        resumed.play_next_match()
+
+        self.assertEqual(resumed_requests[0].attempt_number, 2)
+        self.assertEqual(
+            [
+                (entry["type"], entry["attempt_number"])
+                for entry in load_operational_telemetry(self.directory)
+            ],
+            [
+                ("match_attempt_started", 1),
+                ("match_attempt_started", 2),
+            ],
+        )
 
 
 class TournamentResumeTests(unittest.TestCase):

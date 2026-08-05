@@ -19,6 +19,14 @@ class InvalidMatchResultError(InfrastructureError):
 
 @dataclass(frozen=True)
 class MatchExecutionRequest:
+    """Sealed Match inputs forwarded to an execution boundary.
+
+    The local subprocess executor enforces the protocol timeouts and stream
+    limits. CPU, memory, process, filesystem-write, and network restrictions
+    are explicit here for a separate hardened executor boundary; the local
+    executor records but does not claim to enforce them.
+    """
+
     tournament_id: str
     fixture_id: str
     series_id: str
@@ -37,12 +45,42 @@ class MatchExecutionRequest:
     move_timeout_ms: int
     total_timeout_ms: int
     stderr_limit_bytes: int
+    stdout_limit_bytes: int
+    cpu_limit_ms: int
+    memory_limit_bytes: int
+    process_limit: int
+    filesystem_write_limit_bytes: int
+    network_access_allowed: bool
 
     def __post_init__(self) -> None:
         if self.protocol_version != 1:
             raise ValueError("Tournament Matches require protocol version 1")
         if self.scheduled_turns != 300:
             raise ValueError("Tournament Matches must schedule exactly 300 Turns")
+        positive_limit_fields = (
+            "first_move_timeout_ms",
+            "move_timeout_ms",
+            "total_timeout_ms",
+            "stderr_limit_bytes",
+            "stdout_limit_bytes",
+            "cpu_limit_ms",
+            "memory_limit_bytes",
+            "process_limit",
+        )
+        for field_name in positive_limit_fields:
+            value = getattr(self, field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{field_name} must be a positive integer")
+        if (
+            not isinstance(self.filesystem_write_limit_bytes, int)
+            or isinstance(self.filesystem_write_limit_bytes, bool)
+            or self.filesystem_write_limit_bytes < 0
+        ):
+            raise ValueError(
+                "filesystem_write_limit_bytes must be a non-negative integer"
+            )
+        if not isinstance(self.network_access_allowed, bool):
+            raise ValueError("network_access_allowed must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -73,7 +111,12 @@ def _frozen_json_object(value: dict[str, object]) -> FrozenJsonDict:
 
 
 class LocalMatchExecutor:
-    """Execute one canonical Match through the local Match Runner."""
+    """Execute one canonical Match through the local Match Runner.
+
+    This adapter enforces protocol timing and stream limits. The remaining
+    resource and security fields stay on the request and in telemetry for a
+    separate hardened executor; local subprocesses do not enforce them.
+    """
 
     def __init__(
         self,
@@ -103,6 +146,7 @@ class LocalMatchExecutor:
                 move_timeout_ms=request.move_timeout_ms,
                 total_timeout_ms=request.total_timeout_ms,
                 stderr_limit_bytes=request.stderr_limit_bytes,
+                stdout_limit_bytes=request.stdout_limit_bytes,
                 bot_a_seed=request.bot_visible_seed_a,
                 bot_b_seed=request.bot_visible_seed_b,
             )
@@ -343,6 +387,7 @@ def _failed_match_attempt(
             "fixture_id": request.fixture_id,
             "match_id": request.match_id,
             "attempt_number": request.attempt_number,
+            "resource_limits": _resource_limits(request),
             "commands": commands,
             "infrastructure_failure": {
                 "kind": type(error).__name__,
@@ -453,6 +498,7 @@ def _operational_telemetry(
         "fixture_id": request.fixture_id,
         "match_id": request.match_id,
         "attempt_number": request.attempt_number,
+        "resource_limits": _resource_limits(request),
         "timing": timing,
         "bots": {
             team_by_position[position]: diagnostics
@@ -470,4 +516,21 @@ def _operational_telemetry(
             for position, fault in raw_faults.items()
             if fault is not None
         },
+    }
+
+
+def _resource_limits(request: MatchExecutionRequest) -> dict[str, object]:
+    """Return the complete sealed resource/security request for auditing."""
+
+    return {
+        "first_move_timeout_ms": request.first_move_timeout_ms,
+        "move_timeout_ms": request.move_timeout_ms,
+        "total_timeout_ms": request.total_timeout_ms,
+        "stderr_limit_bytes": request.stderr_limit_bytes,
+        "stdout_limit_bytes": request.stdout_limit_bytes,
+        "cpu_limit_ms": request.cpu_limit_ms,
+        "memory_limit_bytes": request.memory_limit_bytes,
+        "process_limit": request.process_limit,
+        "filesystem_write_limit_bytes": request.filesystem_write_limit_bytes,
+        "network_access_allowed": request.network_access_allowed,
     }

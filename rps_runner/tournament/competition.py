@@ -73,9 +73,19 @@ class MatchResult:
 
     @classmethod
     def double_forfeit(
-        cls, team_one_id: str, team_two_id: str
+        cls,
+        team_one_id: str,
+        team_two_id: str,
+        *,
+        completed_round_wins: tuple[int, int] = (0, 0),
     ) -> "MatchResult":
-        return cls(team_one_id, team_two_id, MatchOutcome.DOUBLE_FORFEIT)
+        return cls(
+            team_one_id,
+            team_two_id,
+            MatchOutcome.DOUBLE_FORFEIT,
+            team_one_round_wins=completed_round_wins[0],
+            team_two_round_wins=completed_round_wins[1],
+        )
 
     @classmethod
     def protocol_forfeit(

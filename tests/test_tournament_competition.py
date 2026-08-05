@@ -66,17 +66,34 @@ class SeriesScoringTests(unittest.TestCase):
 
     def test_double_forfeit_consumes_match_without_series_points(self) -> None:
         series = Series(TEAM_A, TEAM_B, Phase.QUALIFYING)
-        series = series.record(MatchResult.double_forfeit(TEAM_A, TEAM_B))
+        double_forfeit = MatchResult.double_forfeit(
+            TEAM_A, TEAM_B, completed_round_wins=(3, 2)
+        )
+        series = series.record(double_forfeit)
         series = series.record(MatchResult.win(TEAM_A, TEAM_B, TEAM_A))
 
         self.assertFalse(series.is_complete)
         self.assertEqual(series.match_count, 2)
+        self.assertEqual(double_forfeit.round_wins, {TEAM_A: 3, TEAM_B: 2})
         self.assertEqual(
             series.series_points,
             {TEAM_A: Fraction(1), TEAM_B: Fraction(0)},
         )
         self.assertEqual(
             series.matches[0].outcome, MatchOutcome.DOUBLE_FORFEIT
+        )
+
+        standings = calculate_qualifying_standings(
+            [TEAM_A, TEAM_B],
+            [Series(TEAM_A, TEAM_B, Phase.QUALIFYING).record(double_forfeit)],
+            {TEAM_A: 1, TEAM_B: 2},
+        )
+        self.assertEqual(
+            standings,
+            (
+                Standing(TEAM_A, 0, 0, 0, 0, 3, 2, 0, 1),
+                Standing(TEAM_B, 0, 0, 0, 0, 2, 3, 0, 2),
+            ),
         )
 
     def test_protocol_forfeit_is_a_match_win_without_synthetic_rounds(self) -> None:

@@ -36,6 +36,7 @@ from .storage import (
     append_operational_telemetry,
     load_competition_records,
     load_manifest,
+    load_operational_telemetry,
     load_scoreboard_projection,
     seal_manifest,
     write_scoreboard_projection,
@@ -174,12 +175,12 @@ class TournamentRunner:
         directory = Path(tournament_directory)
         directory.mkdir(parents=True, exist_ok=True)
         with TournamentRunLock(directory):
-            seal_manifest(directory, manifest)
+            stored = seal_manifest(directory, manifest)
             write_scoreboard_projection(
                 directory,
-                _initial_projection(manifest),
+                _initial_projection(stored.manifest),
             )
-        return cls(directory, match_executor, manifest)
+        return cls(directory, match_executor, stored.manifest)
 
     @classmethod
     def open(
@@ -197,6 +198,7 @@ class TournamentRunner:
                 stored.manifest, artifact_digest_verifier
             )
             records = load_competition_records(directory)
+            load_operational_telemetry(directory)
             try:
                 projection = load_scoreboard_projection(directory)
             except IntegrityError:
@@ -222,7 +224,15 @@ class TournamentRunner:
             if selected is None:
                 return None
             fixture, match_ordinal = selected
-            for attempt_number in range(1, 4):
+            match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
+            next_attempt_number = _next_attempt_number(
+                self.tournament_directory, match_id
+            )
+            if next_attempt_number <= 3:
+                attempt_numbers = range(next_attempt_number, 4)
+            else:
+                attempt_numbers = (next_attempt_number,)
+            for attempt_number in attempt_numbers:
                 request = _build_match_request(
                     self._manifest,
                     fixture,
@@ -235,9 +245,20 @@ class TournamentRunner:
                         self._manifest, records, request
                     ),
                 )
+                append_operational_telemetry(
+                    self.tournament_directory,
+                    {
+                        "type": "match_attempt_started",
+                        "tournament_id": request.tournament_id,
+                        "fixture_id": request.fixture_id,
+                        "match_id": request.match_id,
+                        "attempt_number": attempt_number,
+                    },
+                )
                 execution_result = self.match_executor(request)
                 if execution_result.infrastructure_failure:
                     telemetry = dict(execution_result.operational_telemetry)
+                    telemetry.setdefault("type", "match_attempt_failed")
                     telemetry.setdefault("match_id", request.match_id)
                     telemetry.setdefault("attempt_number", attempt_number)
                     telemetry.setdefault("infrastructure_failure", True)
@@ -501,6 +522,26 @@ def _select_next_match(
     return None
 
 
+def _next_attempt_number(
+    tournament_directory: Path, match_id: str
+) -> int:
+    latest_attempt = 0
+    for telemetry in load_operational_telemetry(tournament_directory):
+        if telemetry.get("match_id") != match_id:
+            continue
+        attempt_number = telemetry.get("attempt_number")
+        if (
+            not isinstance(attempt_number, int)
+            or isinstance(attempt_number, bool)
+            or attempt_number < 1
+        ):
+            raise ValueError(
+                f"Operational Telemetry has an invalid Match Attempt for {match_id}"
+            )
+        latest_attempt = max(latest_attempt, attempt_number)
+    return latest_attempt + 1
+
+
 def _series_from_records(
     fixture: dict[str, Any], records: Iterable[dict[str, Any]]
 ) -> Series:
@@ -520,7 +561,11 @@ def _match_result_from_record(record: dict[str, Any]) -> MatchResult:
     )
     outcome = MatchOutcome(record["outcome"])
     if outcome is MatchOutcome.DOUBLE_FORFEIT:
-        return MatchResult.double_forfeit(team_one_id, team_two_id)
+        return MatchResult.double_forfeit(
+            team_one_id,
+            team_two_id,
+            completed_round_wins=completed_round_wins,
+        )
     if outcome is MatchOutcome.DRAW:
         return MatchResult.draw(
             team_one_id,
@@ -584,6 +629,12 @@ def _build_match_request(
         move_timeout_ms=limits["move_timeout_ms"],
         total_timeout_ms=limits["total_timeout_ms"],
         stderr_limit_bytes=limits["stderr_limit_bytes"],
+        stdout_limit_bytes=limits["stdout_limit_bytes"],
+        cpu_limit_ms=limits["cpu_limit_ms"],
+        memory_limit_bytes=limits["memory_limit_bytes"],
+        process_limit=limits["process_limit"],
+        filesystem_write_limit_bytes=limits["filesystem_write_limit_bytes"],
+        network_access_allowed=limits["network_access_allowed"],
     )
 
 
@@ -621,7 +672,11 @@ def _normalize_executor_result(
 
     outcome_kind = MatchOutcome(outcome.get("outcome"))
     if outcome_kind is MatchOutcome.DOUBLE_FORFEIT:
-        return MatchResult.double_forfeit(team_one_id, team_two_id)
+        return MatchResult.double_forfeit(
+            team_one_id,
+            team_two_id,
+            completed_round_wins=round_wins,
+        )
     if outcome_kind is MatchOutcome.DRAW:
         return MatchResult.draw(
             team_one_id, team_two_id, round_wins=round_wins

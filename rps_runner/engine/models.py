@@ -20,6 +20,7 @@ class MatchConfig:
     stderr_limit_bytes: int = 65_536
     bot_a_seed: Optional[int] = None
     bot_b_seed: Optional[int] = None
+    stdout_limit_bytes: int = 4_096
 
     def __post_init__(self) -> None:
         maximum_seed = 2**64 - 1
@@ -35,6 +36,12 @@ class MatchConfig:
                 raise ValueError(
                     f"{field_name} must be an unsigned 64-bit integer"
                 )
+        if (
+            not isinstance(self.stdout_limit_bytes, int)
+            or isinstance(self.stdout_limit_bytes, bool)
+            or self.stdout_limit_bytes <= 0
+        ):
+            raise ValueError("stdout_limit_bytes must be a positive integer")
 
     def seed_for_bot_position(self, bot_position: str) -> int:
         """Return the bot-visible seed assigned to Bot Position ``a`` or ``b``."""

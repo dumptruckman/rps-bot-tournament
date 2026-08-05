@@ -96,6 +96,22 @@ class MatchSeedBoundaryTests(unittest.TestCase):
         self.assertEqual(result["winner"], "a")
         self.assertEqual(result["seed"], match_seed)
 
+    def test_custom_stdout_limit_is_enforced_per_bot_response(self) -> None:
+        match_seed = 12345
+        config = MatchConfig(
+            bot_a=checking_bot("R", 1, match_seed),
+            bot_b=checking_bot("S", 1, match_seed),
+            rounds=1,
+            seed=match_seed,
+            stdout_limit_bytes=1,
+        )
+
+        result = run_match(config)
+
+        self.assertEqual(result["status"], "double_forfeit")
+        self.assertEqual(result["faults"]["a"]["kind"], "excessive_output")
+        self.assertEqual(result["faults"]["b"]["kind"], "excessive_output")
+
     def test_match_and_bot_visible_seeds_must_be_unsigned_64_bit_values(self) -> None:
         cases = (
             ("seed", -1),
