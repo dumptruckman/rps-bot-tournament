@@ -636,9 +636,10 @@ def _validate_competitive_details(
         raise TournamentStateError(
             "Manifest contains invalid scheduled Turns per Match"
         )
-    if (not present_faults and len(rounds) != scheduled_turns) or len(
-        rounds
-    ) > scheduled_turns:
+    if (
+        (not present_faults and len(rounds) != scheduled_turns)
+        or (present_faults and len(rounds) >= scheduled_turns)
+    ):
         raise TournamentStateError(
             "Qualifying Match has an invalid number of completed Rounds"
         )

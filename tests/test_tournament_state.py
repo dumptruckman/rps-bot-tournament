@@ -283,8 +283,11 @@ class TournamentStateFoldTests(unittest.TestCase):
         )
         record = thaw_json(invalid.record)
         record["protocol_forfeit_team_id"] = "alpha"
+        record["moves"] = {"alpha": "R", "beta": "S"}
+        record["rounds"] = record["rounds"][:1]
+        record["round_wins"] = {"alpha": 1, "beta": 0}
         record["faults"] = dict(record["faults"])
-        record["faults"]["alpha"] = {"kind": "timeout", "turn": 300}
+        record["faults"]["alpha"] = {"kind": "timeout", "turn": 1}
         invalid = StoredCompetitionRecord(
             sequence=1, content_hash="invalid-hash", record=record
         )
@@ -361,6 +364,27 @@ class TournamentStateFoldTests(unittest.TestCase):
         record["moves"] = {"alpha": "R", "beta": "S"}
         record["rounds"] = record["rounds"][:1]
         record["round_wins"] = {"alpha": 1, "beta": 0}
+
+        with self.assertRaisesRegex(TournamentStateError, "number of completed"):
+            fold_tournament_state(
+                manifest(),
+                (
+                    StoredCompetitionRecord(
+                        sequence=1,
+                        content_hash="invalid-hash",
+                        record=record,
+                    ),
+                ),
+            )
+
+    def test_rejects_fault_after_all_scheduled_turns(self) -> None:
+        valid = terminal_record(
+            1, "qualifying-0001", 1, ("alpha", "beta"), winner="alpha"
+        )
+        record = thaw_json(valid.record)
+        record["winner_team_id"] = "beta"
+        record["protocol_forfeit_team_id"] = "alpha"
+        record["faults"]["alpha"] = {"kind": "timeout", "turn": 300}
 
         with self.assertRaisesRegex(TournamentStateError, "number of completed"):
             fold_tournament_state(
