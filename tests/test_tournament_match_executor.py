@@ -11,6 +11,7 @@ from rps_runner.tournament.match_executor import (
     LocalMatchExecutor,
     MatchExecutionRequest,
 )
+from rps_runner.tournament.storage import canonical_json_bytes
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -217,6 +218,189 @@ class TournamentMatchExecutorTests(unittest.TestCase):
             "red diagnostic",
         )
 
+    def test_wrong_engine_protocol_becomes_an_infrastructure_failure(self) -> None:
+        raw_result = engine_result(
+            status="completed",
+            winner="draw",
+            faults={"a": None, "b": None},
+            rounds=[],
+        )
+        raw_result["protocol_version"] = 2
+        executor = LocalMatchExecutor(
+            lambda team_id, digest: team_id,
+            lambda config: raw_result,
+        )
+
+        result = executor.execute(request())
+
+        self.assertTrue(result.infrastructure_failure)
+        self.assertIsNone(result.competitive_outcome)
+        self.assertEqual(
+            result.operational_telemetry["infrastructure_failure"]["kind"],
+            "InvalidMatchResultError",
+        )
+        self.assertIn(
+            "protocol_version",
+            result.operational_telemetry["infrastructure_failure"]["message"],
+        )
+
+    def test_wrong_engine_turn_count_becomes_an_infrastructure_failure(self) -> None:
+        raw_result = engine_result(
+            status="completed",
+            winner="draw",
+            faults={"a": None, "b": None},
+            rounds=[],
+        )
+        raw_result["scheduled_rounds"] = 299
+        executor = LocalMatchExecutor(
+            lambda team_id, digest: team_id,
+            lambda config: raw_result,
+        )
+
+        result = executor.execute(request())
+
+        self.assertTrue(result.infrastructure_failure)
+        self.assertIsNone(result.competitive_outcome)
+        self.assertIn(
+            "scheduled_rounds",
+            result.operational_telemetry["infrastructure_failure"]["message"],
+        )
+
+    def test_wrong_engine_match_seed_becomes_an_infrastructure_failure(self) -> None:
+        raw_result = engine_result(
+            status="completed",
+            winner="draw",
+            faults={"a": None, "b": None},
+            rounds=[],
+        )
+        raw_result["seed"] = 444
+        executor = LocalMatchExecutor(
+            lambda team_id, digest: team_id,
+            lambda config: raw_result,
+        )
+
+        result = executor.execute(request())
+
+        self.assertTrue(result.infrastructure_failure)
+        self.assertIsNone(result.competitive_outcome)
+        self.assertIn(
+            "seed",
+            result.operational_telemetry["infrastructure_failure"]["message"],
+        )
+
+    def test_invalid_engine_status_and_winner_shapes_are_failures(self) -> None:
+        cases = (
+            ("unknown", "a"),
+            ("completed", None),
+            ("forfeit", "draw"),
+            ("double_forfeit", "a"),
+        )
+
+        for status, winner in cases:
+            with self.subTest(status=status, winner=winner):
+                raw_result = engine_result(
+                    status=status,
+                    winner=winner,
+                    faults={"a": None, "b": None},
+                    rounds=[],
+                )
+                executor = LocalMatchExecutor(
+                    lambda team_id, digest: team_id,
+                    lambda config, value=raw_result: value,
+                )
+
+                result = executor.execute(request())
+
+                self.assertTrue(result.infrastructure_failure)
+                self.assertIsNone(result.competitive_outcome)
+                self.assertIn(
+                    "status/winner",
+                    result.operational_telemetry["infrastructure_failure"]["message"],
+                )
+
+    def test_engine_forfeit_requires_exactly_the_losing_bot_fault(self) -> None:
+        raw_result = engine_result(
+            status="forfeit",
+            winner="b",
+            faults={"a": None, "b": None},
+            rounds=[],
+        )
+        executor = LocalMatchExecutor(
+            lambda team_id, digest: team_id,
+            lambda config: raw_result,
+        )
+
+        result = executor.execute(request())
+
+        self.assertTrue(result.infrastructure_failure)
+        self.assertIsNone(result.competitive_outcome)
+        self.assertIn(
+            "fault",
+            result.operational_telemetry["infrastructure_failure"]["message"],
+        )
+
+    def test_malformed_engine_payload_shapes_are_infrastructure_failures(self) -> None:
+        cases = (
+            ("score", []),
+            ("moves", []),
+            ("rounds", {}),
+            ("timing", []),
+            ("bots", []),
+        )
+
+        for field, malformed_value in cases:
+            with self.subTest(field=field):
+                raw_result = engine_result(
+                    status="completed",
+                    winner="draw",
+                    faults={"a": None, "b": None},
+                    rounds=[],
+                )
+                raw_result[field] = malformed_value
+                executor = LocalMatchExecutor(
+                    lambda team_id, digest: team_id,
+                    lambda config, value=raw_result: value,
+                )
+
+                result = executor.execute(request())
+
+                self.assertTrue(result.infrastructure_failure)
+                self.assertIsNone(result.competitive_outcome)
+                self.assertIn(
+                    field,
+                    result.operational_telemetry["infrastructure_failure"]["message"],
+                )
+
+    def test_malformed_completed_round_becomes_an_infrastructure_failure(self) -> None:
+        raw_result = engine_result(
+            status="completed",
+            winner="a",
+            faults={"a": None, "b": None},
+            rounds=[
+                {
+                    "turn": 0,
+                    "a": "R",
+                    "b": "S",
+                    "winner": "a",
+                    "response_time_ns": {"a": 10, "b": 20},
+                }
+            ],
+        )
+        raw_result["rounds"][0]["a"] = []
+        executor = LocalMatchExecutor(
+            lambda team_id, digest: team_id,
+            lambda config: raw_result,
+        )
+
+        result = executor.execute(request())
+
+        self.assertTrue(result.infrastructure_failure)
+        self.assertIsNone(result.competitive_outcome)
+        self.assertIn(
+            "rounds.a",
+            result.operational_telemetry["infrastructure_failure"]["message"],
+        )
+
     def test_infrastructure_error_is_a_failed_attempt_without_an_outcome(self) -> None:
         def unavailable_runner(config: MatchConfig) -> dict[str, object]:
             raise InfrastructureError("container unavailable")
@@ -369,8 +553,16 @@ class TournamentMatchExecutorTests(unittest.TestCase):
             },
             rounds=[second_round],
         )
-        first_raw["timing"] = {"clock": "monotonic", "host": "worker-1"}
-        second_raw["timing"] = {"clock": "monotonic", "host": "worker-2"}
+        first_raw["timing"] = {
+            "clock": "monotonic",
+            "host": "worker-1",
+            "total_response_ns": {"a": 10, "b": 20},
+        }
+        second_raw["timing"] = {
+            "clock": "monotonic",
+            "host": "worker-2",
+            "total_response_ns": {"a": 900, "b": 800},
+        }
         first_raw["bots"] = {"a": {"stderr": "first"}, "b": {"stderr": ""}}
         second_raw["bots"] = {"a": {"stderr": "second"}, "b": {"stderr": ""}}
 
@@ -409,6 +601,14 @@ class TournamentMatchExecutorTests(unittest.TestCase):
             result.competitive_outcome["winner_team_id"] = "blue-team"
         with self.assertRaises(TypeError):
             result.operational_telemetry["attempt_number"] = 99
+        with self.assertRaises(TypeError):
+            result.competitive_outcome["positions"]["a"]["team_id"] = "changed"
+        with self.assertRaises(TypeError):
+            result.operational_telemetry["round_response_times_ns"].append({})
+        self.assertIn(
+            b'"winner_team_id":null',
+            canonical_json_bytes(result.competitive_outcome),
+        )
 
     def test_real_match_runner_contract_uses_team_specific_seeds(self) -> None:
         commands = {

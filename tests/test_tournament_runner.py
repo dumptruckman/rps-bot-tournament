@@ -7,16 +7,23 @@ from pathlib import Path
 from typing import Optional
 
 from rps_runner.tournament.runner import (
+    ArtifactDigestVerificationError,
     BotArtifactManifest,
+    InfrastructureInterventionRequiredError,
+    MatchLimits,
     MatchExecutionRequest,
     Team,
+    TournamentCompatibilityError,
+    TournamentConfig,
     TournamentRunner,
 )
 from rps_runner.tournament.match_executor import MatchExecutionResult
 from rps_runner.tournament.storage import (
     load_competition_records,
     load_manifest,
+    load_operational_telemetry,
     load_scoreboard_projection,
+    seal_manifest,
 )
 
 
@@ -44,6 +51,9 @@ def executor_result(
     *,
     winner_team_id: Optional[str],
     score: tuple[int, int] = (0, 0),
+    moves: Optional[dict[str, str]] = None,
+    rounds: Optional[list[dict[str, object]]] = None,
+    faults: Optional[dict[str, Optional[dict[str, object]]]] = None,
 ) -> MatchExecutionResult:
     return MatchExecutionResult(
         infrastructure_failure=False,
@@ -55,10 +65,13 @@ def executor_result(
                 request.team_b_id: score[1],
                 "draws": 0,
             },
-            "faults": {
-                request.team_a_id: None,
-                request.team_b_id: None,
-            },
+            "moves": moves
+            if moves is not None
+            else {request.team_a_id: "", request.team_b_id: ""},
+            "rounds": rounds if rounds is not None else [],
+            "faults": faults
+            if faults is not None
+            else {request.team_a_id: None, request.team_b_id: None},
         },
         operational_telemetry={},
     )
@@ -93,7 +106,24 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["seed_derivation_version"], 1)
         self.assertEqual(manifest["record_schema_version"], 1)
+        self.assertEqual(manifest["scoreboard_version"], 1)
         self.assertEqual(manifest["scheduled_turns_per_match"], 300)
+        self.assertEqual(manifest["execution_mode"], "step")
+        self.assertEqual(
+            manifest["match_limits"],
+            {
+                "first_move_timeout_ms": 250,
+                "move_timeout_ms": 50,
+                "total_timeout_ms": 2000,
+                "stderr_limit_bytes": 65536,
+                "stdout_limit_bytes": 4096,
+                "cpu_limit_ms": 2000,
+                "memory_limit_bytes": 268435456,
+                "process_limit": 1,
+                "filesystem_write_limit_bytes": 0,
+                "network_access_allowed": False,
+            },
+        )
         self.assertEqual(
             [team["team_id"] for team in manifest["roster"]],
             ["alpha", "beta", "delta", "gamma"],
@@ -263,6 +293,82 @@ class TournamentCreationTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             team.bot_artifact.wrapper_version = "changed"  # type: ignore[misc]
 
+    def test_custom_config_is_immutable_sealed_and_applied_deterministically(
+        self,
+    ) -> None:
+        limits = MatchLimits(
+            first_move_timeout_ms=101,
+            move_timeout_ms=102,
+            total_timeout_ms=103,
+            stderr_limit_bytes=104,
+            stdout_limit_bytes=105,
+            cpu_limit_ms=106,
+            memory_limit_bytes=107,
+            process_limit=2,
+            filesystem_write_limit_bytes=108,
+            network_access_allowed=False,
+        )
+        config = TournamentConfig(execution_mode="step", match_limits=limits)
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return executor_result(request, winner_team_id="beta")
+
+        with tempfile.TemporaryDirectory() as other_name:
+            other_directory = Path(other_name)
+            first = TournamentRunner.create(
+                self.directory,
+                tournament_id="configured-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                config=config,
+                match_executor=execute,
+            )
+            TournamentRunner.create(
+                other_directory,
+                tournament_id="configured-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                config=config,
+                match_executor=execute,
+            )
+
+            manifest = load_manifest(self.directory).manifest
+            self.assertEqual(manifest["execution_mode"], "step")
+            self.assertEqual(
+                manifest["match_limits"],
+                {
+                    "first_move_timeout_ms": 101,
+                    "move_timeout_ms": 102,
+                    "total_timeout_ms": 103,
+                    "stderr_limit_bytes": 104,
+                    "stdout_limit_bytes": 105,
+                    "cpu_limit_ms": 106,
+                    "memory_limit_bytes": 107,
+                    "process_limit": 2,
+                    "filesystem_write_limit_bytes": 108,
+                    "network_access_allowed": False,
+                },
+            )
+            self.assertEqual(manifest["protocol_version"], 1)
+            self.assertEqual(manifest["record_schema_version"], 1)
+            self.assertEqual(manifest["seed_derivation_version"], 1)
+            self.assertEqual(manifest["scoreboard_version"], 1)
+            self.assertEqual(
+                (self.directory / "manifest.json").read_bytes(),
+                (other_directory / "manifest.json").read_bytes(),
+            )
+
+            first.play_next_match()
+
+        self.assertEqual(requests[0].first_move_timeout_ms, 101)
+        self.assertEqual(requests[0].move_timeout_ms, 102)
+        self.assertEqual(requests[0].total_timeout_ms, 103)
+        self.assertEqual(requests[0].stderr_limit_bytes, 104)
+        with self.assertRaises(FrozenInstanceError):
+            config.execution_mode = "continuous"  # type: ignore[misc]
+
 
 class TournamentStepModeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -276,11 +382,34 @@ class TournamentStepModeTests(unittest.TestCase):
         self,
     ) -> None:
         requests: list[MatchExecutionRequest] = []
+        starting_projections: list[dict[str, object]] = []
 
         def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
             requests.append(request)
+            projection = load_scoreboard_projection(self.directory)
+            assert projection is not None
+            starting_projections.append(projection)
             return executor_result(
-                request, winner_team_id="beta", score=(7, 3)
+                request,
+                winner_team_id="beta",
+                score=(1, 0),
+                moves={"beta": "RP", "delta": "SS"},
+                rounds=[
+                    {
+                        "turn": 0,
+                        "moves": {"beta": "R", "delta": "S"},
+                        "winner_team_id": "beta",
+                    },
+                    {
+                        "turn": 1,
+                        "moves": {"beta": "P", "delta": "S"},
+                        "winner_team_id": "delta",
+                    },
+                ],
+                faults={
+                    "beta": None,
+                    "delta": {"kind": "timeout", "turn": 2},
+                },
             )
 
         runner = TournamentRunner.create(
@@ -294,6 +423,10 @@ class TournamentStepModeTests(unittest.TestCase):
         stored = runner.play_next_match()
 
         self.assertEqual(len(requests), 1)
+        self.assertEqual(starting_projections[0]["status"], "running")
+        self.assertEqual(
+            starting_projections[0]["fixtures"][0]["status"], "active"
+        )
         self.assertEqual(
             requests[0],
             MatchExecutionRequest(
@@ -328,8 +461,25 @@ class TournamentStepModeTests(unittest.TestCase):
                 "team_ids": ["beta", "delta"],
                 "outcome": "win",
                 "winner_team_id": "beta",
-                "round_wins": {"beta": 7, "delta": 3},
-                "protocol_forfeit_team_id": None,
+                "round_wins": {"beta": 1, "delta": 0},
+                "protocol_forfeit_team_id": "delta",
+                "moves": {"beta": "RP", "delta": "SS"},
+                "rounds": [
+                    {
+                        "turn": 0,
+                        "moves": {"beta": "R", "delta": "S"},
+                        "winner_team_id": "beta",
+                    },
+                    {
+                        "turn": 1,
+                        "moves": {"beta": "P", "delta": "S"},
+                        "winner_team_id": "delta",
+                    },
+                ],
+                "faults": {
+                    "beta": None,
+                    "delta": {"kind": "timeout", "turn": 2},
+                },
                 "match_seed": "4868274571950258215",
                 "bot_positions": {"a": "beta", "b": "delta"},
                 "bot_visible_seeds": {
@@ -381,7 +531,9 @@ class TournamentStepModeTests(unittest.TestCase):
             return executor_result(request, winner_team_id="beta")
 
         resumed = TournamentRunner.open(
-            self.directory, match_executor=second_executor
+            self.directory,
+            match_executor=second_executor,
+            artifact_digest_verifier=lambda team_id, digest: True,
         )
         resumed.play_next_match()
 
@@ -392,7 +544,9 @@ class TournamentStepModeTests(unittest.TestCase):
             return executor_result(request, winner_team_id=None)
 
         resumed_again = TournamentRunner.open(
-            self.directory, match_executor=third_executor
+            self.directory,
+            match_executor=third_executor,
+            artifact_digest_verifier=lambda team_id, digest: True,
         )
         resumed_again.play_next_match()
 
@@ -415,3 +569,135 @@ class TournamentStepModeTests(unittest.TestCase):
         self.assertEqual(
             projection["fixtures"][1]["status"], "in_progress"
         )
+
+    def test_infrastructure_failures_retry_three_identical_attempts_then_pause(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def fail(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return MatchExecutionResult(
+                infrastructure_failure=True,
+                competitive_outcome=None,
+                operational_telemetry={
+                    "match_id": request.match_id,
+                    "attempt_number": request.attempt_number,
+                    "infrastructure_failure": {"kind": "worker_lost"},
+                },
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="failure-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=fail,
+        )
+
+        with self.assertRaises(InfrastructureInterventionRequiredError) as caught:
+            runner.play_next_match()
+
+        self.assertEqual(caught.exception.match_id, "qualifying-0001-match-1")
+        self.assertEqual(caught.exception.attempt_count, 3)
+        self.assertEqual([request.attempt_number for request in requests], [1, 2, 3])
+        first_without_attempt = requests[0].__dict__ | {"attempt_number": 0}
+        self.assertEqual(
+            [request.__dict__ | {"attempt_number": 0} for request in requests],
+            [first_without_attempt, first_without_attempt, first_without_attempt],
+        )
+        self.assertEqual(load_competition_records(self.directory), [])
+        self.assertEqual(
+            [entry["attempt_number"] for entry in load_operational_telemetry(self.directory)],
+            [1, 2, 3],
+        )
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "paused")
+        self.assertEqual(projection["fixtures"][0]["status"], "scheduled")
+
+
+class TournamentResumeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.directory = Path(self.temporary_directory.name)
+        self.runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="resume-verification-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="beta"
+            ),
+        )
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_open_rejects_incompatible_manifest_versions(self) -> None:
+        manifest = load_manifest(self.directory).manifest
+        manifest_path = self.directory / "manifest.json"
+        manifest_path.unlink()
+        seal_manifest(self.directory, manifest | {"protocol_version": 2})
+
+        with self.assertRaises(TournamentCompatibilityError) as caught:
+            TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: executor_result(
+                    request, winner_team_id="beta"
+                ),
+                artifact_digest_verifier=lambda team_id, digest: True,
+            )
+
+        self.assertEqual(caught.exception.field, "protocol_version")
+        self.assertEqual(caught.exception.expected, 1)
+        self.assertEqual(caught.exception.actual, 2)
+
+    def test_open_requires_every_bot_artifact_digest_to_verify(self) -> None:
+        checked: list[tuple[str, str]] = []
+
+        def verify(team_id: str, digest: str) -> bool:
+            checked.append((team_id, digest))
+            return team_id != "delta"
+
+        with self.assertRaises(ArtifactDigestVerificationError) as caught:
+            TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: executor_result(
+                    request, winner_team_id="beta"
+                ),
+                artifact_digest_verifier=verify,
+            )
+
+        self.assertEqual(caught.exception.team_id, "delta")
+        self.assertIn(("delta", "d" * 64), checked)
+
+    def test_open_rebuilds_missing_and_corrupt_projection_from_records(
+        self,
+    ) -> None:
+        self.runner.play_next_match()
+        scoreboard_path = self.directory / "scoreboard.json"
+        scoreboard_path.unlink()
+
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="beta"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        rebuilt = load_scoreboard_projection(self.directory)
+        self.assertEqual(
+            rebuilt["fixtures"][0]["matches"][0]["match_id"],
+            "qualifying-0001-match-1",
+        )
+
+        scoreboard_path.write_bytes(b"not-json")
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="beta"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        rebuilt_again = load_scoreboard_projection(self.directory)
+        self.assertEqual(rebuilt_again, rebuilt)

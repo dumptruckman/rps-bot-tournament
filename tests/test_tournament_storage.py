@@ -81,6 +81,25 @@ class TournamentManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(IntegrityError, "Manifest checksum"):
             load_manifest(self.directory)
 
+    def test_sealed_and_loaded_manifest_values_are_deeply_immutable(self) -> None:
+        manifest = dict(self.manifest)
+        manifest["roster"] = [{"team_id": "red-team", "entrypoint": ["bot.py"]}]
+
+        sealed = seal_manifest(self.directory, manifest)
+        path = self.directory / "manifest.json"
+        sealed_bytes = path.read_bytes()
+
+        with self.assertRaises(TypeError):
+            sealed.manifest["roster"][0]["team_id"] = "blue-team"
+        with self.assertRaises(TypeError):
+            sealed.manifest["roster"][0]["entrypoint"].append("--changed")
+        loaded = load_manifest(self.directory)
+        with self.assertRaises(TypeError):
+            loaded.manifest["roster"].clear()
+
+        self.assertEqual(path.read_bytes(), sealed_bytes)
+        self.assertEqual(loaded.checksum, sealed.checksum)
+
 
 class CompetitionRecordTests(unittest.TestCase):
     started = {
@@ -221,6 +240,27 @@ class CompetitionRecordTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RecordSequenceError, "sequence"):
             load_competition_records(self.directory)
+
+    def test_appended_and_loaded_records_are_deeply_immutable(self) -> None:
+        record = {
+            "type": "match_terminal",
+            "match_id": "q-001-m1",
+            "rounds": [{"turn": 0, "moves": ["R", "S"]}],
+        }
+
+        stored = append_competition_record(self.directory, record)
+        path = self.directory / "records" / "00000001.json"
+        stored_bytes = path.read_bytes()
+        stored_hash = stored.content_hash
+
+        with self.assertRaises(TypeError):
+            stored.record["rounds"][0]["moves"][0] = "P"
+        loaded = load_competition_records(self.directory)[0]
+        with self.assertRaises(TypeError):
+            loaded.record["rounds"].append({"turn": 1})
+
+        self.assertEqual(path.read_bytes(), stored_bytes)
+        self.assertEqual(loaded.content_hash, stored_hash)
 
 
 class ScoreboardProjectionTests(unittest.TestCase):

@@ -236,6 +236,29 @@ class QualifyingStandingTests(unittest.TestCase):
             ),
         )
 
+    def test_in_progress_series_contributes_only_completed_match_statistics(
+        self,
+    ) -> None:
+        in_progress = Series("alpha", "beta", Phase.QUALIFYING).record(
+            MatchResult.win(
+                "alpha", "beta", "alpha", round_wins=(6, 2)
+            )
+        )
+
+        standings = calculate_qualifying_standings(
+            ["alpha", "beta"],
+            [in_progress],
+            {"alpha": 2, "beta": 1},
+        )
+
+        self.assertEqual(
+            standings,
+            (
+                Standing("alpha", 0, 0, 1, 0, 6, 2, 0, 2),
+                Standing("beta", 0, 0, 0, 1, 2, 6, 0, 1),
+            ),
+        )
+
     def test_administrative_win_has_no_lower_level_statistics(self) -> None:
         result = Series.administrative_win(
             "alpha", "disqualified", Phase.QUALIFYING, winner="alpha"
@@ -370,7 +393,7 @@ class PlayoffTests(unittest.TestCase):
         self.assertTrue(advanced.locked)
         self.assertEqual(advanced.semifinals[0].winner_id, "team-1")
         self.assertTrue(advanced.semifinals[0].administrative)
-        self.assertEqual(advanced.final.team_a_id, "team-1")
+        self.assertEqual(advanced.final.team_one_id, "team-1")
 
     def test_disqualified_advancing_team_is_replaced_by_team_it_eliminated(self) -> None:
         bracket = create_playoff_bracket(ranked_standings(4))
@@ -378,8 +401,8 @@ class PlayoffTests(unittest.TestCase):
 
         reinstated = bracket.disqualify("team-4")
 
-        self.assertEqual(bracket.final.team_a_id, "team-4")
-        self.assertEqual(reinstated.final.team_a_id, "team-1")
+        self.assertEqual(bracket.final.team_one_id, "team-4")
+        self.assertEqual(reinstated.final.team_one_id, "team-1")
         self.assertEqual(reinstated.semifinals[0].winner_id, "team-4")
 
     def test_finalist_disqualification_after_final_starts_declares_champion(self) -> None:

@@ -15,6 +15,8 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping, Optional, Union
 
+from rps_runner.tournament.immutable import FrozenJsonDict, freeze_json, thaw_json
+
 
 class StorageError(Exception):
     """Base class for Tournament storage failures."""
@@ -34,15 +36,29 @@ class RecordSequenceError(IntegrityError):
 
 @dataclass(frozen=True)
 class StoredManifest:
-    manifest: dict[str, Any]
+    manifest: FrozenJsonDict
     checksum: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "manifest",
+            _freeze_json_object(thaw_json(self.manifest), "Manifest"),
+        )
 
 
 @dataclass(frozen=True)
 class StoredCompetitionRecord:
     sequence: int
-    record: dict[str, Any]
+    record: FrozenJsonDict
     content_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "record",
+            _freeze_json_object(thaw_json(self.record), "Competition Record"),
+        )
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -62,7 +78,9 @@ def seal_manifest(
 ) -> StoredManifest:
     """Atomically seal the immutable checksummed Tournament Manifest."""
 
-    manifest_value = _detached_json_object(manifest, "Manifest")
+    manifest_value = _freeze_json_object(
+        _detached_json_object(manifest, "Manifest"), "Manifest"
+    )
     checksum = _sha256(canonical_json_bytes(manifest_value))
     stored = StoredManifest(manifest=manifest_value, checksum=checksum)
     encoded = canonical_json_bytes(
@@ -92,7 +110,9 @@ def load_manifest(tournament_directory: Union[Path, str]) -> StoredManifest:
     actual = _sha256(canonical_json_bytes(manifest))
     if actual != checksum:
         raise IntegrityError("Tournament Manifest checksum does not match")
-    return StoredManifest(manifest=manifest, checksum=checksum)
+    return StoredManifest(
+        manifest=_freeze_json_object(manifest, "Manifest"), checksum=checksum
+    )
 
 
 def append_competition_record(
@@ -103,7 +123,10 @@ def append_competition_record(
     directory = Path(tournament_directory)
     existing = load_competition_records(directory)
     sequence = len(existing) + 1
-    record_value = _detached_json_object(record, "Competition Record")
+    record_value = _freeze_json_object(
+        _detached_json_object(record, "Competition Record"),
+        "Competition Record",
+    )
     body = {"record": record_value, "sequence": sequence}
     content_hash = _sha256(canonical_json_bytes(body))
     stored = StoredCompetitionRecord(
@@ -168,7 +191,7 @@ def load_competition_records(
         loaded.append(
             StoredCompetitionRecord(
                 sequence=sequence,
-                record=record,
+                record=_freeze_json_object(record, "Competition Record"),
                 content_hash=content_hash,
             )
         )
@@ -297,12 +320,22 @@ def _detached_json_object(
     value: Mapping[str, Any], description: str
 ) -> dict[str, Any]:
     try:
-        detached = json.loads(canonical_json_bytes(value))
+        detached = json.loads(canonical_json_bytes(thaw_json(value)))
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         raise StorageError(f"{description} is not a canonical JSON object") from error
     if not isinstance(detached, dict):
         raise StorageError(f"{description} is not a canonical JSON object")
     return detached
+
+
+def _freeze_json_object(value: dict[str, Any], description: str) -> FrozenJsonDict:
+    try:
+        frozen = freeze_json(value)
+    except (TypeError, ValueError) as error:
+        raise StorageError(f"{description} is not a canonical JSON object") from error
+    if not isinstance(frozen, FrozenJsonDict):
+        raise StorageError(f"{description} is not a canonical JSON object")
+    return frozen
 
 
 def _read_json_object(path: Path, description: str) -> dict[str, Any]:

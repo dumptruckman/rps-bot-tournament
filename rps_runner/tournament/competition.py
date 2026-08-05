@@ -7,10 +7,10 @@ Tournament state machine.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from fractions import Fraction
-from collections.abc import Iterable, Mapping, Sequence
 from typing import Optional
 
 
@@ -27,28 +27,28 @@ class MatchOutcome(str, Enum):
 
 @dataclass(frozen=True)
 class MatchResult:
-    team_a_id: str
-    team_b_id: str
+    team_one_id: str
+    team_two_id: str
     outcome: MatchOutcome
     winner: Optional[str] = None
-    team_a_round_wins: int = 0
-    team_b_round_wins: int = 0
+    team_one_round_wins: int = 0
+    team_two_round_wins: int = 0
     protocol_forfeit_team_id: Optional[str] = None
 
     @classmethod
     def win(
         cls,
-        team_a_id: str,
-        team_b_id: str,
+        team_one_id: str,
+        team_two_id: str,
         winner: str,
         *,
         round_wins: tuple[int, int] = (0, 0),
     ) -> "MatchResult":
-        if winner not in (team_a_id, team_b_id):
+        if winner not in (team_one_id, team_two_id):
             raise ValueError("Match winner must compete in the Match")
         return cls(
-            team_a_id,
-            team_b_id,
+            team_one_id,
+            team_two_id,
             MatchOutcome.WIN,
             winner,
             round_wins[0],
@@ -58,40 +58,40 @@ class MatchResult:
     @classmethod
     def draw(
         cls,
-        team_a_id: str,
-        team_b_id: str,
+        team_one_id: str,
+        team_two_id: str,
         *,
         round_wins: tuple[int, int] = (0, 0),
     ) -> "MatchResult":
         return cls(
-            team_a_id,
-            team_b_id,
+            team_one_id,
+            team_two_id,
             MatchOutcome.DRAW,
-            team_a_round_wins=round_wins[0],
-            team_b_round_wins=round_wins[1],
+            team_one_round_wins=round_wins[0],
+            team_two_round_wins=round_wins[1],
         )
 
     @classmethod
     def double_forfeit(
-        cls, team_a_id: str, team_b_id: str
+        cls, team_one_id: str, team_two_id: str
     ) -> "MatchResult":
-        return cls(team_a_id, team_b_id, MatchOutcome.DOUBLE_FORFEIT)
+        return cls(team_one_id, team_two_id, MatchOutcome.DOUBLE_FORFEIT)
 
     @classmethod
     def protocol_forfeit(
         cls,
-        team_a_id: str,
-        team_b_id: str,
+        team_one_id: str,
+        team_two_id: str,
         *,
         faulting_team_id: str,
         completed_round_wins: tuple[int, int] = (0, 0),
     ) -> "MatchResult":
-        if faulting_team_id not in (team_a_id, team_b_id):
+        if faulting_team_id not in (team_one_id, team_two_id):
             raise ValueError("Faulting Team must compete in the Match")
-        winner = team_b_id if faulting_team_id == team_a_id else team_a_id
+        winner = team_two_id if faulting_team_id == team_one_id else team_one_id
         return cls(
-            team_a_id,
-            team_b_id,
+            team_one_id,
+            team_two_id,
             MatchOutcome.WIN,
             winner,
             completed_round_wins[0],
@@ -102,15 +102,15 @@ class MatchResult:
     @property
     def round_wins(self) -> dict[str, int]:
         return {
-            self.team_a_id: self.team_a_round_wins,
-            self.team_b_id: self.team_b_round_wins,
+            self.team_one_id: self.team_one_round_wins,
+            self.team_two_id: self.team_two_round_wins,
         }
 
 
 @dataclass(frozen=True)
 class Series:
-    team_a_id: str
-    team_b_id: str
+    team_one_id: str
+    team_two_id: str
     phase: Phase
     higher_seed_team_id: Optional[str] = None
     matches: tuple[MatchResult, ...] = ()
@@ -119,18 +119,18 @@ class Series:
     @classmethod
     def administrative_win(
         cls,
-        team_a_id: str,
-        team_b_id: str,
+        team_one_id: str,
+        team_two_id: str,
         phase: Phase,
         *,
         winner: str,
         higher_seed_team_id: Optional[str] = None,
     ) -> "Series":
-        if winner not in (team_a_id, team_b_id):
+        if winner not in (team_one_id, team_two_id):
             raise ValueError("Administrative winner must compete in the Series")
         return cls(
-            team_a_id,
-            team_b_id,
+            team_one_id,
+            team_two_id,
             phase,
             higher_seed_team_id=higher_seed_team_id,
             administrative_winner_id=winner,
@@ -139,9 +139,9 @@ class Series:
     def record(self, result: MatchResult) -> "Series":
         if self.is_complete:
             raise ValueError("Series is already complete")
-        if (result.team_a_id, result.team_b_id) != (
-            self.team_a_id,
-            self.team_b_id,
+        if (result.team_one_id, result.team_two_id) != (
+            self.team_one_id,
+            self.team_two_id,
         ):
             raise ValueError("Match Teams must match Series Teams")
         return replace(self, matches=self.matches + (result,))
@@ -152,11 +152,11 @@ class Series:
 
     @property
     def series_points(self) -> dict[str, Fraction]:
-        points = {self.team_a_id: Fraction(0), self.team_b_id: Fraction(0)}
+        points = {self.team_one_id: Fraction(0), self.team_two_id: Fraction(0)}
         for match in self.matches:
             if match.outcome is MatchOutcome.DRAW:
-                points[self.team_a_id] += Fraction(1, 2)
-                points[self.team_b_id] += Fraction(1, 2)
+                points[self.team_one_id] += Fraction(1, 2)
+                points[self.team_two_id] += Fraction(1, 2)
             elif match.outcome is MatchOutcome.WIN:
                 assert match.winner is not None
                 points[match.winner] += Fraction(1)
@@ -182,11 +182,11 @@ class Series:
         if self.administrative_winner_id is not None:
             return self.administrative_winner_id
         points = self.series_points
-        if points[self.team_a_id] == points[self.team_b_id]:
+        if points[self.team_one_id] == points[self.team_two_id]:
             if self.phase is Phase.PLAYOFF:
                 if self.higher_seed_team_id not in (
-                    self.team_a_id,
-                    self.team_b_id,
+                    self.team_one_id,
+                    self.team_two_id,
                 ):
                     raise ValueError(
                         "A playoff Series requires its higher-seeded Team"
@@ -201,8 +201,10 @@ class Series:
             raise ValueError("Standing Points require a complete Series")
         winner = self.winner
         if winner is None:
-            return {self.team_a_id: 1, self.team_b_id: 1}
-        loser = self.team_b_id if winner == self.team_a_id else self.team_a_id
+            return {self.team_one_id: 1, self.team_two_id: 1}
+        loser = (
+            self.team_two_id if winner == self.team_one_id else self.team_one_id
+        )
         return {winner: 3, loser: 0}
 
 
@@ -261,21 +263,20 @@ def calculate_qualifying_standings(
     for series in series_results:
         if series.phase is not Phase.QUALIFYING:
             raise ValueError("Only qualifying Series enter qualifying standings")
-        if not series.is_complete:
-            raise ValueError("Only complete Series enter qualifying standings")
-        competitors = {series.team_a_id, series.team_b_id}
+        competitors = {series.team_one_id, series.team_two_id}
         if competitors & disqualified:
             continue
         if not competitors <= counters.keys():
             raise ValueError("Series contains a Team outside the qualifying roster")
 
-        points = series.standing_points
-        for team_id in competitors:
-            counters[team_id]["standing_points"] += points[team_id]
-        assert series.winner is not None or points[series.team_a_id] == 1
-        if series.winner is not None:
-            counters[series.winner]["series_wins"] += 1
-        head_to_head.append(series)
+        if series.is_complete:
+            points = series.standing_points
+            for team_id in competitors:
+                counters[team_id]["standing_points"] += points[team_id]
+            assert series.winner is not None or points[series.team_one_id] == 1
+            if series.winner is not None:
+                counters[series.winner]["series_wins"] += 1
+            head_to_head.append(series)
 
         if series.administrative_winner_id is not None:
             continue
@@ -283,16 +284,16 @@ def calculate_qualifying_standings(
             for team_id, round_wins in match.round_wins.items():
                 counters[team_id]["round_wins"] += round_wins
                 opponent = (
-                    match.team_b_id
-                    if team_id == match.team_a_id
-                    else match.team_a_id
+                    match.team_two_id
+                    if team_id == match.team_one_id
+                    else match.team_one_id
                 )
                 counters[team_id]["round_losses"] += match.round_wins[opponent]
             if match.winner is not None:
                 loser = (
-                    match.team_b_id
-                    if match.winner == match.team_a_id
-                    else match.team_a_id
+                    match.team_two_id
+                    if match.winner == match.team_one_id
+                    else match.team_one_id
                 )
                 counters[match.winner]["match_wins"] += 1
                 counters[loser]["match_losses"] += 1
@@ -362,7 +363,7 @@ def _head_to_head_winner(
 ) -> Optional[str]:
     pair = {first_team_id, second_team_id}
     for series in series_results:
-        if {series.team_a_id, series.team_b_id} == pair:
+        if {series.team_one_id, series.team_two_id} == pair:
             return series.winner
     return None
 
@@ -381,8 +382,8 @@ class SeededTeam:
 @dataclass(frozen=True)
 class PlayoffFixture:
     stage: PlayoffStage
-    team_a_id: Optional[str]
-    team_b_id: Optional[str]
+    team_one_id: Optional[str]
+    team_two_id: Optional[str]
     started: bool = False
     winner_id: Optional[str] = None
     administrative: bool = False
@@ -391,7 +392,7 @@ class PlayoffFixture:
     def competitors(self) -> tuple[str, ...]:
         return tuple(
             team_id
-            for team_id in (self.team_a_id, self.team_b_id)
+            for team_id in (self.team_one_id, self.team_two_id)
             if team_id is not None
         )
 
@@ -533,11 +534,11 @@ class PlayoffBracket:
         semifinals = _replace_at(self.semifinals, index, fixture)
         assert self.final is not None
         if len(semifinals) == 1:
-            final = replace(self.final, team_b_id=winner_id)
+            final = replace(self.final, team_two_id=winner_id)
         elif index == 0:
-            final = replace(self.final, team_a_id=winner_id)
+            final = replace(self.final, team_one_id=winner_id)
         else:
-            final = replace(self.final, team_b_id=winner_id)
+            final = replace(self.final, team_two_id=winner_id)
 
         champion = self.champion
         if all(item.winner_id is not None for item in semifinals):
@@ -642,8 +643,8 @@ def _replace_fixture_team(
     old_team_id: str,
     new_team_id: Optional[str],
 ) -> PlayoffFixture:
-    if fixture.team_a_id == old_team_id:
-        return replace(fixture, team_a_id=new_team_id)
-    if fixture.team_b_id == old_team_id:
-        return replace(fixture, team_b_id=new_team_id)
+    if fixture.team_one_id == old_team_id:
+        return replace(fixture, team_one_id=new_team_id)
+    if fixture.team_two_id == old_team_id:
+        return replace(fixture, team_two_id=new_team_id)
     return fixture

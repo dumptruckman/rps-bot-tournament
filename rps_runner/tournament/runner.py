@@ -13,8 +13,7 @@ from .competition import (
     MatchResult,
     Phase,
     Series,
-    Standing,
-    rank_standings,
+    calculate_qualifying_standings,
 )
 from .locking import TournamentRunLock
 from .match_executor import MatchExecutionRequest, MatchExecutionResult
@@ -31,6 +30,7 @@ from .seeding import (
     derive_tiebreak_key,
 )
 from .storage import (
+    IntegrityError,
     StoredCompetitionRecord,
     append_competition_record,
     append_operational_telemetry,
@@ -57,12 +57,65 @@ _DIGEST_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
 
 
 @dataclass(frozen=True)
+class MatchLimits:
+    first_move_timeout_ms: int = FIRST_MOVE_TIMEOUT_MS
+    move_timeout_ms: int = MOVE_TIMEOUT_MS
+    total_timeout_ms: int = TOTAL_TIMEOUT_MS
+    stderr_limit_bytes: int = STDERR_LIMIT_BYTES
+    stdout_limit_bytes: int = 4_096
+    cpu_limit_ms: int = 2_000
+    memory_limit_bytes: int = 268_435_456
+    process_limit: int = 1
+    filesystem_write_limit_bytes: int = 0
+    network_access_allowed: bool = False
+
+
+@dataclass(frozen=True)
+class TournamentConfig:
+    execution_mode: str = "step"
+    match_limits: MatchLimits = MatchLimits()
+
+
+@dataclass(frozen=True)
 class BotArtifactManifest:
     artifact_digest: str
     language_id: str
     wrapper_version: str
     runtime_digest: str
     entrypoint: tuple[str, ...]
+
+
+class InfrastructureInterventionRequiredError(RuntimeError):
+    """Three Match Attempts failed and operator intervention is required."""
+
+    def __init__(self, match_id: str, attempt_count: int):
+        self.match_id = match_id
+        self.attempt_count = attempt_count
+        super().__init__(
+            f"{match_id} failed {attempt_count} Match Attempts; "
+            "infrastructure intervention is required"
+        )
+
+
+class TournamentCompatibilityError(RuntimeError):
+    """The sealed Tournament uses an unsupported compatibility value."""
+
+    def __init__(self, field: str, expected: object, actual: object):
+        self.field = field
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"Unsupported {field}: expected {expected!r}, found {actual!r}"
+        )
+
+
+class ArtifactDigestVerificationError(RuntimeError):
+    """A sealed Bot Artifact no longer matches its canonical digest."""
+
+    def __init__(self, team_id: str, artifact_digest: str):
+        self.team_id = team_id
+        self.artifact_digest = artifact_digest
+        super().__init__(f"Bot Artifact digest verification failed for {team_id}")
 
 
 @dataclass(frozen=True)
@@ -86,10 +139,12 @@ class TournamentRunner:
         tournament_id: str,
         tournament_seed: int,
         roster: Iterable[Team],
+        config: TournamentConfig = TournamentConfig(),
         match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult],
     ) -> "TournamentRunner":
         teams = tuple(roster)
         _validate_creation_inputs(tournament_id, tournament_seed, teams)
+        _validate_tournament_config(config)
         schedule = build_qualifying_schedule(
             (team.team_id for team in teams), tournament_seed
         )
@@ -100,13 +155,10 @@ class TournamentRunner:
             "protocol_version": PROTOCOL_VERSION,
             "seed_derivation_version": SEED_DERIVATION_VERSION,
             "record_schema_version": RECORD_SCHEMA_VERSION,
+            "scoreboard_version": SCOREBOARD_VERSION,
             "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
-            "match_limits": {
-                "first_move_timeout_ms": FIRST_MOVE_TIMEOUT_MS,
-                "move_timeout_ms": MOVE_TIMEOUT_MS,
-                "total_timeout_ms": TOTAL_TIMEOUT_MS,
-                "stderr_limit_bytes": STDERR_LIMIT_BYTES,
-            },
+            "execution_mode": config.execution_mode,
+            "match_limits": _serialize_match_limits(config.match_limits),
             "series_format": "best_of_three",
             "roster": [_serialize_team(team) for team in canonical_roster],
             "tie_break_keys": {
@@ -135,11 +187,25 @@ class TournamentRunner:
         tournament_directory: Union[Path, str],
         *,
         match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult],
+        artifact_digest_verifier: Callable[[str, str], bool],
     ) -> "TournamentRunner":
         directory = Path(tournament_directory)
         with TournamentRunLock(directory):
             stored = load_manifest(directory)
-            load_competition_records(directory)
+            _verify_compatibility(stored.manifest)
+            _verify_artifact_digests(
+                stored.manifest, artifact_digest_verifier
+            )
+            records = load_competition_records(directory)
+            try:
+                projection = load_scoreboard_projection(directory)
+            except IntegrityError:
+                projection = None
+            if projection is None:
+                write_scoreboard_projection(
+                    directory,
+                    _projection_from_records(stored.manifest, records),
+                )
         return cls(directory, match_executor, stored.manifest)
 
     @property
@@ -156,26 +222,65 @@ class TournamentRunner:
             if selected is None:
                 return None
             fixture, match_ordinal = selected
-            request = _build_match_request(
-                self._manifest, fixture, match_ordinal
-            )
-            execution_result = self.match_executor(request)
-            result = _normalize_executor_result(execution_result, fixture)
-            if execution_result.operational_telemetry:
-                append_operational_telemetry(
-                    self.tournament_directory,
-                    execution_result.operational_telemetry,
+            for attempt_number in range(1, 4):
+                request = _build_match_request(
+                    self._manifest,
+                    fixture,
+                    match_ordinal,
+                    attempt_number=attempt_number,
                 )
-            stored = append_competition_record(
-                self.tournament_directory,
-                _terminal_record(request, fixture, match_ordinal, result),
-            )
-            all_records = records + [stored]
-            write_scoreboard_projection(
-                self.tournament_directory,
-                _projection_from_records(self._manifest, all_records),
-            )
-            return stored
+                write_scoreboard_projection(
+                    self.tournament_directory,
+                    _projection_at_match_start(
+                        self._manifest, records, request
+                    ),
+                )
+                execution_result = self.match_executor(request)
+                if execution_result.infrastructure_failure:
+                    telemetry = dict(execution_result.operational_telemetry)
+                    telemetry.setdefault("match_id", request.match_id)
+                    telemetry.setdefault("attempt_number", attempt_number)
+                    telemetry.setdefault("infrastructure_failure", True)
+                    append_operational_telemetry(
+                        self.tournament_directory, telemetry
+                    )
+                    if attempt_number < 3:
+                        continue
+                    write_scoreboard_projection(
+                        self.tournament_directory,
+                        _projection_from_records(self._manifest, records),
+                    )
+                    raise InfrastructureInterventionRequiredError(
+                        request.match_id, attempt_number
+                    )
+
+                result = _normalize_executor_result(
+                    execution_result, fixture
+                )
+                if execution_result.operational_telemetry:
+                    append_operational_telemetry(
+                        self.tournament_directory,
+                        execution_result.operational_telemetry,
+                    )
+                stored = append_competition_record(
+                    self.tournament_directory,
+                    _terminal_record(
+                        request,
+                        fixture,
+                        match_ordinal,
+                        result,
+                        execution_result.competitive_outcome,
+                    ),
+                )
+                all_records = records + [stored]
+                write_scoreboard_projection(
+                    self.tournament_directory,
+                    _projection_from_records(self._manifest, all_records),
+                )
+                return stored
+
+            # The loop either commits a Match or raises for intervention.
+            raise AssertionError("unreachable Match Attempt state")
 
 
 def _validate_creation_inputs(
@@ -202,6 +307,40 @@ def _validate_creation_inputs(
         _validate_artifact(team.bot_artifact)
 
 
+def _validate_tournament_config(config: TournamentConfig) -> None:
+    if not isinstance(config, TournamentConfig):
+        raise TypeError("Tournament config must be a TournamentConfig")
+    if config.execution_mode not in ("step", "continuous"):
+        raise ValueError("Execution mode must be step or continuous")
+    limits = config.match_limits
+    if not isinstance(limits, MatchLimits):
+        raise TypeError("Match limits must be a MatchLimits value")
+    positive_fields = (
+        "first_move_timeout_ms",
+        "move_timeout_ms",
+        "total_timeout_ms",
+        "stderr_limit_bytes",
+        "stdout_limit_bytes",
+        "cpu_limit_ms",
+        "memory_limit_bytes",
+        "process_limit",
+    )
+    for field in positive_fields:
+        value = getattr(limits, field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"{field} must be a positive integer")
+    if (
+        not isinstance(limits.filesystem_write_limit_bytes, int)
+        or isinstance(limits.filesystem_write_limit_bytes, bool)
+        or limits.filesystem_write_limit_bytes < 0
+    ):
+        raise ValueError(
+            "filesystem_write_limit_bytes must be a non-negative integer"
+        )
+    if not isinstance(limits.network_access_allowed, bool):
+        raise ValueError("network_access_allowed must be a boolean")
+
+
 def _validate_artifact(artifact: BotArtifactManifest) -> None:
     if not isinstance(artifact, BotArtifactManifest):
         raise ValueError("Every Team requires one Bot Artifact Manifest")
@@ -224,6 +363,32 @@ def _validate_artifact(artifact: BotArtifactManifest) -> None:
         raise ValueError("Bot Artifact entrypoint must be an argument array")
 
 
+def _verify_compatibility(manifest: dict[str, Any]) -> None:
+    expected_values = {
+        "protocol_version": PROTOCOL_VERSION,
+        "seed_derivation_version": SEED_DERIVATION_VERSION,
+        "record_schema_version": RECORD_SCHEMA_VERSION,
+        "scoreboard_version": SCOREBOARD_VERSION,
+        "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
+        "series_format": "best_of_three",
+    }
+    for field, expected in expected_values.items():
+        actual = manifest.get(field)
+        if actual != expected:
+            raise TournamentCompatibilityError(field, expected, actual)
+
+
+def _verify_artifact_digests(
+    manifest: dict[str, Any],
+    verifier: Callable[[str, str], bool],
+) -> None:
+    for team in manifest["roster"]:
+        team_id = team["team_id"]
+        artifact_digest = team["bot_artifact"]["artifact_digest"]
+        if not verifier(team_id, artifact_digest):
+            raise ArtifactDigestVerificationError(team_id, artifact_digest)
+
+
 def _serialize_team(team: Team) -> dict[str, Any]:
     artifact = team.bot_artifact
     return {
@@ -236,6 +401,21 @@ def _serialize_team(team: Team) -> dict[str, Any]:
             "runtime_digest": artifact.runtime_digest,
             "entrypoint": list(artifact.entrypoint),
         },
+    }
+
+
+def _serialize_match_limits(limits: MatchLimits) -> dict[str, Any]:
+    return {
+        "first_move_timeout_ms": limits.first_move_timeout_ms,
+        "move_timeout_ms": limits.move_timeout_ms,
+        "total_timeout_ms": limits.total_timeout_ms,
+        "stderr_limit_bytes": limits.stderr_limit_bytes,
+        "stdout_limit_bytes": limits.stdout_limit_bytes,
+        "cpu_limit_ms": limits.cpu_limit_ms,
+        "memory_limit_bytes": limits.memory_limit_bytes,
+        "process_limit": limits.process_limit,
+        "filesystem_write_limit_bytes": limits.filesystem_write_limit_bytes,
+        "network_access_allowed": limits.network_access_allowed,
     }
 
 
@@ -367,6 +547,8 @@ def _build_match_request(
     manifest: dict[str, Any],
     fixture: dict[str, Any],
     match_ordinal: int,
+    *,
+    attempt_number: int,
 ) -> MatchExecutionRequest:
     fixture_seed = int(fixture["fixture_seed"])
     match_seed = derive_match_seed(fixture_seed, match_ordinal)
@@ -388,7 +570,7 @@ def _build_match_request(
         fixture_id=fixture["fixture_id"],
         series_id=f"{fixture['fixture_id']}-series",
         match_id=f"{fixture['fixture_id']}-match-{match_ordinal}",
-        attempt_number=1,
+        attempt_number=attempt_number,
         team_a_id=positions.team_a_id,
         team_b_id=positions.team_b_id,
         artifact_digest_a=artifacts[positions.team_a_id].artifact_digest,
@@ -475,7 +657,13 @@ def _terminal_record(
     fixture: dict[str, Any],
     match_ordinal: int,
     result: MatchResult,
+    competitive_outcome: Optional[dict[str, object]],
 ) -> dict[str, Any]:
+    if competitive_outcome is None:
+        raise ValueError("Terminal Match requires a competitive outcome")
+    moves, rounds, faults = _competitive_details(
+        competitive_outcome, fixture["team_ids"]
+    )
     team_one_id, team_two_id = fixture["team_ids"]
     return {
         "type": "match_terminal",
@@ -488,6 +676,9 @@ def _terminal_record(
         "winner_team_id": result.winner,
         "round_wins": result.round_wins,
         "protocol_forfeit_team_id": result.protocol_forfeit_team_id,
+        "moves": moves,
+        "rounds": rounds,
+        "faults": faults,
         "match_seed": str(request.match_seed),
         "bot_positions": {
             "a": request.team_a_id,
@@ -502,6 +693,68 @@ def _terminal_record(
             request.team_b_id: request.artifact_digest_b,
         },
     }
+
+
+def _competitive_details(
+    outcome: dict[str, object], team_ids: list[str]
+) -> tuple[dict[str, str], list[dict[str, object]], dict[str, object]]:
+    raw_moves = outcome.get("moves")
+    raw_rounds = outcome.get("rounds")
+    raw_faults = outcome.get("faults")
+    if not isinstance(raw_moves, dict) or not isinstance(raw_rounds, list):
+        raise ValueError("Competitive outcome is missing completed play facts")
+    if not isinstance(raw_faults, dict):
+        raise ValueError("Competitive outcome is missing normalized faults")
+
+    moves: dict[str, str] = {}
+    faults: dict[str, object] = {}
+    for team_id in team_ids:
+        move_history = raw_moves.get(team_id)
+        if not isinstance(move_history, str):
+            raise ValueError("Completed moves do not match Fixture Teams")
+        moves[team_id] = move_history
+        fault = raw_faults.get(team_id)
+        if fault is None:
+            faults[team_id] = None
+            continue
+        if not isinstance(fault, dict):
+            raise ValueError("Normalized fault must be an object or null")
+        kind = fault.get("kind")
+        turn = fault.get("turn")
+        if (
+            not isinstance(kind, str)
+            or not isinstance(turn, int)
+            or isinstance(turn, bool)
+        ):
+            raise ValueError("Normalized fault requires kind and Turn")
+        faults[team_id] = {"kind": kind, "turn": turn}
+
+    rounds: list[dict[str, object]] = []
+    for raw_round in raw_rounds:
+        if not isinstance(raw_round, dict):
+            raise ValueError("Completed Round must be an object")
+        turn = raw_round.get("turn")
+        round_moves = raw_round.get("moves")
+        winner_team_id = raw_round.get("winner_team_id")
+        if not isinstance(turn, int) or isinstance(turn, bool):
+            raise ValueError("Completed Round requires a numeric Turn")
+        if not isinstance(round_moves, dict) or any(
+            not isinstance(round_moves.get(team_id), str)
+            for team_id in team_ids
+        ):
+            raise ValueError("Completed Round moves do not match Fixture Teams")
+        if winner_team_id is not None and winner_team_id not in team_ids:
+            raise ValueError("Completed Round winner does not match Fixture Teams")
+        rounds.append(
+            {
+                "turn": turn,
+                "moves": {
+                    team_id: round_moves[team_id] for team_id in team_ids
+                },
+                "winner_team_id": winner_team_id,
+            }
+        )
+    return moves, rounds, faults
 
 
 def _projection_from_records(
@@ -542,23 +795,26 @@ def _projection_from_records(
     return projection
 
 
+def _projection_at_match_start(
+    manifest: dict[str, Any],
+    records: list[StoredCompetitionRecord],
+    request: MatchExecutionRequest,
+) -> dict[str, Any]:
+    projection = _projection_from_records(manifest, records)
+    projection["status"] = "running"
+    for fixture in projection["fixtures"]:
+        if fixture["fixture_id"] == request.fixture_id:
+            fixture["status"] = "active"
+            fixture["active_match_id"] = request.match_id
+            break
+    return projection
+
+
 def _standing_projection(
     manifest: dict[str, Any],
     terminal_by_fixture: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    counters = {
-        team["team_id"]: {
-            "standing_points": 0,
-            "series_wins": 0,
-            "match_wins": 0,
-            "match_losses": 0,
-            "round_wins": 0,
-            "round_losses": 0,
-            "protocol_fault_forfeits": 0,
-        }
-        for team in manifest["roster"]
-    }
-    complete_series: list[Series] = []
+    series_results: list[Series] = []
     for fixture in _manifest_fixtures(manifest):
         fixture_records = sorted(
             terminal_by_fixture.get(fixture["fixture_id"], ()),
@@ -566,46 +822,15 @@ def _standing_projection(
         )
         if not fixture_records:
             continue
-        series = _series_from_records(fixture, fixture_records)
-        for record in fixture_records:
-            result = _match_result_from_record(record)
-            for team_id, round_wins in result.round_wins.items():
-                opponent = (
-                    result.team_b_id
-                    if team_id == result.team_a_id
-                    else result.team_a_id
-                )
-                counters[team_id]["round_wins"] += round_wins
-                counters[team_id]["round_losses"] += result.round_wins[opponent]
-            if result.winner is not None:
-                loser = (
-                    result.team_b_id
-                    if result.winner == result.team_a_id
-                    else result.team_a_id
-                )
-                counters[result.winner]["match_wins"] += 1
-                counters[loser]["match_losses"] += 1
-            if result.protocol_forfeit_team_id is not None:
-                counters[result.protocol_forfeit_team_id][
-                    "protocol_fault_forfeits"
-                ] += 1
-        if series.is_complete:
-            complete_series.append(series)
-            for team_id, points in series.standing_points.items():
-                counters[team_id]["standing_points"] += points
-            if series.winner is not None:
-                counters[series.winner]["series_wins"] += 1
+        series_results.append(_series_from_records(fixture, fixture_records))
 
-    standings = rank_standings(
-        (
-            Standing(
-                team_id=team_id,
-                tie_break_key=int(manifest["tie_break_keys"][team_id]),
-                **values,
-            )
-            for team_id, values in counters.items()
-        ),
-        complete_series,
+    standings = calculate_qualifying_standings(
+        [team["team_id"] for team in manifest["roster"]],
+        series_results,
+        {
+            team_id: int(tie_break_key)
+            for team_id, tie_break_key in manifest["tie_break_keys"].items()
+        },
     )
     return [
         {
