@@ -1,9 +1,9 @@
 """Deterministic Tournament state reconstructed from canonical records.
 
-The fold understands qualifying and standard Playoff Phase ``match_terminal``
-records, phase transitions, Bracket Lock, and Tournament Champion declaration.
-It is the semantic verification seam between byte-valid storage and
-runner/projection behavior.
+The fold understands qualifying and Playoff Phase ``match_terminal`` records,
+phase transitions, Bracket Lock, Security Violation rulings, Disqualification
+transitions, and Tournament completion. It is the semantic verification seam
+between byte-valid storage and runner/projection behavior.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ class TournamentStateError(ValueError):
 
 
 NO_ELIGIBLE_TEAMS_REASON = "no_eligible_teams"
+NO_ELIGIBLE_FINALIST_REASON = "all_finalists_disqualified"
 
 
 _MATCH_TERMINAL_FIELDS = {
@@ -100,6 +101,7 @@ class PendingSecurityRuling:
     team_ids: tuple[str, str]
     suspected_team_ids: tuple[str, ...]
     evidence_link: str
+    phase: Phase = Phase.QUALIFYING
 
     @property
     def suspected_team_id(self) -> Optional[str]:
@@ -127,7 +129,7 @@ class TournamentState:
     ended_without_champion: bool
     disqualified_team_ids: tuple[str, ...] = ()
     pending_security_ruling: Optional[PendingSecurityRuling] = None
-    pending_administrative_records: tuple[FrozenJsonDict, ...] = ()
+    pending_transition_records: tuple[FrozenJsonDict, ...] = ()
 
     @property
     def qualifying_phase_complete(self) -> bool:
@@ -136,7 +138,7 @@ class TournamentState:
                 self.qualifying_series, set(self.disqualified_team_ids)
             )
             and self.pending_security_ruling is None
-            and not self.pending_administrative_records
+            and not self.pending_transition_records
         )
 
     @property
@@ -145,6 +147,23 @@ class TournamentState:
 
         return _completed_final_winner(
             self.playoff_fixtures, list(self.playoff_series)
+        )
+
+    @property
+    def all_finalists_disqualified(self) -> bool:
+        final = next(
+            (
+                fixture
+                for fixture in self.playoff_fixtures
+                if fixture.stage is PlayoffStage.FINAL
+            ),
+            None,
+        )
+        return (
+            final is not None
+            and len(final.team_ids) == 2
+            and None not in final.team_ids
+            and set(final.team_ids) <= set(self.disqualified_team_ids)
         )
 
     @property
@@ -202,7 +221,8 @@ def fold_tournament_state(
     ended_without_champion = False
     disqualified_team_ids: set[str] = set()
     pending_security_ruling: Optional[PendingSecurityRuling] = None
-    pending_administrative_records: list[dict[str, Any]] = []
+    pending_transition_records: list[dict[str, Any]] = []
+    replaced_final_sources: set[str] = set()
 
     for expected_sequence, stored in enumerate(records, start=1):
         if not isinstance(stored, StoredCompetitionRecord):
@@ -213,6 +233,13 @@ def fold_tournament_state(
             )
         record = stored.record
         record_type = record.get("type")
+        if playoff_bracket_created:
+            playoff_fixtures, playoff_series = _resolve_final_if_ready(
+                playoff_fixtures,
+                playoff_series,
+                playoff_seeds,
+                replaced_final_sources=replaced_final_sources,
+            )
         if (
             champion_team_id is not None
             and record_type == "tournament_champion_declared"
@@ -224,41 +251,132 @@ def fold_tournament_state(
             raise TournamentStateError(
                 "A Competition Record cannot follow Tournament completion"
             )
-        if pending_administrative_records:
-            expected_administrative = pending_administrative_records[0]
-            if record != expected_administrative:
+        if pending_transition_records:
+            expected_transition = pending_transition_records[0]
+            if record != expected_transition:
                 raise TournamentStateError(
-                    "Confirmed Disqualification requires canonical Administrative "
-                    "Series Wins in Fixture order"
+                    "Confirmed Disqualification requires canonical transition "
+                    "records in Fixture order"
                 )
-            fixture_id = expected_administrative["fixture_id"]
-            fixture_index = fixture_indexes[fixture_id]
-            series[fixture_index] = replace(
-                series[fixture_index],
-                administrative_winner_id=expected_administrative["winner_team_id"],
-            )
-            pending_administrative_records.pop(0)
+            fixture_id = expected_transition["fixture_id"]
+            if expected_transition["phase"] == Phase.QUALIFYING.value:
+                fixture_index = fixture_indexes[fixture_id]
+                series[fixture_index] = replace(
+                    series[fixture_index],
+                    administrative_winner_id=expected_transition["winner_team_id"],
+                )
+            elif expected_transition["type"] == "administrative_series_win":
+                playable_fixtures = [
+                    fixture
+                    for fixture in playoff_fixtures
+                    if None not in fixture.team_ids
+                ]
+                playoff_index = next(
+                    (
+                        index
+                        for index, fixture in enumerate(playable_fixtures)
+                        if fixture.fixture_id == fixture_id
+                    ),
+                    None,
+                )
+                if playoff_index is None or playoff_index >= len(playoff_series):
+                    raise TournamentStateError(
+                        "Playoff Administrative Series Win names an unresolved Fixture"
+                    )
+                playoff_series[playoff_index] = replace(
+                    playoff_series[playoff_index],
+                    administrative_winner_id=expected_transition["winner_team_id"],
+                )
+                if playoff_index == current_playoff_index:
+                    current_playoff_index += 1
+            else:
+                final_index = next(
+                    index
+                    for index, fixture in enumerate(playoff_fixtures)
+                    if fixture.fixture_id == fixture_id
+                )
+                final_fixture = playoff_fixtures[final_index]
+                replacement_team_ids = expected_transition["team_ids_after"]
+                playoff_fixtures = (
+                    playoff_fixtures[:final_index]
+                    + (
+                        replace(
+                            final_fixture,
+                            team_ids=(
+                                replacement_team_ids[0],
+                                replacement_team_ids[1],
+                            ),
+                        ),
+                    )
+                    + playoff_fixtures[final_index + 1 :]
+                )
+                source_fixture_id = expected_transition["source_fixture_id"]
+                replaced_final_sources.add(source_fixture_id)
+                final_series_index = next(
+                    (
+                        index
+                        for index, item in enumerate(playoff_series)
+                        if {item.team_one_id, item.team_two_id}
+                        == set(expected_transition["team_ids_before"])
+                    ),
+                    None,
+                )
+                if final_series_index is not None:
+                    if None in replacement_team_ids:
+                        playoff_series.pop(final_series_index)
+                        current_playoff_index = min(
+                            current_playoff_index, len(playoff_series)
+                        )
+                    else:
+                        seed_by_team = {
+                            seed.team_id: seed.seed for seed in playoff_seeds
+                        }
+                        playoff_series[final_series_index] = Series(
+                            replacement_team_ids[0],
+                            replacement_team_ids[1],
+                            Phase.PLAYOFF,
+                            higher_seed_team_id=min(
+                                replacement_team_ids,
+                                key=seed_by_team.__getitem__,
+                            ),
+                        )
+            pending_transition_records.pop(0)
             continue
         if record_type == "security_violation_suspected":
-            if playoff_bracket_created:
-                raise TournamentStateError(
-                    "Playoff Security Violation integration is not supported"
-                )
             if pending_security_ruling is not None:
                 raise TournamentStateError(
                     "A Security Violation suspicion is already awaiting a ruling"
                 )
-            selected_index = _next_qualifying_fixture_index(
-                series, disqualified_team_ids
-            )
-            if selected_index is None:
-                raise TournamentStateError(
-                    "A Security Violation suspicion cannot follow qualification"
+            if playoff_bracket_created:
+                if not bracket_locked or current_playoff_index >= len(playoff_series):
+                    raise TournamentStateError(
+                        "A Security Violation suspicion cannot follow the Playoff Phase"
+                    )
+                playoff_fixture = playoff_fixtures[current_playoff_index]
+                if None in playoff_fixture.team_ids:
+                    raise TournamentStateError(
+                        "A Security Violation suspicion requires a playable Fixture"
+                    )
+                fixture = _FixtureDefinition(
+                    playoff_fixture.fixture_id,
+                    (playoff_fixture.team_ids[0], playoff_fixture.team_ids[1]),
+                    playoff_fixture.fixture_seed,
                 )
-            fixture = fixtures[selected_index]
-            match_ordinal = series[selected_index].match_count + 1
+                match_ordinal = playoff_series[current_playoff_index].match_count + 1
+                phase = Phase.PLAYOFF
+            else:
+                selected_index = _next_qualifying_fixture_index(
+                    series, disqualified_team_ids
+                )
+                if selected_index is None:
+                    raise TournamentStateError(
+                        "A Security Violation suspicion cannot follow qualification"
+                    )
+                fixture = fixtures[selected_index]
+                match_ordinal = series[selected_index].match_count + 1
+                phase = Phase.QUALIFYING
             pending_security_ruling = _pending_security_ruling(
-                record, fixture, match_ordinal
+                record, fixture, match_ordinal, phase=phase
             )
             continue
         if record_type == "security_violation_ruling":
@@ -275,14 +393,25 @@ def fold_tournament_state(
                         "A Team cannot be disqualified more than once"
                     )
                 disqualified_team_ids.add(ruled_team_id)
-                pending_administrative_records = (
-                    _administrative_records_for_disqualifications(
-                        fixtures,
-                        (ruled_team_id,),
-                        disqualified_team_ids,
-                        pending_security_ruling.match_id,
+                if pending_security_ruling.phase is Phase.QUALIFYING:
+                    pending_transition_records = (
+                        _administrative_records_for_disqualifications(
+                            fixtures,
+                            (ruled_team_id,),
+                            disqualified_team_ids,
+                            pending_security_ruling.match_id,
+                        )
                     )
-                )
+                else:
+                    pending_transition_records = (
+                        _playoff_records_for_disqualification(
+                            playoff_fixtures,
+                            playoff_series,
+                            ruled_team_id,
+                            disqualified_team_ids,
+                            pending_security_ruling.match_id,
+                        )
+                    )
             remaining_suspected_team_ids = tuple(
                 team_id
                 for team_id in pending_security_ruling.suspected_team_ids
@@ -297,11 +426,12 @@ def fold_tournament_state(
                 else None
             )
             continue
-        if playoff_bracket_created:
-            playoff_fixtures, playoff_series = _resolve_final_if_ready(
-                playoff_fixtures, playoff_series, playoff_seeds
-            )
         if record_type == "tournament_champion_declared":
+            if pending_security_ruling is not None or pending_transition_records:
+                raise TournamentStateError(
+                    "Tournament Champion was declared while a ruling transition "
+                    "is pending"
+                )
             final_winner = _completed_final_winner(
                 playoff_fixtures, playoff_series
             )
@@ -329,12 +459,24 @@ def fold_tournament_state(
                     "Tournament ended without a Tournament Champion before the "
                     "playoff field was recorded"
                 )
-            if playoff_seeds or playoff_fixtures or playoff_series:
+            finalists_disqualified = _all_finalists_disqualified(
+                playoff_fixtures, disqualified_team_ids
+            )
+            expected_end = (
+                build_tournament_ended_without_champion_record(
+                    reason_code=NO_ELIGIBLE_FINALIST_REASON
+                )
+                if finalists_disqualified
+                else build_tournament_ended_without_champion_record()
+            )
+            if not finalists_disqualified and (
+                playoff_seeds or playoff_fixtures or playoff_series
+            ):
                 raise TournamentStateError(
                     "Tournament ended without a Tournament Champion while eligible "
                     "Teams remain"
                 )
-            if record != build_tournament_ended_without_champion_record():
+            if record != expected_end:
                 raise TournamentStateError(
                     "Tournament end without a Tournament Champion is non-canonical"
                 )
@@ -344,7 +486,7 @@ def fold_tournament_state(
             if (
                 not _qualifying_series_resolved(series, disqualified_team_ids)
                 or pending_security_ruling is not None
-                or pending_administrative_records
+                or pending_transition_records
             ):
                 raise TournamentStateError(
                     "Playoff bracket was created before the Qualifying Phase completed"
@@ -509,7 +651,7 @@ def fold_tournament_state(
     if (
         selected_index is None
         or pending_security_ruling is not None
-        or pending_administrative_records
+        or pending_transition_records
     ):
         next_match = None
     else:
@@ -525,10 +667,18 @@ def fold_tournament_state(
         manifest, series, disqualified_team_ids=disqualified_team_ids
     )
     playoff_fixtures, playoff_series = _resolve_final_if_ready(
-        playoff_fixtures, playoff_series, playoff_seeds
+        playoff_fixtures,
+        playoff_series,
+        playoff_seeds,
+        replaced_final_sources=replaced_final_sources,
     )
     next_playoff_match: Optional[PlayoffMatch] = None
-    if playoff_bracket_created and current_playoff_index < len(playoff_series):
+    if (
+        playoff_bracket_created
+        and pending_security_ruling is None
+        and not pending_transition_records
+        and current_playoff_index < len(playoff_series)
+    ):
         fixture = playoff_fixtures[current_playoff_index]
         assert fixture.team_ids[0] is not None
         assert fixture.team_ids[1] is not None
@@ -552,7 +702,7 @@ def fold_tournament_state(
         ended_without_champion,
         tuple(sorted(disqualified_team_ids)),
         pending_security_ruling,
-        tuple(_frozen_record(record) for record in pending_administrative_records),
+        tuple(_frozen_record(record) for record in pending_transition_records),
     )
 
 
@@ -579,20 +729,44 @@ def build_sole_eligible_champion_record(team_id: str) -> dict[str, Any]:
     }
 
 
-def build_tournament_ended_without_champion_record() -> dict[str, Any]:
+def build_tournament_ended_without_champion_record(
+    *, reason_code: str = NO_ELIGIBLE_TEAMS_REASON
+) -> dict[str, Any]:
     """End without a Tournament Champion, distinct from operator abort."""
 
+    if reason_code not in {
+        NO_ELIGIBLE_TEAMS_REASON,
+        NO_ELIGIBLE_FINALIST_REASON,
+    }:
+        raise ValueError("Tournament end reason code is not canonical")
     return {
         "type": "tournament_ended_without_champion",
         "phase": Phase.PLAYOFF.value,
-        "reason_code": NO_ELIGIBLE_TEAMS_REASON,
+        "reason_code": reason_code,
     }
+
+
+def _all_finalists_disqualified(
+    fixtures: tuple[PlayoffFixtureDefinition, ...],
+    disqualified_team_ids: set[str],
+) -> bool:
+    final = next(
+        (fixture for fixture in fixtures if fixture.stage is PlayoffStage.FINAL),
+        None,
+    )
+    return (
+        final is not None
+        and None not in final.team_ids
+        and set(final.team_ids) <= disqualified_team_ids
+    )
 
 
 def _resolve_final_if_ready(
     fixtures: tuple[PlayoffFixtureDefinition, ...],
     series: list[Series],
     seeds: tuple[PlayoffSeed, ...],
+    *,
+    replaced_final_sources: set[str],
 ) -> tuple[tuple[PlayoffFixtureDefinition, ...], list[Series]]:
     semifinals = tuple(
         fixture
@@ -607,31 +781,42 @@ def _resolve_final_if_ready(
         ),
         None,
     )
-    if (
-        final is None
-        or len(series) > len(semifinals)
-        or len(series) != len(semifinals)
-        or not all(item.is_complete for item in series)
-    ):
+    if final is None or len(series) > len(semifinals) or len(series) != len(semifinals):
         return fixtures, series
-    winners = iter(item.winner for item in series)
-    finalists = tuple(
-        team_id if team_id is not None else next(winners)
-        for team_id in final.team_ids
+    finalists = list(final.team_ids)
+    for semifinal_index, (semifinal, item) in enumerate(zip(semifinals, series)):
+        position = (
+            semifinal_index
+            if len(semifinals) == 2
+            else next(
+                index for index, team_id in enumerate(final.team_ids)
+                if team_id is None
+            )
+        )
+        if (
+            finalists[position] is None
+            and item.is_complete
+            and semifinal.fixture_id not in replaced_final_sources
+        ):
+            finalists[position] = item.winner
+    resolved_fixture = replace(final, team_ids=(finalists[0], finalists[1]))
+    final_index = fixtures.index(final)
+    fixtures = (
+        fixtures[:final_index] + (resolved_fixture,) + fixtures[final_index + 1 :]
     )
+    if not all(item.is_complete for item in series):
+        return fixtures, series
     if finalists[0] is None or finalists[1] is None:
         return fixtures, series
     seed_by_team = {seed.team_id: seed.seed for seed in seeds}
-    resolved_fixture = replace(final, team_ids=finalists)
     final_series = Series(
         finalists[0],
         finalists[1],
         Phase.PLAYOFF,
         higher_seed_team_id=min(finalists, key=seed_by_team.__getitem__),
     )
-    final_index = fixtures.index(final)
     return (
-        fixtures[:final_index] + (resolved_fixture,) + fixtures[final_index + 1 :],
+        fixtures,
         series + [final_series],
     )
 
@@ -643,6 +828,18 @@ def _completed_final_winner(
     if not fixtures or fixtures[-1].stage is not PlayoffStage.FINAL or not series:
         return None
     final_fixture = fixtures[-1]
+    competitors = tuple(
+        team_id for team_id in final_fixture.team_ids if team_id is not None
+    )
+    semifinal_count = sum(
+        fixture.stage is PlayoffStage.SEMIFINAL for fixture in fixtures
+    )
+    if (
+        len(competitors) == 1
+        and len(series) == semifinal_count
+        and all(item.is_complete for item in series)
+    ):
+        return competitors[0]
     final_series = series[-1]
     if (
         None in final_fixture.team_ids
@@ -734,6 +931,7 @@ def build_security_violation_suspected_record(
     evidence_link: str,
     suspected_team_id: Optional[str] = None,
     suspected_team_ids: tuple[str, ...] = (),
+    phase: Phase = Phase.QUALIFYING,
 ) -> dict[str, Any]:
     """Build the minimum canonical fact needed to recover a pending ruling."""
 
@@ -753,7 +951,7 @@ def build_security_violation_suspected_record(
         raise ValueError("A suspected Security Violation requires an evidence link")
     record = {
         "type": "security_violation_suspected",
-        "phase": Phase.QUALIFYING.value,
+        "phase": phase.value,
         "fixture_id": fixture_id,
         "match_id": match_id,
         "match_ordinal": match_ordinal,
@@ -800,7 +998,7 @@ def build_security_violation_ruling_record(
         raise ValueError("Ruling Team is not pending attribution")
     return {
         "type": "security_violation_ruling",
-        "phase": Phase.QUALIFYING.value,
+        "phase": pending.phase.value,
         "fixture_id": pending.fixture_id,
         "match_id": pending.match_id,
         "suspected_team_id": suspected_team_id,
@@ -833,6 +1031,8 @@ def _pending_security_ruling(
     record: Mapping[str, Any],
     fixture: _FixtureDefinition,
     match_ordinal: int,
+    *,
+    phase: Phase,
 ) -> PendingSecurityRuling:
     expected_fields = {
         "type",
@@ -858,7 +1058,7 @@ def _pending_security_ruling(
     expected_match_id = f"{fixture.fixture_id}-match-{match_ordinal}"
     if (
         set(record) != expected_fields
-        or record.get("phase") != Phase.QUALIFYING.value
+        or record.get("phase") != phase.value
         or record.get("fixture_id") != fixture.fixture_id
         or record.get("match_id") != expected_match_id
         or record.get("match_ordinal") != match_ordinal
@@ -884,6 +1084,7 @@ def _pending_security_ruling(
         fixture.team_ids,
         suspected_team_ids,
         evidence_link,
+        phase,
     )
 
 
@@ -952,6 +1153,98 @@ def _administrative_records_for_disqualifications(
             }
         )
     return records
+
+
+def _playoff_records_for_disqualification(
+    fixtures: tuple[PlayoffFixtureDefinition, ...],
+    series: list[Series],
+    disqualified_team_id: str,
+    disqualified_team_ids: set[str],
+    ruling_match_id: str,
+) -> list[dict[str, Any]]:
+    """Derive the required post-Bracket-Lock transition for one ruling."""
+
+    playable_fixtures = [
+        fixture for fixture in fixtures if None not in fixture.team_ids
+    ]
+    for fixture, item in zip(playable_fixtures, series):
+        if item.is_complete or disqualified_team_id not in fixture.team_ids:
+            continue
+        opponent = next(
+            team_id
+            for team_id in fixture.team_ids
+            if team_id != disqualified_team_id
+        )
+        if opponent in disqualified_team_ids:
+            return []
+        return [
+            {
+                "type": "administrative_series_win",
+                "phase": Phase.PLAYOFF.value,
+                "fixture_id": fixture.fixture_id,
+                "team_ids": list(fixture.team_ids),
+                "winner_team_id": opponent,
+                "disqualified_team_id": disqualified_team_id,
+                "reason_code": "opponent_disqualified",
+                "ruling_match_id": ruling_match_id,
+            }
+        ]
+    final = next(
+        (fixture for fixture in fixtures if fixture.stage is PlayoffStage.FINAL),
+        None,
+    )
+    if final is None or disqualified_team_id not in final.team_ids:
+        return []
+    if (
+        ruling_match_id.startswith(f"{final.fixture_id}-match-")
+        and set(final.team_ids) <= disqualified_team_ids
+    ):
+        # The final already began, so no eliminated Team may be reinstated.
+        return []
+    final_series = next(
+        (
+            item
+            for item in series
+            if {item.team_one_id, item.team_two_id} == set(final.team_ids)
+        ),
+        None,
+    )
+    if final_series is not None and final_series.match_count > 0:
+        return []
+    for fixture, item in zip(
+        (value for value in fixtures if value.stage is PlayoffStage.SEMIFINAL),
+        series,
+    ):
+        if item.winner != disqualified_team_id:
+            continue
+        reinstated = next(
+            (
+                team_id
+                for team_id in (item.team_one_id, item.team_two_id)
+                if team_id != disqualified_team_id
+                and team_id not in disqualified_team_ids
+            ),
+            None,
+        )
+        after = [
+            reinstated if team_id == disqualified_team_id else team_id
+            for team_id in final.team_ids
+        ]
+        return [
+            {
+                "type": "playoff_bracket_position_replaced",
+                "phase": Phase.PLAYOFF.value,
+                "fixture_id": final.fixture_id,
+                "team_ids_before": list(final.team_ids),
+                "team_ids_after": after,
+                "disqualified_team_id": disqualified_team_id,
+                "reinstated_team_id": reinstated,
+                "source_fixture_id": fixture.fixture_id,
+                "reason_code": "disqualified_advancer",
+                "ruling_match_id": ruling_match_id,
+            }
+        ]
+    return []
 
 
 def _calculate_standings(

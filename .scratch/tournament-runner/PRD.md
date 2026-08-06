@@ -8,7 +8,7 @@ Implementation status: in progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 174 passing tests under the repository's
+The implemented foundation is covered by 181 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
@@ -74,8 +74,9 @@ shape.
   expose an end-to-end CLI `--all` route while preserving `--all-qualification`.
 - [x] Pause a qualifying Match Attempt on a suspected Security Violation, retain
   raw evidence in Operational Telemetry, and reconstruct the pending ruling from
-  a canonical opaque evidence link under Competition Record schema version 2.
-- [x] Confirm or reject qualifying attribution through attributable closed-code
+  a canonical opaque evidence link. Phase-aware incident, ruling, and playoff
+  transition records use Competition Record schema version 3.
+- [x] Confirm or reject attribution through attributable closed-code
   organizer rulings; confirmed rulings canonically Disqualify the Team and add
   ordered Administrative Series Wins, while rejected rulings retry the identical
   Match under the existing absolute Match Attempt policy.
@@ -87,19 +88,22 @@ shape.
   through canonical records, authoritative folding, scheduling, projection,
   recovery, and CLI `--all`, without emitting Bracket Lock or executing a Match
   for the no-Match outcomes.
+- [x] Pause and recover playoff Security Violation incidents, retry rejected
+  semifinal and final attribution with absolute Match Attempt ordinals, and fold
+  confirmed post-Bracket-Lock Disqualifications into canonical Administrative
+  Series Wins, finalist advancement, bracket-position replacement or vacancy,
+  Tournament Champion declaration, or the canonical no-champion outcome when
+  both finalists are sequentially disqualified, without reseeding or synthetic
+  Matches.
+- [x] Rebuild playoff eligibility, pending review, Administrative Series Wins,
+  resolved final competitors, bracket-position replacement, subsequent
+  scheduling, and completion in the Scoreboard Projection without exposing raw
+  Security Violation evidence or diagnostics.
 
 ### Partially complete
 
-- [ ] Apply Disqualifications through every Playoff Phase state. Qualification is
-  integrated through the Tournament Runner; post-Bracket-Lock advancement and
-  reinstatement remain pure domain behavior.
-- [ ] Complete the Scoreboard Projection. Qualifying scheduling, Match progress,
-  standings, retries, qualifying Security Violation state, Disqualification,
-  Administrative Series Wins, recovery, Bracket Lock, the standard final, and
-  Tournament Champion are projected across standard and reduced brackets;
-  playoff Disqualification views remain.
 - [ ] Complete operator execution controls. Step Mode, infrastructure pause, and
-  qualifying Security Violation confirmation/rejection exist; explicit start,
+  Security Violation confirmation/rejection exist; explicit start,
   requested pause, abort, mode switching, and record-restoration commands remain.
 - [ ] Verify maximum capacity end to end. Schedule generation covers the
   thirty-two-Team roster, but the full 1,497-Match/449,100-Round Tournament and
@@ -109,9 +113,6 @@ shape.
 
 - [ ] Implement Continuous Mode, configured parallel Match execution, canonical
   commit ordering under concurrency, and boundary-only mode switching.
-- [ ] Extend Security Violation rulings and Disqualification scheduling through
-  every Playoff Phase state, including advancement and reinstatement after
-  Bracket Lock.
 - [ ] Implement Tournament abort through the Tournament Runner.
 - [ ] Implement hash-verified Competition Record restoration from backup.
 - [ ] Add the published capacity/preflight benchmark suite.
@@ -120,8 +121,8 @@ shape.
 
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
-| Complete | 1–18, 23–28 | Implemented and covered at the creation, domain, Match, storage, Step Mode, and recovery seams. |
-| Partial | 19–22, 29–30, 32, 34 | Core rules or qualifying integration exists; playoff Disqualification, projection coverage, broader controls, or capacity verification remains. |
+| Complete | 1–29 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, playoff Disqualification, and projection seams. |
+| Partial | 30, 32, 34 | Step Mode and attributable rulings exist; broader controls and full capacity verification remain. |
 | Not started | 31, 33, 35 | Continuous Mode controls, abort, and capacity benchmarks remain. |
 
 ## Problem Statement

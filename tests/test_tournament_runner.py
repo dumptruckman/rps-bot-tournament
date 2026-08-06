@@ -148,7 +148,7 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(manifest["tournament_seed"], "123456789")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["seed_derivation_version"], 1)
-        self.assertEqual(manifest["record_schema_version"], 2)
+        self.assertEqual(manifest["record_schema_version"], 3)
         self.assertEqual(manifest["scoreboard_version"], 1)
         self.assertEqual(manifest["scheduled_turns_per_match"], 300)
         self.assertEqual(manifest["execution_mode"], "step")
@@ -534,7 +534,7 @@ class TournamentCreationTests(unittest.TestCase):
                 },
             )
             self.assertEqual(manifest["protocol_version"], 1)
-            self.assertEqual(manifest["record_schema_version"], 2)
+            self.assertEqual(manifest["record_schema_version"], 3)
             self.assertEqual(manifest["seed_derivation_version"], 1)
             self.assertEqual(manifest["scoreboard_version"], 1)
             self.assertEqual(
@@ -2264,7 +2264,7 @@ class TournamentStepModeTests(unittest.TestCase):
         self.assertEqual(incidents[0], incidents[1])
         self.assertNotEqual(telemetry_values[0], telemetry_values[1])
 
-    def test_playoff_suspicion_never_appends_a_qualifying_incident(self) -> None:
+    def test_playoff_suspicion_pauses_and_survives_projection_rebuild(self) -> None:
         runner = self._runner_at_playoffs(
             lambda request: MatchExecutionResult(
                 infrastructure_failure=False,
@@ -2275,18 +2275,34 @@ class TournamentStepModeTests(unittest.TestCase):
             )
         )
 
-        with self.assertRaisesRegex(
-            NotImplementedError, "Playoff Security Violation"
-        ):
-            runner.play_next_match()
+        incident = runner.play_next_match()
 
         records = load_competition_records(self.directory)
-        self.assertEqual(records[-1].record["type"], "playoff_bracket_locked")
-        self.assertNotIn(
-            "security_violation_suspected",
-            [record.record["type"] for record in records],
+        self.assertEqual(incident.record["phase"], "playoff")
+        self.assertEqual(
+            incident.record["fixture_id"], "playoff-semifinal-1"
         )
-        fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertEqual(records[-1], incident)
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertEqual(
+            state.pending_security_ruling.match_id, incident.record["match_id"]
+        )
+        self.assertIsNone(state.next_playoff_match)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "awaiting_security_ruling")
+        self.assertNotIn("evidence", str(projection))
+
+        write_scoreboard_projection(self.directory, {"status": "stale"})
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Recovery must not execute a Match while a ruling is pending"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        self.assertEqual(reopened.status, "awaiting_security_ruling")
+        with self.assertRaises(SecurityRulingRequiredError):
+            reopened.play_next_match()
 
     def test_rejected_attribution_retries_identical_match_with_absolute_attempt(
         self,
@@ -2327,6 +2343,68 @@ class TournamentStepModeTests(unittest.TestCase):
         self.assertEqual([request.attempt_number for request in requests], [1, 2])
         first = requests[0].__dict__ | {"attempt_number": 0}
         self.assertEqual(requests[1].__dict__ | {"attempt_number": 0}, first)
+
+    def test_rejected_playoff_attribution_retries_semifinal_and_final(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+        suspected_fixtures: set[str] = set()
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            if request.fixture_id not in suspected_fixtures:
+                suspected_fixtures.add(request.fixture_id)
+                return MatchExecutionResult(
+                    infrastructure_failure=False,
+                    competitive_outcome=None,
+                    operational_telemetry={"raw_security_evidence": "variable"},
+                    suspected_security_violation_team_id=request.team_a_id,
+                    evidence_link=f"evidence:playoff-retry/{request.match_id}",
+                )
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        runner = self._runner_at_playoffs(execute)
+        for fixture_id in ("playoff-semifinal-1", "playoff-semifinal-2"):
+            incident = runner.play_next_match()
+            runner.reject_security_violation(organizer_id="organizer-retry")
+            terminal = runner.play_next_match()
+            self.assertEqual(incident.record["fixture_id"], fixture_id)
+            self.assertEqual(terminal.record["match_id"], incident.record["match_id"])
+            while True:
+                state = fold_tournament_state(
+                    load_manifest(self.directory).manifest,
+                    load_competition_records(self.directory),
+                )
+                if state.next_playoff_match.fixture_id != fixture_id:
+                    break
+                runner.play_next_match()
+
+        incident = runner.play_next_match()
+        runner.reject_security_violation(organizer_id="organizer-retry")
+        terminal = runner.play_next_match()
+        self.assertEqual(terminal.record["match_id"], incident.record["match_id"])
+
+        retried = [
+            request
+            for request in requests
+            if request.match_id in {
+                "playoff-semifinal-1-match-1",
+                "playoff-semifinal-2-match-1",
+                "playoff-final-match-1",
+            }
+        ]
+        self.assertEqual(
+            [(request.match_id, request.attempt_number) for request in retried],
+            [
+                ("playoff-semifinal-1-match-1", 1),
+                ("playoff-semifinal-1-match-1", 2),
+                ("playoff-semifinal-2-match-1", 1),
+                ("playoff-semifinal-2-match-1", 2),
+                ("playoff-final-match-1", 1),
+                ("playoff-final-match-1", 2),
+            ],
+        )
 
     def test_confirmed_violation_disqualifies_and_canonically_skips_fixtures(
         self,
@@ -2383,6 +2461,356 @@ class TournamentStepModeTests(unittest.TestCase):
             {"winner_team_id": "delta", "reason_code": "opponent_disqualified"},
         )
         self.assertEqual(ruling.record["organizer_id"], "organizer-9")
+
+    def test_confirmed_playoff_semifinal_violation_awards_and_advances_opponent(
+        self,
+    ) -> None:
+        attempts: list[MatchExecutionRequest] = []
+
+        def suspect(request: MatchExecutionRequest) -> MatchExecutionResult:
+            attempts.append(request)
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link="evidence:playoff-confirmed/semifinal",
+            )
+
+        runner = self._runner_at_playoffs(suspect)
+        incident = runner.play_next_match()
+        disqualified = incident.record["suspected_team_id"]
+        opponent = next(
+            team_id for team_id in incident.record["team_ids"]
+            if team_id != disqualified
+        )
+        runner.confirm_security_violation(organizer_id="organizer-playoff")
+
+        records = load_competition_records(self.directory)
+        self.assertEqual(records[-1].record, {
+            "type": "administrative_series_win",
+            "phase": "playoff",
+            "fixture_id": "playoff-semifinal-1",
+            "team_ids": incident.record["team_ids"],
+            "winner_team_id": opponent,
+            "disqualified_team_id": disqualified,
+            "reason_code": "opponent_disqualified",
+            "ruling_match_id": incident.record["match_id"],
+        })
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertEqual(state.playoff_series[0].winner, opponent)
+        self.assertEqual(state.next_playoff_match.fixture_id, "playoff-semifinal-2")
+        self.assertEqual(len(attempts), 1)
+        projection = load_scoreboard_projection(self.directory)
+        first = projection["bracket"]["fixtures"][0]
+        self.assertEqual(first["status"], "complete")
+        self.assertEqual(
+            first["administrative_series_win"]["winner_team_id"], opponent
+        )
+
+    def test_confirmed_playoff_final_violation_declares_remaining_finalist(
+        self,
+    ) -> None:
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            if request.fixture_id.startswith("playoff-semifinal"):
+                return executor_result(
+                    request,
+                    winner_team_id=min(request.team_a_id, request.team_b_id),
+                )
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link="evidence:playoff-confirmed/final",
+            )
+
+        runner = self._runner_at_playoffs(execute)
+        while True:
+            state = fold_tournament_state(
+                load_manifest(self.directory).manifest,
+                load_competition_records(self.directory),
+            )
+            if state.next_playoff_match.fixture_id == "playoff-final":
+                break
+            runner.play_next_match()
+        incident = runner.play_next_match()
+        disqualified = incident.record["suspected_team_id"]
+        champion = next(
+            team_id for team_id in incident.record["team_ids"]
+            if team_id != disqualified
+        )
+        runner.confirm_security_violation(organizer_id="organizer-final")
+
+        records = load_competition_records(self.directory)
+        self.assertEqual(
+            [record.record["type"] for record in records[-2:]],
+            ["administrative_series_win", "tournament_champion_declared"],
+        )
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertEqual(state.champion_team_id, champion)
+        self.assertEqual(state.playoff_series[-1].winner, champion)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "complete")
+        self.assertEqual(projection["champion"], champion)
+        self.assertEqual(
+            projection["bracket"]["fixtures"][-1]["administrative_series_win"],
+            {"winner_team_id": champion, "reason_code": "opponent_disqualified"},
+        )
+
+    def test_confirming_both_finalists_never_declares_disqualified_champion(
+        self,
+    ) -> None:
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            if request.fixture_id.startswith("playoff-semifinal"):
+                return executor_result(
+                    request,
+                    winner_team_id=min(request.team_a_id, request.team_b_id),
+                )
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={},
+                suspected_security_violation_team_ids=(
+                    request.team_a_id,
+                    request.team_b_id,
+                ),
+                evidence_link="evidence:playoff-confirmed/both-finalists",
+            )
+
+        runner = self._runner_at_playoffs(execute)
+        while True:
+            state = fold_tournament_state(
+                load_manifest(self.directory).manifest,
+                load_competition_records(self.directory),
+            )
+            if state.next_playoff_match.fixture_id == "playoff-final":
+                break
+            runner.play_next_match()
+        incident = runner.play_next_match()
+        first, second = incident.record["suspected_team_ids"]
+        runner.confirm_security_violation(
+            organizer_id="organizer-finalists", team_id=first
+        )
+        runner.confirm_security_violation(
+            organizer_id="organizer-finalists", team_id=second
+        )
+
+        records = load_competition_records(self.directory)
+        self.assertEqual(
+            records[-1].record,
+            {
+                "type": "tournament_ended_without_champion",
+                "phase": "playoff",
+                "reason_code": "all_finalists_disqualified",
+            },
+        )
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertTrue(state.ended_without_champion)
+        self.assertIsNone(state.champion_team_id)
+        self.assertEqual(set(state.disqualified_team_ids), {first, second})
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "complete")
+        self.assertIsNone(projection["champion"])
+        self.assertEqual(
+            projection["completion_reason"], "all_finalists_disqualified"
+        )
+
+    def test_two_team_playoff_incident_resolves_sequentially_without_reseeding(
+        self,
+    ) -> None:
+        def suspect_both(request: MatchExecutionRequest) -> MatchExecutionResult:
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_ids=(
+                    request.team_a_id,
+                    request.team_b_id,
+                ),
+                evidence_link="evidence:playoff-confirmed/both",
+            )
+
+        runner = self._runner_at_playoffs(suspect_both)
+        incident = runner.play_next_match()
+        first, second = incident.record["suspected_team_ids"]
+        runner.confirm_security_violation(
+            organizer_id="organizer-both", team_id=first
+        )
+        interim = fold_tournament_state(
+            load_manifest(self.directory).manifest,
+            load_competition_records(self.directory),
+        )
+        self.assertEqual(interim.pending_security_ruling.suspected_team_ids, (second,))
+        runner.confirm_security_violation(
+            organizer_id="organizer-both", team_id=second
+        )
+
+        records = load_competition_records(self.directory)
+        replacement = records[-1].record
+        self.assertEqual(replacement["type"], "playoff_bracket_position_replaced")
+        self.assertEqual(replacement["disqualified_team_id"], second)
+        self.assertIsNone(replacement["reinstated_team_id"])
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertEqual(set(state.disqualified_team_ids), {first, second})
+        self.assertEqual(state.next_playoff_match.fixture_id, "playoff-semifinal-2")
+
+        runner.match_executor = lambda request: executor_result(
+            request,
+            winner_team_id=min(request.team_a_id, request.team_b_id),
+        )
+        runner.play_next_match()
+        runner.play_next_match()
+        completed = fold_tournament_state(
+            load_manifest(self.directory).manifest,
+            load_competition_records(self.directory),
+        )
+        self.assertIsNotNone(completed.champion_team_id)
+        self.assertNotIn(completed.champion_team_id, {first, second})
+        projection = load_scoreboard_projection(self.directory)
+        final = projection["bracket"]["fixtures"][-1]
+        self.assertEqual(final["team_ids"].count(None), 1)
+        self.assertEqual(final["status"], "complete")
+        self.assertEqual(
+            final["bracket_position_replacement"]["reinstated_team_id"], None
+        )
+        (self.directory / "scoreboard.json").unlink()
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Projection rebuild must not execute a Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        self.assertEqual(load_scoreboard_projection(self.directory), projection)
+
+    def test_open_finishes_interrupted_playoff_disqualification_transitions(
+        self,
+    ) -> None:
+        runner = self._runner_at_playoffs(
+            lambda request: MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_ids=(
+                    request.team_a_id,
+                    request.team_b_id,
+                ),
+                evidence_link="evidence:playoff-recovery/both",
+            )
+        )
+        incident = runner.play_next_match()
+        first, second = incident.record["suspected_team_ids"]
+
+        def interrupt_admin(directory: Path, record: dict[str, object]) -> object:
+            if record.get("type") == "administrative_series_win":
+                raise RuntimeError(
+                    "interrupted before playoff Administrative Series Win"
+                )
+            return append_competition_record(directory, record)
+
+        with patch(
+            "rps_runner.tournament.runner.append_competition_record",
+            side_effect=interrupt_admin,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Administrative Series Win"):
+                runner.confirm_security_violation(
+                    organizer_id="organizer-recovery", team_id=first
+                )
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Recovery must not execute a Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        self.assertEqual(
+            load_competition_records(self.directory)[-1].record["type"],
+            "administrative_series_win",
+        )
+
+        def interrupt_replacement(directory: Path, record: dict[str, object]) -> object:
+            if record.get("type") == "playoff_bracket_position_replaced":
+                raise RuntimeError("interrupted before bracket replacement")
+            return append_competition_record(directory, record)
+
+        with patch(
+            "rps_runner.tournament.runner.append_competition_record",
+            side_effect=interrupt_replacement,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "bracket replacement"):
+                runner.confirm_security_violation(
+                    organizer_id="organizer-recovery", team_id=second
+                )
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Recovery must not execute a Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        recovered = load_competition_records(self.directory)
+        self.assertEqual(
+            recovered[-1].record["type"],
+            "playoff_bracket_position_replaced",
+        )
+        self.assertEqual(
+            fold_tournament_state(load_manifest(self.directory).manifest, recovered)
+            .next_playoff_match.fixture_id,
+            "playoff-semifinal-2",
+        )
+
+    def test_fold_rejects_noncanonical_playoff_security_histories(self) -> None:
+        runner = self._runner_at_playoffs(
+            lambda request: MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link="evidence:playoff-invalid/incident",
+            )
+        )
+        runner.play_next_match()
+        manifest_value = load_manifest(self.directory).manifest
+        records = load_competition_records(self.directory)
+        prefix, incident = records[:-1], records[-1]
+        mutations = {
+            "phase": lambda record: record.update(phase="qualifying"),
+            "Fixture": lambda record: record.update(fixture_id="playoff-semifinal-2"),
+            "Match": lambda record: record.update(
+                match_id="playoff-semifinal-1-match-2"
+            ),
+            "Team": lambda record: record.update(suspected_team_id="not-a-competitor"),
+        }
+        for expected, mutate in mutations.items():
+            with self.subTest(expected=expected):
+                value = thaw_json(incident.record)
+                mutate(value)
+                invalid = StoredCompetitionRecord(incident.sequence, value, "invalid")
+                with self.assertRaisesRegex(TournamentStateError, "canonical Match"):
+                    fold_tournament_state(manifest_value, prefix + [invalid])
+
+        duplicate = StoredCompetitionRecord(
+            incident.sequence + 1, thaw_json(incident.record), "duplicate"
+        )
+        with self.assertRaisesRegex(TournamentStateError, "already awaiting"):
+            fold_tournament_state(manifest_value, records + [duplicate])
+
+        runner.confirm_security_violation(organizer_id="organizer-invalid")
+        confirmed = load_competition_records(self.directory)
+        administrative = confirmed[-1]
+        malformed = thaw_json(administrative.record)
+        malformed["winner_team_id"] = malformed["disqualified_team_id"]
+        with self.assertRaisesRegex(TournamentStateError, "canonical transition"):
+            fold_tournament_state(
+                manifest_value,
+                confirmed[:-1]
+                + [
+                    StoredCompetitionRecord(
+                        administrative.sequence, malformed, "invalid"
+                    )
+                ],
+            )
 
     def test_open_finishes_canonical_admin_records_after_confirmed_ruling(self) -> None:
         runner = TournamentRunner.create(

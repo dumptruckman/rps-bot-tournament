@@ -319,7 +319,7 @@ class TournamentStateFoldTests(unittest.TestCase):
         )
         ruled_prefix = fold_tournament_state(manifest(), (incident, ruling))
         with self.assertRaises(TypeError):
-            ruled_prefix.pending_administrative_records[0][
+            ruled_prefix.pending_transition_records[0][
                 "winner_team_id"
             ] = "gamma"
 
