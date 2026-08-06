@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -94,6 +96,7 @@ class MatchLimits:
 class TournamentConfig:
     execution_mode: str = "step"
     match_limits: MatchLimits = MatchLimits()
+    continuous_parallelism: int = 1
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,20 @@ class Team:
     team_id: str
     display_name: str
     bot_artifact: BotArtifactManifest
+
+
+@dataclass(frozen=True)
+class _ScheduledMatchAttempt:
+    fixture: dict[str, Any]
+    match_ordinal: int
+    request: MatchExecutionRequest
+
+
+@dataclass(frozen=True)
+class _CompletedMatchAttempt:
+    scheduled: _ScheduledMatchAttempt
+    result: Optional[MatchExecutionResult] = None
+    error: Optional[BaseException] = None
 
 
 @dataclass
@@ -366,24 +383,444 @@ class TournamentRunner:
         )
         committed: list[StoredCompetitionRecord] = []
         try:
-            while True:
-                record = self._play_next_match()
-                if record is None:
-                    self._set_lifecycle("paused")
-                    return tuple(committed)
-                if record.record["type"] == "security_violation_suspected":
-                    self._set_lifecycle("paused")
-                    return tuple(committed)
-                committed.append(record)
-                if self._pause_is_requested():
-                    self._set_lifecycle("paused", clear_pause=True)
-                    return tuple(committed)
+            parallelism = int(self._manifest.get("continuous_parallelism", 1))
+            if parallelism > 1:
+                with TournamentRunLock(self.tournament_directory):
+                    committed.extend(self._run_parallel_matches(parallelism))
+                self._set_lifecycle("paused", clear_pause=True)
+                return tuple(committed)
+            with TournamentRunLock(self.tournament_directory):
+                while True:
+                    record = self._play_next_match(run_lock_already_held=True)
+                    if record is None:
+                        self._set_lifecycle("paused")
+                        return tuple(committed)
+                    if record.record["type"] == "security_violation_suspected":
+                        self._set_lifecycle("paused")
+                        return tuple(committed)
+                    committed.append(record)
+                    if self._pause_is_requested():
+                        self._set_lifecycle("paused", clear_pause=True)
+                        return tuple(committed)
         except InfrastructureInterventionRequiredError:
             self._set_lifecycle("infrastructure_intervention")
             raise
         except BaseException:
             self._set_lifecycle("paused")
             raise
+
+    def _run_parallel_matches(
+        self, parallelism: int
+    ) -> tuple[StoredCompetitionRecord, ...]:
+        """Run independent Matches while publishing only the canonical prefix."""
+
+        records = load_competition_records(self.tournament_directory)
+        state = fold_tournament_state(self._manifest, records)
+        committed: list[StoredCompetitionRecord] = []
+        buffered: dict[str, _CompletedMatchAttempt] = {}
+        active: dict[Future[MatchExecutionResult], _ScheduledMatchAttempt] = {}
+        halt_scheduling = False
+        retrying_match_ids: set[str] = set()
+        deferred_error: Optional[BaseException] = None
+
+        with ThreadPoolExecutor(max_workers=parallelism) as executor:
+            while True:
+                records, state, prefix_error = self._commit_parallel_prefix(
+                    records, state, buffered, committed
+                )
+                if prefix_error is not None:
+                    halt_scheduling = True
+                    deferred_error = prefix_error
+                    if not active:
+                        if deferred_error is not None:
+                            raise deferred_error
+                        return tuple(committed)
+
+                if state.is_complete and not active:
+                    return tuple(committed)
+
+                if self._pause_is_requested():
+                    halt_scheduling = True
+
+                if not halt_scheduling and not retrying_match_ids:
+                    candidates = _runnable_matches(self._manifest, state)
+                    if (
+                        state.phase is Phase.PLAYOFF
+                        and candidates
+                        and not state.bracket_locked
+                    ):
+                        fixture, match_ordinal = candidates[0]
+                        match_id = (
+                            f"{fixture['fixture_id']}-match-{match_ordinal}"
+                        )
+                        bracket_lock_record = append_competition_record(
+                            self.tournament_directory,
+                            {
+                                "type": "playoff_bracket_locked",
+                                "phase": Phase.PLAYOFF.value,
+                                "fixture_id": fixture["fixture_id"],
+                                "match_id": match_id,
+                            },
+                        )
+                        records = records + [bracket_lock_record]
+                        state = fold_tournament_state(self._manifest, records)
+                        candidates = _runnable_matches(self._manifest, state)
+
+                    active_ids = {
+                        scheduled.request.match_id for scheduled in active.values()
+                    }
+                    active_team_ids = {
+                        team_id
+                        for scheduled in active.values()
+                        for team_id in (
+                            scheduled.request.team_a_id,
+                            scheduled.request.team_b_id,
+                        )
+                    }
+                    for fixture, match_ordinal in candidates:
+                        if len(active) >= parallelism:
+                            break
+                        match_id = (
+                            f"{fixture['fixture_id']}-match-{match_ordinal}"
+                        )
+                        if match_id in active_ids or match_id in buffered:
+                            continue
+                        fixture_team_ids = set(fixture["team_ids"])
+                        if not active_team_ids.isdisjoint(fixture_team_ids):
+                            continue
+                        request = _build_match_request(
+                            self._manifest,
+                            fixture,
+                            match_ordinal,
+                            attempt_number=_next_attempt_number(
+                                self.tournament_directory, match_id
+                            ),
+                        )
+                        scheduled = _ScheduledMatchAttempt(
+                            fixture, match_ordinal, request
+                        )
+                        if not self._claim_parallel_match_boundary():
+                            halt_scheduling = True
+                            break
+                        self._project_active_matches(
+                            records, tuple(active.values()) + (scheduled,)
+                        )
+                        self._record_match_attempt_start(request)
+                        active[executor.submit(self.match_executor, request)] = (
+                            scheduled
+                        )
+                        active_ids.add(match_id)
+                        active_team_ids.update(fixture_team_ids)
+                    self._project_active_matches(records, active.values())
+
+                if not active:
+                    if halt_scheduling:
+                        if deferred_error is not None:
+                            raise deferred_error
+                        return tuple(committed)
+                    if state.is_complete or not _runnable_matches(
+                        self._manifest, state
+                    ):
+                        return tuple(committed)
+                    raise AssertionError("Runnable Matches could not be scheduled")
+
+                done, _pending = wait(active, return_when=FIRST_COMPLETED)
+                for future in done:
+                    scheduled = active.pop(future)
+                    retrying_match_ids.discard(scheduled.request.match_id)
+                    try:
+                        execution_result = future.result()
+                    except BaseException as error:
+                        buffered[scheduled.request.match_id] = _CompletedMatchAttempt(
+                            scheduled, error=error
+                        )
+                        halt_scheduling = True
+                        deferred_error = error
+                        continue
+
+                    if execution_result.infrastructure_failure:
+                        self._record_infrastructure_failure(
+                            scheduled.request, execution_result
+                        )
+                        if scheduled.request.attempt_number < 3:
+                            retry_request = _build_match_request(
+                                self._manifest,
+                                scheduled.fixture,
+                                scheduled.match_ordinal,
+                                attempt_number=scheduled.request.attempt_number + 1,
+                            )
+                            retry = _ScheduledMatchAttempt(
+                                scheduled.fixture,
+                                scheduled.match_ordinal,
+                                retry_request,
+                            )
+                            self._project_active_matches(
+                                records, tuple(active.values()) + (retry,)
+                            )
+                            self._record_match_attempt_start(retry_request)
+                            active[
+                                executor.submit(self.match_executor, retry_request)
+                            ] = retry
+                            retrying_match_ids.add(retry_request.match_id)
+                        else:
+                            buffered[scheduled.request.match_id] = _CompletedMatchAttempt(
+                                scheduled, result=execution_result
+                            )
+                            halt_scheduling = True
+                            deferred_error = (
+                                InfrastructureInterventionRequiredError(
+                                    scheduled.request.match_id,
+                                    scheduled.request.attempt_number,
+                                )
+                            )
+                        continue
+
+                    suspected_team_ids = _suspected_team_ids(execution_result)
+                    if suspected_team_ids:
+                        telemetry = dict(execution_result.operational_telemetry)
+                        telemetry.setdefault(
+                            "type", "security_violation_suspected"
+                        )
+                        telemetry.setdefault("match_id", scheduled.request.match_id)
+                        telemetry.setdefault(
+                            "attempt_number", scheduled.request.attempt_number
+                        )
+                        append_operational_telemetry(
+                            self.tournament_directory, telemetry
+                        )
+                    elif execution_result.operational_telemetry:
+                        append_operational_telemetry(
+                            self.tournament_directory,
+                            execution_result.operational_telemetry,
+                        )
+                    buffered[scheduled.request.match_id] = _CompletedMatchAttempt(
+                        scheduled, result=execution_result
+                    )
+                    if suspected_team_ids:
+                        halt_scheduling = True
+
+                self._project_active_matches(records, active.values())
+
+    def _record_match_attempt_start(self, request: MatchExecutionRequest) -> None:
+        append_operational_telemetry(
+            self.tournament_directory,
+            {
+                "type": "match_attempt_started",
+                "tournament_id": request.tournament_id,
+                "fixture_id": request.fixture_id,
+                "match_id": request.match_id,
+                "attempt_number": request.attempt_number,
+            },
+        )
+
+    def _record_infrastructure_failure(
+        self,
+        request: MatchExecutionRequest,
+        execution_result: MatchExecutionResult,
+    ) -> None:
+        telemetry = dict(execution_result.operational_telemetry)
+        telemetry.setdefault("type", "match_attempt_failed")
+        telemetry.setdefault("match_id", request.match_id)
+        telemetry.setdefault("attempt_number", request.attempt_number)
+        telemetry.setdefault("infrastructure_failure", True)
+        append_operational_telemetry(self.tournament_directory, telemetry)
+
+    def _commit_security_suspicion(
+        self,
+        records: list[StoredCompetitionRecord],
+        state: TournamentState,
+        fixture: dict[str, Any],
+        match_ordinal: int,
+        request: MatchExecutionRequest,
+        execution_result: MatchExecutionResult,
+        *,
+        telemetry_already_recorded: bool,
+    ) -> tuple[
+        StoredCompetitionRecord,
+        list[StoredCompetitionRecord],
+        TournamentState,
+    ]:
+        suspected_team_ids = _suspected_team_ids(execution_result)
+        fixture_team_ids = tuple(fixture["team_ids"])
+        if any(
+            team_id not in fixture_team_ids for team_id in suspected_team_ids
+        ):
+            raise ValueError(
+                "Suspected Security Violation Team does not compete in the "
+                "canonical Match"
+            )
+        if not telemetry_already_recorded:
+            telemetry = dict(execution_result.operational_telemetry)
+            telemetry.setdefault("type", "security_violation_suspected")
+            telemetry.setdefault("match_id", request.match_id)
+            telemetry.setdefault("attempt_number", request.attempt_number)
+            append_operational_telemetry(self.tournament_directory, telemetry)
+        suspicion = append_competition_record(
+            self.tournament_directory,
+            build_security_violation_suspected_record(
+                fixture_id=request.fixture_id,
+                match_id=request.match_id,
+                match_ordinal=match_ordinal,
+                team_ids=(fixture_team_ids[0], fixture_team_ids[1]),
+                suspected_team_ids=suspected_team_ids,
+                evidence_link=execution_result.evidence_link or "",
+                phase=state.phase,
+            ),
+        )
+        incident_records = records + [suspicion]
+        incident_state = fold_tournament_state(
+            self._manifest, incident_records
+        )
+        write_scoreboard_projection(
+            self.tournament_directory,
+            _projection_from_records(
+                self._manifest, incident_records, incident_state
+            ),
+        )
+        return suspicion, incident_records, incident_state
+
+    def _commit_terminal_result(
+        self,
+        records: list[StoredCompetitionRecord],
+        fixture: dict[str, Any],
+        match_ordinal: int,
+        request: MatchExecutionRequest,
+        execution_result: MatchExecutionResult,
+        *,
+        telemetry_already_recorded: bool,
+    ) -> tuple[
+        StoredCompetitionRecord,
+        list[StoredCompetitionRecord],
+        TournamentState,
+    ]:
+        result = _normalize_executor_result(execution_result, fixture)
+        if (
+            not telemetry_already_recorded
+            and execution_result.operational_telemetry
+        ):
+            append_operational_telemetry(
+                self.tournament_directory,
+                execution_result.operational_telemetry,
+            )
+        stored = append_competition_record(
+            self.tournament_directory,
+            _terminal_record(
+                request,
+                fixture,
+                match_ordinal,
+                result,
+                execution_result.competitive_outcome,
+            ),
+        )
+        all_records = records + [stored]
+        state_after_match = fold_tournament_state(
+            self._manifest, all_records
+        )
+        all_records, state_after_match = _commit_canonical_transitions_if_ready(
+            self.tournament_directory,
+            self._manifest,
+            all_records,
+            state_after_match,
+        )
+        write_scoreboard_projection(
+            self.tournament_directory,
+            _projection_from_records(
+                self._manifest, all_records, state_after_match
+            ),
+        )
+        return stored, all_records, state_after_match
+
+    def _project_active_matches(
+        self,
+        records: list[StoredCompetitionRecord],
+        active: Iterable[_ScheduledMatchAttempt],
+    ) -> None:
+        active_values = tuple(active)
+        self._set_match_active(bool(active_values))
+        projection = _projection_at_match_starts(
+            self._manifest,
+            records,
+            [scheduled.request for scheduled in active_values],
+        )
+        write_scoreboard_projection(self.tournament_directory, projection)
+
+    def _set_match_active(self, active: bool) -> None:
+        update_control_state(
+            self.tournament_directory,
+            lambda control: {**control, "match_active": active},
+        )
+
+    def _claim_parallel_match_boundary(self) -> bool:
+        """Claim one Match boundary unless a durable pause won the race."""
+
+        claimed = False
+
+        def claim(control: dict[str, Any]) -> dict[str, Any]:
+            nonlocal claimed
+            if control["pause_requested"]:
+                return control
+            control["match_active"] = True
+            claimed = True
+            return control
+
+        update_control_state(self.tournament_directory, claim)
+        return claimed
+
+    def _commit_parallel_prefix(
+        self,
+        records: list[StoredCompetitionRecord],
+        state: TournamentState,
+        buffered: dict[str, _CompletedMatchAttempt],
+        committed: list[StoredCompetitionRecord],
+    ) -> tuple[
+        list[StoredCompetitionRecord],
+        TournamentState,
+        Optional[BaseException],
+    ]:
+        while True:
+            selected = _select_next_match(self._manifest, state)
+            if selected is None:
+                return records, state, None
+            fixture, match_ordinal = selected
+            match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
+            completed = buffered.pop(match_id, None)
+            if completed is None:
+                return records, state, None
+            if completed.error is not None:
+                return records, state, completed.error
+            execution_result = completed.result
+            assert execution_result is not None
+            request = completed.scheduled.request
+            if execution_result.infrastructure_failure:
+                return (
+                    records,
+                    state,
+                    InfrastructureInterventionRequiredError(
+                        request.match_id, request.attempt_number
+                    ),
+                )
+            suspected_team_ids = _suspected_team_ids(execution_result)
+            if suspected_team_ids:
+                _suspicion, records, state = self._commit_security_suspicion(
+                    records,
+                    state,
+                    fixture,
+                    match_ordinal,
+                    request,
+                    execution_result,
+                    telemetry_already_recorded=True,
+                )
+                return records, state, None
+
+            stored, records, state = self._commit_terminal_result(
+                records,
+                fixture,
+                match_ordinal,
+                request,
+                execution_result,
+                telemetry_already_recorded=True,
+            )
+            committed.append(stored)
 
     def play_next_match(self) -> Optional[StoredCompetitionRecord]:
         """Execute one canonical Match for a Step Mode Tournament."""
@@ -489,8 +926,15 @@ class TournamentRunner:
             lambda control: {**control, "match_active": False},
         )
 
-    def _play_next_match(self) -> Optional[StoredCompetitionRecord]:
-        with TournamentRunLock(self.tournament_directory):
+    def _play_next_match(
+        self, *, run_lock_already_held: bool = False
+    ) -> Optional[StoredCompetitionRecord]:
+        lock = (
+            nullcontext()
+            if run_lock_already_held
+            else TournamentRunLock(self.tournament_directory)
+        )
+        with lock:
             if not self._claim_match_boundary():
                 return None
             try:
@@ -506,7 +950,7 @@ class TournamentRunner:
                 fixture, match_ordinal = selected
                 match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
                 if state.phase is Phase.PLAYOFF and not state.bracket_locked:
-                    lock = append_competition_record(
+                    bracket_lock_record = append_competition_record(
                         self.tournament_directory,
                         {
                             "type": "playoff_bracket_locked",
@@ -515,7 +959,7 @@ class TournamentRunner:
                             "match_id": match_id,
                         },
                     )
-                    records = records + [lock]
+                    records = records + [bracket_lock_record]
                 next_attempt_number = _next_attempt_number(
                     self.tournament_directory, match_id
                 )
@@ -536,74 +980,25 @@ class TournamentRunner:
                             self._manifest, records, request
                         ),
                     )
-                    append_operational_telemetry(
-                        self.tournament_directory,
-                        {
-                            "type": "match_attempt_started",
-                            "tournament_id": request.tournament_id,
-                            "fixture_id": request.fixture_id,
-                            "match_id": request.match_id,
-                            "attempt_number": attempt_number,
-                        },
-                    )
+                    self._record_match_attempt_start(request)
                     execution_result = self.match_executor(request)
-                    suspected_team_ids = (
-                        execution_result.suspected_security_violation_team_ids
-                        or (
-                            (execution_result.suspected_security_violation_team_id,)
-                            if execution_result.suspected_security_violation_team_id
-                            is not None
-                            else ()
-                        )
-                    )
+                    suspected_team_ids = _suspected_team_ids(execution_result)
                     if suspected_team_ids:
-                        fixture_team_ids = tuple(fixture["team_ids"])
-                        if any(
-                            team_id not in fixture_team_ids
-                            for team_id in suspected_team_ids
-                        ):
-                            raise ValueError(
-                                "Suspected Security Violation Team does not compete "
-                                "in the canonical Match"
+                        suspicion, _incident_records, _incident_state = (
+                            self._commit_security_suspicion(
+                                records,
+                                state,
+                                fixture,
+                                match_ordinal,
+                                request,
+                                execution_result,
+                                telemetry_already_recorded=False,
                             )
-                        telemetry = dict(execution_result.operational_telemetry)
-                        telemetry.setdefault("type", "security_violation_suspected")
-                        telemetry.setdefault("match_id", request.match_id)
-                        telemetry.setdefault("attempt_number", attempt_number)
-                        append_operational_telemetry(
-                            self.tournament_directory, telemetry
-                        )
-                        suspicion = append_competition_record(
-                            self.tournament_directory,
-                            build_security_violation_suspected_record(
-                                fixture_id=request.fixture_id,
-                                match_id=request.match_id,
-                                match_ordinal=match_ordinal,
-                                team_ids=(fixture_team_ids[0], fixture_team_ids[1]),
-                                suspected_team_ids=suspected_team_ids,
-                                evidence_link=execution_result.evidence_link or "",
-                                phase=state.phase,
-                            ),
-                        )
-                        incident_records = records + [suspicion]
-                        incident_state = fold_tournament_state(
-                            self._manifest, incident_records
-                        )
-                        write_scoreboard_projection(
-                            self.tournament_directory,
-                            _projection_from_records(
-                                self._manifest, incident_records, incident_state
-                            ),
                         )
                         return suspicion
                     if execution_result.infrastructure_failure:
-                        telemetry = dict(execution_result.operational_telemetry)
-                        telemetry.setdefault("type", "match_attempt_failed")
-                        telemetry.setdefault("match_id", request.match_id)
-                        telemetry.setdefault("attempt_number", attempt_number)
-                        telemetry.setdefault("infrastructure_failure", True)
-                        append_operational_telemetry(
-                            self.tournament_directory, telemetry
+                        self._record_infrastructure_failure(
+                            request, execution_result
                         )
                         if attempt_number < 3:
                             continue
@@ -615,41 +1010,15 @@ class TournamentRunner:
                             request.match_id, attempt_number
                         )
 
-                    result = _normalize_executor_result(
-                        execution_result, fixture
-                    )
-                    if execution_result.operational_telemetry:
-                        append_operational_telemetry(
-                            self.tournament_directory,
-                            execution_result.operational_telemetry,
-                        )
-                    stored = append_competition_record(
-                        self.tournament_directory,
-                        _terminal_record(
-                            request,
+                    stored, _all_records, _state_after_match = (
+                        self._commit_terminal_result(
+                            records,
                             fixture,
                             match_ordinal,
-                            result,
-                            execution_result.competitive_outcome,
-                        ),
-                    )
-                    all_records = records + [stored]
-                    state_after_match = fold_tournament_state(
-                        self._manifest, all_records
-                    )
-                    all_records, state_after_match = (
-                        _commit_canonical_transitions_if_ready(
-                            self.tournament_directory,
-                            self._manifest,
-                            all_records,
-                            state_after_match,
+                            request,
+                            execution_result,
+                            telemetry_already_recorded=False,
                         )
-                    )
-                    write_scoreboard_projection(
-                        self.tournament_directory,
-                        _projection_from_records(
-                            self._manifest, all_records, state_after_match
-                        ),
                     )
                     return stored
 
@@ -909,7 +1278,12 @@ def tournament_manifest_incompatibilities(
         sorted(
             field
             for field in set(sealed_manifest) | set(expected_payload)
-            if sealed_manifest.get(field) != expected_payload.get(field)
+            if (
+                sealed_manifest.get(field, 1)
+                if field == "continuous_parallelism"
+                else sealed_manifest.get(field)
+            )
+            != expected_payload.get(field)
         )
     )
 
@@ -939,6 +1313,7 @@ def _build_manifest_payload(
         "scoreboard_version": SCOREBOARD_VERSION,
         "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
         "execution_mode": config.execution_mode,
+        "continuous_parallelism": config.continuous_parallelism,
         "match_limits": _serialize_match_limits(config.match_limits),
         "series_format": "best_of_three",
         "rules": manifest_rules(),
@@ -984,6 +1359,13 @@ def _validate_tournament_config(config: TournamentConfig) -> None:
         raise TypeError("Tournament config must be a TournamentConfig")
     if config.execution_mode not in ("step", "continuous"):
         raise ValueError("Execution mode must be step or continuous")
+    if (
+        not isinstance(config.continuous_parallelism, int)
+        or isinstance(config.continuous_parallelism, bool)
+    ):
+        raise TypeError("Continuous Mode parallelism must be an integer")
+    if config.continuous_parallelism <= 0:
+        raise ValueError("Continuous Mode parallelism must be a positive integer")
     limits = config.match_limits
     if not isinstance(limits, MatchLimits):
         raise TypeError("Match limits must be a MatchLimits value")
@@ -1049,6 +1431,15 @@ def _verify_compatibility(manifest: dict[str, Any]) -> None:
         actual = manifest.get(field)
         if actual != expected:
             raise TournamentCompatibilityError(field, expected, actual)
+    parallelism = manifest.get("continuous_parallelism", 1)
+    if (
+        not isinstance(parallelism, int)
+        or isinstance(parallelism, bool)
+        or parallelism <= 0
+    ):
+        raise TournamentCompatibilityError(
+            "continuous_parallelism", "positive integer", parallelism
+        )
 
 
 def _verify_artifact_digests(
@@ -1173,6 +1564,58 @@ def _select_next_match(
                 "phase": Phase.PLAYOFF.value,
             }, selected.match_ordinal
     raise AssertionError("Folded state selected a Fixture outside the Manifest")
+
+
+def _runnable_matches(
+    manifest: dict[str, Any], state: TournamentState
+) -> list[tuple[dict[str, Any], int]]:
+    """Return schedule-ordered next Matches whose Series dependencies are met."""
+
+    if (
+        state.is_complete
+        or state.pending_security_ruling is not None
+        or state.pending_transition_records
+    ):
+        return []
+    disqualified = set(state.disqualified_team_ids)
+    runnable: list[tuple[dict[str, Any], int]] = []
+    if state.phase is Phase.QUALIFYING:
+        for fixture, series in zip(
+            _manifest_fixtures(manifest), state.qualifying_series
+        ):
+            if series.is_complete or set(fixture["team_ids"]) & disqualified:
+                continue
+            runnable.append((fixture, series.match_count + 1))
+        return runnable
+
+    for fixture, series in zip(state.playoff_fixtures, state.playoff_series):
+        if series.is_complete or None in fixture.team_ids:
+            continue
+        team_ids = (fixture.team_ids[0], fixture.team_ids[1])
+        if set(team_ids) & disqualified:
+            continue
+        runnable.append(
+            (
+                {
+                    "fixture_id": fixture.fixture_id,
+                    "team_ids": list(team_ids),
+                    "fixture_seed": str(fixture.fixture_seed),
+                    "phase": Phase.PLAYOFF.value,
+                },
+                series.match_count + 1,
+            )
+        )
+    return runnable
+
+
+def _suspected_team_ids(
+    execution_result: MatchExecutionResult,
+) -> tuple[str, ...]:
+    return execution_result.suspected_security_violation_team_ids or (
+        (execution_result.suspected_security_violation_team_id,)
+        if execution_result.suspected_security_violation_team_id is not None
+        else ()
+    )
 
 
 def _next_attempt_number(
@@ -1588,6 +2031,30 @@ def _projection_at_match_start(
             fixture["status"] = "active"
             fixture["active_match_id"] = request.match_id
             break
+    return projection
+
+
+def _projection_at_match_starts(
+    manifest: dict[str, Any],
+    records: list[StoredCompetitionRecord],
+    requests: Iterable[MatchExecutionRequest],
+) -> dict[str, Any]:
+    projection = _projection_from_records(manifest, records)
+    request_values = tuple(requests)
+    if not request_values:
+        return projection
+    projection["status"] = "running"
+    request_by_fixture = {
+        request.fixture_id: request for request in request_values
+    }
+    fixtures = projection["fixtures"] + projection.get("bracket", {}).get(
+        "fixtures", []
+    )
+    for fixture in fixtures:
+        request = request_by_fixture.get(fixture["fixture_id"])
+        if request is not None:
+            fixture["status"] = "active"
+            fixture["active_match_id"] = request.match_id
     return projection
 
 

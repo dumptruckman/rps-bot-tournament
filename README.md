@@ -329,24 +329,35 @@ The first invocation seals a new Tournament from the bundled `random_bot.py` and
 command again to verify and resume the sealed Tournament, skip committed Matches,
 and execute the next unresolved canonical Match.
 
-To advance until every implemented Qualifying Phase Fixture is complete, run:
+To advance through the Playoff Phase and Tournament Champion declaration, run:
 
 ```text
 rps-tournament demo \
   --directory results/demo-tournament \
   --seed 12345 \
-  --all-qualification
+  --all
 ```
 
-The Tournament Runner does not yet orchestrate the Playoff Phase, so completing
-qualification does not declare a Tournament Champion. The command prints current
-standings and leaves these artifacts available for inspection:
+Continuous Mode can execute independent Matches concurrently while retaining
+canonical Competition Record order. The worker limit is sealed at creation and
+defaults to one:
 
-- Sealed Tournament Manifest: `results/demo-tournament/manifest.json`
-- Competition Records and their index: `results/demo-tournament/records/` and
-  `results/demo-tournament/records.index.json`
-- Operational Telemetry: `results/demo-tournament/telemetry/`
-- Scoreboard Projection: `results/demo-tournament/scoreboard.json`
+```text
+rps-tournament demo \
+  --directory results/continuous-demo \
+  --seed 12345 \
+  --continuous \
+  --parallelism 2
+```
+
+The command prints the current mode, sealed Continuous Mode parallelism,
+standings, bracket, Tournament Champion, and these inspectable artifacts:
+
+- Sealed Tournament Manifest: `<directory>/manifest.json`
+- Competition Records and their index: `<directory>/records/` and
+  `<directory>/records.index.json`
+- Operational Telemetry: `<directory>/telemetry/`
+- Scoreboard Projection: `<directory>/scoreboard.json`
 
 ## Python starter bot
 

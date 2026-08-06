@@ -8,7 +8,7 @@ Implementation status: in progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 219 passing tests under the repository's
+The implemented foundation is covered by 230 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
@@ -16,8 +16,9 @@ Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
 execution through Tournament Champion declaration, plus qualifying Security
 Violation rulings, Disqualification effects, and every reduced Playoff Phase
 shape, followed by canonical operator abort and durable reconstruction,
-sequential Continuous Mode execution, durable sequential operator controls, and
-hash-verified single-record restoration through the public runner and demo CLI.
+configured parallel Continuous Mode execution with canonical commit buffering,
+durable concurrent operator controls, and hash-verified single-record restoration
+through the public runner and demo CLI.
 
 ### Complete
 
@@ -110,8 +111,8 @@ hash-verified single-record restoration through the public runner and demo CLI.
   without per-Match operator actions, stopping at completion, Security Violation,
   Infrastructure Failure, and operator-abort boundaries while preserving
   canonical scheduling, recovery, Series early completion, and projection
-  behavior; expose the same sealed mode through the demo CLI with sequential
-  execution.
+  behavior; expose the same sealed mode and sealed worker limit through the demo
+  CLI.
 - [x] Persist validated operational control state separately from the immutable
   Tournament Manifest and Competition Records; explicitly start and resume
   Continuous Mode, request a durable pause during an active Match without racing
@@ -126,6 +127,13 @@ hash-verified single-record restoration through the public runner and demo CLI.
   atomically without mutating the backup, and reopen through the normal state
   fold and Scoreboard Projection reconstruction path without re-executing a
   committed Match.
+- [x] Seal validated Continuous Mode parallelism with a one-worker compatibility
+  default; run independent qualifying Matches and standard playoff semifinals
+  under one exclusive Tournament owner; prevent shared-Team overlap; buffer
+  reversed worker completions behind the canonical committable prefix; and
+  preserve byte-identical Competition Record payloads, hashes, reconstructed
+  state, standings, bracket, Tournament Champion, and Scoreboard Projection
+  across worker timing, pause, failure, interruption, and mode boundaries.
 
 ### Partially complete
 
@@ -135,16 +143,14 @@ hash-verified single-record restoration through the public runner and demo CLI.
 
 ### Remaining
 
-- [ ] Implement configured parallel Match execution and canonical Competition
-  Record commit ordering under concurrency.
 - [ ] Add the published capacity/preflight benchmark suite.
 
 ### Acceptance criteria status
 
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
-| Complete | 1–30, 32–33 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, hash-verified record-restoration, playoff Disqualification, projection, operator-abort, durable pause, explicit lifecycle, and sequential mode-switch seams. |
-| Partial | 31, 34 | Boundary-only mode switching and timing-invariant reconstructed Tournament state are covered sequentially; configured parallel execution and full capacity verification remain. |
+| Complete | 1–33 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, hash-verified record-restoration, playoff Disqualification, projection, operator-abort, durable pause, explicit lifecycle, concurrent mode-switch seams, configured worker limits, canonical commit buffering, and timing-invariant reconstruction seams. |
+| Partial | 34 | Schedule generation is covered through thirty-two Teams; full-capacity execution verification remains. |
 | Not started | 35 | Capacity benchmarks remain. |
 
 ## Problem Statement

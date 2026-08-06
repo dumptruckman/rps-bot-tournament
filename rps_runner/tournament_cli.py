@@ -32,6 +32,7 @@ from rps_runner.tournament.storage import (
     StorageError,
     StoredCompetitionRecord,
     load_control_state,
+    load_manifest,
     load_scoreboard_projection,
 )
 
@@ -59,6 +60,16 @@ class DemoTournamentCompatibilityError(RuntimeError):
         )
 
 
+def _positive_integer(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rps-tournament",
@@ -70,6 +81,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo.add_argument("--directory", required=True, type=Path)
     demo.add_argument("--seed", required=True, type=unsigned_64_bit_integer)
+    demo.add_argument(
+        "--parallelism",
+        type=_positive_integer,
+        help=(
+            "maximum concurrently active Matches for a newly created "
+            "Continuous Mode Tournament"
+        ),
+    )
     execution_scope = demo.add_mutually_exclusive_group()
     execution_scope.add_argument(
         "--all-qualification",
@@ -219,7 +238,8 @@ def main(
                 "continuous"
                 if options.execution_scope in ("continuous", "start")
                 else "step"
-            )
+            ),
+            continuous_parallelism=options.parallelism or 1,
         )
         if directory.exists():
             runner = TournamentRunner.open(
@@ -233,6 +253,7 @@ def main(
                     tournament_seed=options.seed,
                     project_root=resolved_project_root,
                     python_executable=executable,
+                    continuous_parallelism=options.parallelism,
                 ),
             )
             disposition = (
@@ -402,13 +423,21 @@ def _verify_demo_manifest(
     tournament_seed: int,
     project_root: Path,
     python_executable: Path,
+    continuous_parallelism: Optional[int] = None,
 ) -> None:
     incompatible_fields = tournament_manifest_incompatibilities(
         manifest,
         tournament_id=_DEMO_TOURNAMENT_ID,
         tournament_seed=tournament_seed,
         roster=_demo_roster(project_root, python_executable),
-        config=TournamentConfig(execution_mode=str(manifest["execution_mode"])),
+        config=TournamentConfig(
+            execution_mode=str(manifest["execution_mode"]),
+            continuous_parallelism=(
+                continuous_parallelism
+                if continuous_parallelism is not None
+                else int(manifest.get("continuous_parallelism", 1))
+            ),
+        ),
     )
     if incompatible_fields:
         raise DemoTournamentCompatibilityError(list(incompatible_fields))
@@ -430,6 +459,12 @@ def _print_summary(
     if control is not None:
         print(f"Current Mode: {str(control['current_mode']).title()}", file=output)
         print(f"Control State: {control['lifecycle']}", file=output)
+    manifest = load_manifest(directory).manifest
+    print(
+        "Continuous Parallelism: "
+        f"{int(manifest.get('continuous_parallelism', 1))}",
+        file=output,
+    )
     for stored in committed_records:
         record = stored.record
         print(f"Committed Match: {record['match_id']}", file=output)

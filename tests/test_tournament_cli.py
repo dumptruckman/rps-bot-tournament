@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any, Optional
 import unittest
 
@@ -379,6 +380,76 @@ class TournamentDemoCliTests(unittest.TestCase):
         )
         self.assertEqual(len(requests), completed_request_count)
         self.assertIn("Tournament: resumed", self.stdout.getvalue())
+
+    def test_continuous_parallelism_is_sealed_reported_and_preserved_on_resume(
+        self,
+    ) -> None:
+        creation_active = 0
+        creation_overlap = threading.Event()
+        creation_lock = threading.Lock()
+
+        def pause_after_overlap(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            nonlocal creation_active
+            with creation_lock:
+                creation_active += 1
+                if creation_active == 2:
+                    creation_overlap.set()
+                    TournamentRunner.request_pause_at(self.directory)
+            self.assertTrue(creation_overlap.wait(5))
+            result = winning_result(request)
+            with creation_lock:
+                creation_active -= 1
+            return result
+
+        self.assertEqual(
+            self.run_demo(
+                "--start",
+                "--parallelism",
+                "2",
+                match_executor=pause_after_overlap,
+            ),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.assertEqual(
+            load_manifest(self.directory).manifest["continuous_parallelism"], 2
+        )
+        self.assertTrue(creation_overlap.is_set())
+        self.assertIn("Continuous Parallelism: 2", self.stdout.getvalue())
+
+        self.stdout = StringIO()
+        resume_active = 0
+        maximum_resume_active = 0
+        resume_overlap = threading.Event()
+        resume_lock = threading.Lock()
+
+        def overlap_on_resume(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            nonlocal resume_active, maximum_resume_active
+            with resume_lock:
+                resume_active += 1
+                maximum_resume_active = max(maximum_resume_active, resume_active)
+                if resume_active == 2:
+                    resume_overlap.set()
+            self.assertTrue(resume_overlap.wait(5))
+            result = winning_result(request)
+            with resume_lock:
+                resume_active -= 1
+            return result
+
+        self.assertEqual(
+            self.run_demo("--resume", match_executor=overlap_on_resume),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.assertEqual(
+            load_manifest(self.directory).manifest["continuous_parallelism"], 2
+        )
+        self.assertEqual(maximum_resume_active, 2)
+        self.assertIn("Continuous Parallelism: 2", self.stdout.getvalue())
 
     def test_explicit_start_pause_reopen_resume_and_mode_switch_controls(self) -> None:
         requests: list[MatchExecutionRequest] = []

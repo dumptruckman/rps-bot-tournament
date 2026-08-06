@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 from dataclasses import FrozenInstanceError
@@ -158,6 +159,7 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(manifest["scoreboard_version"], 1)
         self.assertEqual(manifest["scheduled_turns_per_match"], 300)
         self.assertEqual(manifest["execution_mode"], "step")
+        self.assertEqual(manifest["continuous_parallelism"], 1)
         self.assertEqual(
             manifest["rules"],
             {
@@ -496,7 +498,11 @@ class TournamentCreationTests(unittest.TestCase):
             filesystem_write_limit_bytes=108,
             network_access_allowed=False,
         )
-        config = TournamentConfig(execution_mode="step", match_limits=limits)
+        config = TournamentConfig(
+            execution_mode="step",
+            match_limits=limits,
+            continuous_parallelism=3,
+        )
         requests: list[MatchExecutionRequest] = []
 
         def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
@@ -524,6 +530,7 @@ class TournamentCreationTests(unittest.TestCase):
 
             manifest = load_manifest(self.directory).manifest
             self.assertEqual(manifest["execution_mode"], "step")
+            self.assertEqual(manifest["continuous_parallelism"], 3)
             self.assertEqual(
                 manifest["match_limits"],
                 {
@@ -550,6 +557,7 @@ class TournamentCreationTests(unittest.TestCase):
 
             first.play_next_match()
 
+        self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0].first_move_timeout_ms, 101)
         self.assertEqual(requests[0].move_timeout_ms, 102)
         self.assertEqual(requests[0].total_timeout_ms, 103)
@@ -562,6 +570,26 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertFalse(requests[0].network_access_allowed)
         with self.assertRaises(FrozenInstanceError):
             config.execution_mode = "continuous"  # type: ignore[misc]
+        with self.assertRaises(FrozenInstanceError):
+            config.continuous_parallelism = 4  # type: ignore[misc]
+
+    def test_creation_rejects_invalid_continuous_parallelism_before_sealing(
+        self,
+    ) -> None:
+        for parallelism in (0, -1, True, 1.5):
+            with self.subTest(parallelism=parallelism):
+                with self.assertRaises((TypeError, ValueError)):
+                    TournamentRunner.create(
+                        self.directory,
+                        tournament_id="invalid-parallelism",
+                        tournament_seed=1,
+                        roster=four_team_roster(),
+                        config=TournamentConfig(
+                            continuous_parallelism=parallelism,  # type: ignore[arg-type]
+                        ),
+                        match_executor=lambda request: request,
+                    )
+                self.assertFalse((self.directory / "manifest.json").exists())
 
 
 class TournamentContinuousModeTests(unittest.TestCase):
@@ -619,6 +647,378 @@ class TournamentContinuousModeTests(unittest.TestCase):
             )
         )
 
+    def test_configured_parallel_matches_overlap_and_commit_canonically(self) -> None:
+        active_team_ids: set[str] = set()
+        active_count = 0
+        maximum_active = 0
+        match_ids: list[str] = []
+        overlap = threading.Event()
+        projection_checked = threading.Event()
+        lock = threading.Lock()
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            nonlocal active_count, maximum_active
+            request_team_ids = {request.team_a_id, request.team_b_id}
+            check_projection = False
+            with lock:
+                self.assertTrue(active_team_ids.isdisjoint(request_team_ids))
+                match_ids.append(request.match_id)
+                active_team_ids.update(request_team_ids)
+                active_count += 1
+                maximum_active = max(maximum_active, active_count)
+                if active_count == 2:
+                    overlap.set()
+                    check_projection = True
+            self.assertTrue(overlap.wait(5), "eligible Matches did not overlap")
+            if check_projection:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    projection = load_scoreboard_projection(self.directory)
+                    active_fixtures = [
+                        fixture
+                        for fixture in projection["fixtures"]
+                        if fixture["status"] == "active"
+                    ]
+                    if len(active_fixtures) == 2:
+                        self.assertTrue(
+                            all("active_match_id" in fixture for fixture in active_fixtures)
+                        )
+                        self.assertNotIn("evidence", projection)
+                        projection_checked.set()
+                        break
+                    time.sleep(0.01)
+            self.assertTrue(projection_checked.wait(5))
+            result = executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+            with lock:
+                active_team_ids.difference_update(request_team_ids)
+                active_count -= 1
+            return result
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="parallel-overlap-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
+            match_executor=execute,
+        )
+
+        committed = runner.run_continuously()
+
+        self.assertEqual(maximum_active, 2)
+        self.assertTrue(projection_checked.is_set())
+        self.assertEqual(len(committed), 18)
+        self.assertTrue(
+            all(not match_id.endswith("-match-3") for match_id in match_ids)
+        )
+        self.assertEqual(runner.status, "complete")
+
+    def test_reversed_completion_matches_limit_one_records_and_projection(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as sequential_name:
+            sequential_directory = Path(sequential_name)
+            sequential = TournamentRunner.create(
+                sequential_directory,
+                tournament_id="timing-invariant-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                config=TournamentConfig(execution_mode="continuous"),
+                match_executor=lambda request: executor_result(
+                    request,
+                    winner_team_id=min(request.team_a_id, request.team_b_id),
+                ),
+            )
+            sequential.run_continuously()
+            expected_records = load_competition_records(sequential_directory)
+            expected_projection = load_scoreboard_projection(sequential_directory)
+            expected_state = fold_tournament_state(
+                load_manifest(sequential_directory).manifest, expected_records
+            )
+
+        later_match_finished = threading.Event()
+
+        def reversed_completion(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            if request.match_id == "qualifying-0001-match-1":
+                self.assertTrue(later_match_finished.wait(5))
+            elif request.match_id == "qualifying-0002-match-1":
+                later_match_finished.set()
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        parallel = TournamentRunner.create(
+            self.directory,
+            tournament_id="timing-invariant-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
+            match_executor=reversed_completion,
+        )
+        parallel.run_continuously()
+        actual_records = load_competition_records(self.directory)
+
+        self.assertEqual(
+            [thaw_json(record.record) for record in actual_records],
+            [thaw_json(record.record) for record in expected_records],
+        )
+        self.assertEqual(
+            [record.content_hash for record in actual_records],
+            [record.content_hash for record in expected_records],
+        )
+        self.assertEqual(
+            load_scoreboard_projection(self.directory), expected_projection
+        )
+        self.assertEqual(
+            fold_tournament_state(
+                load_manifest(self.directory).manifest, actual_records
+            ),
+            expected_state,
+        )
+
+    def test_parallel_pause_commits_only_prefix_and_resume_skips_it(self) -> None:
+        both_started = threading.Event()
+        release = threading.Event()
+        started_ids: list[str] = []
+        lock = threading.Lock()
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            with lock:
+                started_ids.append(request.match_id)
+                if len(started_ids) == 2:
+                    both_started.set()
+            self.assertTrue(release.wait(5))
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="parallel-pause-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
+            match_executor=execute,
+        )
+        result: list[tuple[StoredCompetitionRecord, ...]] = []
+        worker = threading.Thread(target=lambda: result.append(runner.start()))
+        worker.start()
+        self.assertTrue(both_started.wait(5))
+        runner.request_pause()
+        release.set()
+        worker.join(5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(result[0]), 1)
+        committed_id = result[0][0].record["match_id"]
+        records = load_competition_records(self.directory)
+        self.assertEqual(
+            [record.record["match_id"] for record in records], [committed_id]
+        )
+
+        resumed_ids: list[str] = []
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: (
+                resumed_ids.append(request.match_id)
+                or executor_result(request, winner_team_id=request.team_a_id)
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        reopened.resume()
+
+        self.assertNotIn(committed_id, resumed_ids)
+        self.assertIn("qualifying-0002-match-1", resumed_ids)
+        self.assertEqual(reopened.status, "complete")
+
+    def test_parallel_security_violation_never_commits_later_completion(
+        self,
+    ) -> None:
+        release_first = threading.Event()
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            if request.match_id == "qualifying-0001-match-1":
+                self.assertTrue(release_first.wait(5))
+                return MatchExecutionResult(
+                    infrastructure_failure=False,
+                    competitive_outcome=None,
+                    operational_telemetry={},
+                    suspected_security_violation_team_id=request.team_a_id,
+                    evidence_link="evidence:parallel-security",
+                )
+            if request.match_id == "qualifying-0002-match-1":
+                release_first.set()
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="parallel-security-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
+            match_executor=execute,
+        )
+
+        self.assertEqual(runner.run_continuously(), ())
+
+        records = load_competition_records(self.directory)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].record["type"], "security_violation_suspected")
+        self.assertEqual(records[0].record["match_id"], "qualifying-0001-match-1")
+        self.assertEqual(runner.status, "awaiting_security_ruling")
+
+    def test_parallel_infrastructure_failure_preserves_only_committed_prefix(
+        self,
+    ) -> None:
+        failure_seen = threading.Event()
+        first_run_ids: list[str] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            first_run_ids.append(request.match_id)
+            if request.match_id == "qualifying-0002-match-1":
+                failure_seen.set()
+                return MatchExecutionResult(
+                    infrastructure_failure=True,
+                    competitive_outcome=None,
+                    operational_telemetry={"diagnostic": "worker unavailable"},
+                )
+            if request.match_id == "qualifying-0001-match-1":
+                self.assertTrue(failure_seen.wait(5))
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="parallel-infrastructure-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
+            match_executor=execute,
+        )
+
+        with self.assertRaises(InfrastructureInterventionRequiredError) as caught:
+            runner.run_continuously()
+
+        self.assertEqual(caught.exception.match_id, "qualifying-0002-match-1")
+        self.assertEqual(caught.exception.attempt_count, 3)
+        records = load_competition_records(self.directory)
+        self.assertEqual(
+            [record.record["match_id"] for record in records],
+            ["qualifying-0001-match-1"],
+        )
+        self.assertEqual(runner.control_status, "infrastructure_intervention")
+
+        resumed_ids: list[str] = []
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: (
+                resumed_ids.append(request.match_id)
+                or executor_result(request, winner_team_id=request.team_a_id)
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        reopened.resume()
+
+        self.assertNotIn("qualifying-0001-match-1", resumed_ids)
+        self.assertIn("qualifying-0002-match-1", resumed_ids)
+        self.assertEqual(reopened.status, "complete")
+
+    def test_standard_semifinals_overlap_but_final_waits_for_both(self) -> None:
+        semifinal_one_active = threading.Event()
+        semifinal_two_active = threading.Event()
+        semifinal_overlap = threading.Event()
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            if request.match_id == "playoff-semifinal-1-match-1":
+                semifinal_one_active.set()
+                self.assertTrue(semifinal_two_active.wait(5))
+                semifinal_overlap.set()
+            elif request.match_id == "playoff-semifinal-2-match-1":
+                semifinal_two_active.set()
+                self.assertTrue(semifinal_one_active.wait(5))
+            elif request.match_id.startswith("playoff-final-"):
+                semifinal_records = [
+                    record.record
+                    for record in load_competition_records(self.directory)
+                    if record.record.get("fixture_id")
+                    in ("playoff-semifinal-1", "playoff-semifinal-2")
+                    and record.record.get("type") == "match_terminal"
+                ]
+                self.assertEqual(len(semifinal_records), 4)
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="parallel-playoff-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
+            match_executor=execute,
+        )
+
+        runner.run_continuously()
+
+        self.assertTrue(semifinal_overlap.is_set())
+        self.assertEqual(runner.status, "complete")
+
+    def test_parallel_interruption_reopens_without_out_of_order_commit(self) -> None:
+        later_finished = threading.Event()
+
+        def interrupt(request: MatchExecutionRequest) -> MatchExecutionResult:
+            if request.match_id == "qualifying-0001-match-1":
+                self.assertTrue(later_finished.wait(5))
+                raise KeyboardInterrupt("simulated runner interruption")
+            if request.match_id == "qualifying-0002-match-1":
+                later_finished.set()
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="parallel-interruption-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
+            match_executor=interrupt,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            runner.run_continuously()
+
+        self.assertEqual(load_competition_records(self.directory), [])
+        resumed_ids: list[str] = []
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: (
+                resumed_ids.append(request.match_id)
+                or executor_result(request, winner_team_id=request.team_a_id)
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        reopened.resume()
+
+        self.assertIn("qualifying-0001-match-1", resumed_ids)
+        self.assertIn("qualifying-0002-match-1", resumed_ids)
+        self.assertEqual(reopened.status, "complete")
     def test_explicit_start_honors_pause_requested_during_active_match(self) -> None:
         entered_executor = threading.Event()
         release_executor = threading.Event()
@@ -757,11 +1157,16 @@ class TournamentContinuousModeTests(unittest.TestCase):
         runner.request_pause()
 
     def test_mode_switch_is_rejected_while_match_is_active(self) -> None:
-        entered_executor = threading.Event()
+        both_entered = threading.Event()
         release_executor = threading.Event()
+        requests: list[str] = []
+        request_lock = threading.Lock()
 
         def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
-            entered_executor.set()
+            with request_lock:
+                requests.append(request.match_id)
+                if len(requests) == 2:
+                    both_entered.set()
             self.assertTrue(release_executor.wait(5))
             return executor_result(request, winner_team_id=request.team_a_id)
 
@@ -770,18 +1175,36 @@ class TournamentContinuousModeTests(unittest.TestCase):
             tournament_id="active-switch-cup",
             tournament_seed=123456789,
             roster=four_team_roster(),
-            config=TournamentConfig(execution_mode="continuous"),
+            config=TournamentConfig(
+                execution_mode="continuous", continuous_parallelism=2
+            ),
             match_executor=execute,
         )
         worker = threading.Thread(target=runner.start)
         worker.start()
-        self.assertTrue(entered_executor.wait(5))
+        self.assertTrue(both_entered.wait(5))
         with self.assertRaisesRegex(ValueError, "Match boundary"):
             runner.switch_mode("step")
         runner.request_pause()
         release_executor.set()
         worker.join(5)
         self.assertFalse(worker.is_alive())
+        committed_ids = [
+            record.record["match_id"]
+            for record in load_competition_records(self.directory)
+            if record.record["type"] == "match_terminal"
+        ]
+        self.assertEqual(len(committed_ids), 1)
+
+        runner.switch_mode("step")
+        runner.play_next_match()
+        after_switch_ids = [
+            record.record["match_id"]
+            for record in load_competition_records(self.directory)
+            if record.record["type"] == "match_terminal"
+        ]
+        self.assertEqual(after_switch_ids.count(committed_ids[0]), 1)
+        self.assertEqual(len(after_switch_ids), 2)
 
     def test_mode_timing_does_not_change_competition_records_or_tournament_state(
         self,
@@ -3630,6 +4053,42 @@ class TournamentResumeTests(unittest.TestCase):
         self.assertEqual(caught.exception.field, "protocol_version")
         self.assertEqual(caught.exception.expected, 1)
         self.assertEqual(caught.exception.actual, 2)
+
+    def test_open_rejects_invalid_sealed_continuous_parallelism(self) -> None:
+        manifest = load_manifest(self.directory).manifest
+        manifest_path = self.directory / "manifest.json"
+        manifest_path.unlink()
+        seal_manifest(self.directory, manifest | {"continuous_parallelism": 0})
+
+        with self.assertRaises(TournamentCompatibilityError) as caught:
+            TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: executor_result(
+                    request, winner_team_id="beta"
+                ),
+                artifact_digest_verifier=lambda team_id, digest: True,
+            )
+
+        self.assertEqual(caught.exception.field, "continuous_parallelism")
+        self.assertEqual(caught.exception.actual, 0)
+
+    def test_open_treats_legacy_missing_parallelism_as_limit_one(self) -> None:
+        manifest = thaw_json(load_manifest(self.directory).manifest)
+        del manifest["continuous_parallelism"]
+        manifest_path = self.directory / "manifest.json"
+        manifest_path.unlink()
+        seal_manifest(self.directory, manifest)
+
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="beta"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        reopened.play_next_match()
+        self.assertEqual(len(load_competition_records(self.directory)), 1)
 
     def test_open_rejects_pre_abort_record_schema(self) -> None:
         manifest = load_manifest(self.directory).manifest
