@@ -50,6 +50,7 @@ from .storage import (
     StoredCompetitionRecord,
     _restore_competition_record_under_run_lock,
     append_competition_record,
+    append_competition_record_to_verified_sequence,
     append_operational_telemetry,
     initial_control_state,
     load_competition_records,
@@ -702,7 +703,7 @@ class TournamentRunner:
                 self.tournament_directory,
                 execution_result.operational_telemetry,
             )
-        stored = append_competition_record(
+        stored = append_competition_record_to_verified_sequence(
             self.tournament_directory,
             _terminal_record(
                 request,
@@ -711,6 +712,7 @@ class TournamentRunner:
                 result,
                 execution_result.competitive_outcome,
             ),
+            records,
         )
         all_records = records + [stored]
         state_after_match = fold_tournament_state(

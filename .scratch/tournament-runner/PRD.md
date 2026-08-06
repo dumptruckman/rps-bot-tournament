@@ -2,16 +2,21 @@
 
 Status: ready-for-agent
 
-Implementation status: in progress
+Implementation status: complete
 
 ## Implementation Progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 230 passing tests under the repository's
-Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
-`7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
-contract, authoritative state fold, transition from the Qualifying Phase to the
+The implementation is covered by 238 passing tests under the repository's
+Python 3.9 virtual environment, verified with
+`.venv/bin/python -m unittest discover -s tests -v` in 48.941 seconds. The Step
+Mode preflight completed in 0.008 seconds. The full opt-in command
+`.venv/bin/python -m rps_runner.tournament.capacity continuous --parallelism 16`
+verified the maximum workload in 1,752.128 seconds and correctly reported the
+1,200-second objective as exceeded without failing. Earlier work is recorded in
+commits `2703c20`, `7f1a17a`, `4e1b307`, and `876071f`; the current frontier
+adds the sealed rules contract, authoritative state fold, transition from the Qualifying Phase to the
 Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
 execution through Tournament Champion declaration, plus qualifying Security
 Violation rulings, Disqualification effects, and every reduced Playoff Phase
@@ -135,23 +140,24 @@ through the public runner and demo CLI.
   state, standings, bracket, Tournament Champion, and Scoreboard Projection
   across worker timing, pause, failure, interruption, and mode boundaries.
 
-### Partially complete
-
-- [ ] Verify maximum capacity end to end. Schedule generation covers the
-  thirty-two-Team roster, but the full 1,497-Match/449,100-Round Tournament and
-  its non-binding performance objectives have not been benchmarked.
-
-### Remaining
-
-- [ ] Add the published capacity/preflight benchmark suite.
+- [x] Verify maximum capacity end to end through the public Tournament Runner,
+  storage reconstruction, and Scoreboard Projection seams with a deterministic
+  workload without live Bot Artifact processes: thirty-two Teams, 496
+  qualifying Fixtures, three standard playoff Fixtures, 1,497 Matches, 449,100
+  Rounds, canonical
+  completion, and a declared Tournament Champion.
+- [x] Publish separate opt-in Continuous Mode capacity and Step Mode preflight
+  commands with stable non-binding objective reporting. The verified host run
+  completed correctly in 1,752.128 seconds and reported the twenty-minute
+  objective as exceeded without failing or changing competitive state.
 
 ### Acceptance criteria status
 
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
 | Complete | 1–33 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, hash-verified record-restoration, playoff Disqualification, projection, operator-abort, durable pause, explicit lifecycle, concurrent mode-switch seams, configured worker limits, canonical commit buffering, and timing-invariant reconstruction seams. |
-| Partial | 34 | Schedule generation is covered through thirty-two Teams; full-capacity execution verification remains. |
-| Not started | 35 | Capacity benchmarks remain. |
+| Complete | 34 | The opt-in public-runner capacity command verifies 496 qualifying Fixtures, three playoff Fixtures, 1,497 Matches, 449,100 completed Rounds, reconstructed completion, Tournament Champion, and final Scoreboard Projection. |
+| Complete | 35 | Injected-clock tests and the measured overrun prove objective misses are successful operational reports only; genuine integrity failures still fail. |
 
 ## Problem Statement
 

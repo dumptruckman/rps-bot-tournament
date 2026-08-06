@@ -359,6 +359,13 @@ standings, bracket, Tournament Champion, and these inspectable artifacts:
 - Operational Telemetry: `<directory>/telemetry/`
 - Scoreboard Projection: `<directory>/scoreboard.json`
 
+## Capacity preflight
+
+The opt-in capacity suite runs without live Bot Artifact processes and reports
+the non-binding Continuous and Step Mode objectives. See
+[docs/CAPACITY_BENCHMARKS.md](docs/CAPACITY_BENCHMARKS.md) for prerequisites,
+exact commands, workloads, preserved artifacts, and result interpretation.
+
 ## Python starter bot
 
 The starter bot keeps participant code focused on one strategy function:

@@ -11,6 +11,7 @@ from rps_runner.tournament.storage import (
     ManifestAlreadySealedError,
     RecordSequenceError,
     append_competition_record,
+    append_competition_record_to_verified_sequence,
     append_operational_telemetry,
     canonical_json_bytes,
     committed_match_ids,
@@ -144,6 +145,56 @@ class CompetitionRecordTests(unittest.TestCase):
             b'"type":"match_started"},"sequence":1}',
         )
         self.assertEqual(load_competition_records(self.directory), [stored])
+
+    def test_append_with_verified_sequence_preserves_canonical_bytes(self) -> None:
+        first = append_competition_record(self.directory, self.started)
+
+        second = append_competition_record_to_verified_sequence(
+            self.directory,
+            self.terminal,
+            [first],
+        )
+
+        self.assertEqual(load_competition_records(self.directory), [first, second])
+        self.assertEqual(
+            (self.directory / "records" / "00000002.json").read_bytes(),
+            b'{"content_hash":"3f491d64739e972b785cc909f95c3b3f632b401d01ce9dabea4d8f4b35a10a00",'
+            b'"record":{"match_id":"q-001-m1",'
+            b'"outcome":"completed","type":"match_terminal","winner":"red"},'
+            b'"sequence":2}',
+        )
+
+    def test_append_with_stale_verified_sequence_is_rejected(self) -> None:
+        first = append_competition_record(self.directory, self.started)
+        append_competition_record_to_verified_sequence(
+            self.directory,
+            self.terminal,
+            [first],
+        )
+
+        with self.assertRaisesRegex(RecordSequenceError, "verified sequence"):
+            append_competition_record_to_verified_sequence(
+                self.directory,
+                self.started,
+                [first],
+            )
+
+    def test_append_with_verified_sequence_rejects_corrupt_prior_payload(self) -> None:
+        first = append_competition_record(self.directory, self.started)
+        path = self.directory / "records" / "00000001.json"
+        path.chmod(0o644)
+        path.write_bytes(path.read_bytes().replace(b'"q-001"', b'"q-002"'))
+
+        with self.assertRaisesRegex(IntegrityError, "content hash"):
+            append_competition_record_to_verified_sequence(
+                self.directory,
+                self.terminal,
+                [first],
+            )
+
+        self.assertFalse(
+            (self.directory / "records" / "00000002.json").exists()
+        )
 
     def test_terminal_record_is_the_match_commit_boundary(self) -> None:
         append_competition_record(self.directory, self.started)

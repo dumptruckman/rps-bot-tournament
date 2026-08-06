@@ -132,6 +132,14 @@ def append_competition_record(
 
     directory = Path(tournament_directory)
     existing = load_competition_records(directory)
+    return _append_competition_record(directory, record, existing)
+
+
+def _append_competition_record(
+    directory: Path,
+    record: Mapping[str, Any],
+    existing: list[StoredCompetitionRecord],
+) -> StoredCompetitionRecord:
     sequence = len(existing) + 1
     record_value = _freeze_json_object(
         _detached_json_object(record, "Competition Record"),
@@ -155,6 +163,68 @@ def append_competition_record(
         ) from error
     _write_records_index(directory, existing + [stored])
     return stored
+
+
+def append_competition_record_to_verified_sequence(
+    tournament_directory: Union[Path, str],
+    record: Mapping[str, Any],
+    verified_existing_records: list[StoredCompetitionRecord],
+) -> StoredCompetitionRecord:
+    """Append under a run lock without reloading already-verified payloads."""
+
+    directory = Path(tournament_directory)
+    existing = list(verified_existing_records)
+    _verify_existing_records_against_index(directory, existing)
+    return _append_competition_record(directory, record, existing)
+
+
+def _verify_existing_records_against_index(
+    tournament_directory: Path,
+    records: list[StoredCompetitionRecord],
+) -> None:
+    for expected_sequence, record in enumerate(records, start=1):
+        if record.sequence != expected_sequence:
+            raise RecordSequenceError(
+                "The verified sequence is missing or reordered"
+            )
+    index_path = tournament_directory / "records.index.json"
+    records_directory = tournament_directory / "records"
+    if not records:
+        if index_path.exists() or records_directory.exists():
+            raise RecordSequenceError(
+                "The verified sequence does not match canonical storage"
+            )
+        return
+    paths = sorted(records_directory.glob("*.json"))
+    if len(paths) != len(records):
+        raise RecordSequenceError(
+            "The verified sequence does not match canonical storage"
+        )
+    for expected_sequence, (path, record) in enumerate(
+        zip(paths, records), start=1
+    ):
+        if path.name != f"{expected_sequence:08d}.json":
+            raise RecordSequenceError(
+                "The verified sequence is missing or reordered"
+            )
+        envelope = _read_json_object(path, "Competition Record")
+        _sequence, _record, content_hash = _competition_record_fields(
+            envelope,
+            f"Competition Record: {path}",
+            expected_sequence=expected_sequence,
+        )
+        if content_hash != record.content_hash:
+            raise IntegrityError(
+                "The verified sequence does not match canonical storage"
+            )
+    count, records_hash = _read_records_index(index_path)
+    expected_hash = _sha256(
+        canonical_json_bytes([record.content_hash for record in records])
+    )
+    if count != len(records) or records_hash != expected_hash:
+        raise RecordSequenceError(
+            "The verified sequence does not match the canonical index"
+        )
 
 
 def load_competition_records(
@@ -498,6 +568,20 @@ def _stored_competition_record(
     *,
     expected_sequence: Optional[int] = None,
 ) -> StoredCompetitionRecord:
+    sequence, record, content_hash = _competition_record_fields(
+        envelope,
+        description,
+        expected_sequence=expected_sequence,
+    )
+    return StoredCompetitionRecord(sequence, record, content_hash)
+
+
+def _competition_record_fields(
+    envelope: Mapping[str, Any],
+    description: str,
+    *,
+    expected_sequence: Optional[int] = None,
+) -> tuple[int, dict[str, Any], str]:
     if set(envelope) != {"content_hash", "record", "sequence"}:
         raise IntegrityError(f"{description} envelope is invalid")
     sequence = envelope["sequence"]
@@ -517,7 +601,7 @@ def _stored_competition_record(
     )
     if actual_hash != content_hash:
         raise IntegrityError(f"{description} content hash does not match")
-    return StoredCompetitionRecord(sequence, record, content_hash)
+    return sequence, record, content_hash
 
 
 def _sha256(content: bytes) -> str:
