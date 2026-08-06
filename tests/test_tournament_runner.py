@@ -7,6 +7,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Optional
 
+from rps_runner.tournament.competition import Phase
 from rps_runner.tournament.runner import (
     ArtifactDigestVerificationError,
     BotArtifactManifest,
@@ -21,6 +22,7 @@ from rps_runner.tournament.runner import (
 )
 from rps_runner.tournament.state import (
     TournamentStateError,
+    build_operator_abort_record,
     build_security_violation_ruling_record,
     fold_tournament_state,
 )
@@ -148,7 +150,7 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(manifest["tournament_seed"], "123456789")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["seed_derivation_version"], 1)
-        self.assertEqual(manifest["record_schema_version"], 3)
+        self.assertEqual(manifest["record_schema_version"], 4)
         self.assertEqual(manifest["scoreboard_version"], 1)
         self.assertEqual(manifest["scheduled_turns_per_match"], 300)
         self.assertEqual(manifest["execution_mode"], "step")
@@ -534,7 +536,7 @@ class TournamentCreationTests(unittest.TestCase):
                 },
             )
             self.assertEqual(manifest["protocol_version"], 1)
-            self.assertEqual(manifest["record_schema_version"], 3)
+            self.assertEqual(manifest["record_schema_version"], 4)
             self.assertEqual(manifest["seed_derivation_version"], 1)
             self.assertEqual(manifest["scoreboard_version"], 1)
             self.assertEqual(
@@ -566,6 +568,117 @@ class TournamentStepModeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def test_operator_can_abort_before_or_after_committed_matches(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        with tempfile.TemporaryDirectory() as fresh_name:
+            fresh_directory = Path(fresh_name)
+            fresh = TournamentRunner.create(
+                fresh_directory,
+                tournament_id="fresh-operator-abort-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                match_executor=execute,
+            )
+            first_record = fresh.abort(organizer_id="organizer-before-match")
+            self.assertEqual(first_record.sequence, 1)
+            self.assertEqual(requests, [])
+            self.assertEqual(fresh.status, "aborted")
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="operator-abort-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=execute,
+        )
+        committed = runner.play_next_match()
+        prior_bytes = (self.directory / "records" / "00000001.json").read_bytes()
+
+        aborted = runner.abort(
+            organizer_id="organizer-9",
+            note="Venue evacuation",
+        )
+
+        self.assertEqual(aborted.sequence, 2)
+        self.assertEqual(aborted.record["type"], "tournament_aborted")
+        self.assertEqual(aborted.record["phase"], "qualifying")
+        self.assertEqual(aborted.record["organizer_id"], "organizer-9")
+        self.assertEqual(aborted.record["reason_code"], "operator_requested")
+        self.assertEqual(aborted.record["note"], "Venue evacuation")
+        self.assertEqual(
+            (self.directory / "records" / "00000001.json").read_bytes(),
+            prior_bytes,
+        )
+        self.assertEqual(load_competition_records(self.directory)[0], committed)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "aborted")
+        self.assertEqual(projection["completion_reason"], "operator_requested")
+        self.assertIsNone(projection["champion"])
+        self.assertEqual(
+            projection["operator_abort"],
+            {
+                "organizer_id": "organizer-9",
+                "reason_code": "operator_requested",
+                "note": "Venue evacuation",
+            },
+        )
+        self.assertIsNone(runner.play_next_match())
+        self.assertEqual(len(requests), 1)
+        with self.assertRaisesRegex(ValueError, "already complete"):
+            runner.abort(organizer_id="organizer-9")
+
+    def test_abort_rejects_pending_security_ruling_and_completed_tournament(self) -> None:
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="abort-transition-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=lambda request: MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link="evidence:abort-transition/incident-1",
+            ),
+        )
+        runner.play_next_match()
+
+        with self.assertRaisesRegex(ValueError, "Security Violation"):
+            runner.abort(organizer_id="organizer-1")
+        self.assertEqual(len(load_competition_records(self.directory)), 1)
+
+        with tempfile.TemporaryDirectory() as completed_name:
+            completed_directory = Path(completed_name)
+            completed = TournamentRunner.create(
+                completed_directory,
+                tournament_id="completed-abort-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                match_executor=lambda request: executor_result(
+                    request,
+                    winner_team_id=min(request.team_a_id, request.team_b_id),
+                ),
+            )
+            while completed.play_next_match() is not None:
+                pass
+            champion = load_scoreboard_projection(completed_directory)["champion"]
+            record_count = len(load_competition_records(completed_directory))
+
+            with self.assertRaisesRegex(ValueError, "already complete"):
+                completed.abort(organizer_id="organizer-2")
+
+            self.assertEqual(
+                load_scoreboard_projection(completed_directory)["champion"], champion
+            )
+            self.assertEqual(
+                len(load_competition_records(completed_directory)), record_count
+            )
+
     def _runner_at_playoffs(
         self,
         playoff_executor,
@@ -592,6 +705,25 @@ class TournamentStepModeTests(unittest.TestCase):
             runner.play_next_match()
         runner.match_executor = playoff_executor
         return runner
+
+    def test_operator_abort_in_playoffs_preserves_qualifying_results(self) -> None:
+        runner = self._runner_at_playoffs(
+            lambda request: self.fail(
+                "Aborting at a playoff boundary must not execute a Match"
+            )
+        )
+        records_before_abort = load_competition_records(self.directory)
+
+        aborted = runner.abort(organizer_id="organizer-playoffs")
+
+        records_after_abort = load_competition_records(self.directory)
+        self.assertEqual(aborted.record["phase"], "playoff")
+        self.assertEqual(records_after_abort[:-1], records_before_abort)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["phase"], "playoff")
+        self.assertEqual(projection["status"], "aborted")
+        self.assertIsNone(projection["champion"])
+        self.assertIsNone(runner.play_next_match())
 
     def _complete_with_eligible_team_count(
         self, eligible_team_count: int
@@ -1539,6 +1671,23 @@ class TournamentStepModeTests(unittest.TestCase):
                 for record in interrupted_records
             )
         )
+        with self.assertRaisesRegex(
+            TournamentStateError, "rules-driven Tournament completion"
+        ):
+            fold_tournament_state(
+                load_manifest(self.directory).manifest,
+                interrupted_records
+                + [
+                    StoredCompetitionRecord(
+                        len(interrupted_records) + 1,
+                        build_operator_abort_record(
+                            phase=Phase.PLAYOFF,
+                            organizer_id="organizer-too-late",
+                        ),
+                        "invalid-abort",
+                    )
+                ],
+            )
 
         reopened = TournamentRunner.open(
             self.directory,
@@ -2960,6 +3109,28 @@ class TournamentResumeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def test_open_rebuilds_aborted_projection_without_executing_match(self) -> None:
+        self.runner.abort(organizer_id="organizer-recovery", note=None)
+        expected = load_scoreboard_projection(self.directory)
+        scoreboard_path = self.directory / "scoreboard.json"
+
+        for content in (None, b"not-json"):
+            if content is None:
+                scoreboard_path.unlink()
+            else:
+                scoreboard_path.write_bytes(content)
+            resumed = TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: self.fail(
+                    "Aborted Tournament must not execute a Match"
+                ),
+                artifact_digest_verifier=lambda team_id, digest: True,
+            )
+
+            self.assertEqual(load_scoreboard_projection(self.directory), expected)
+            self.assertEqual(resumed.status, "aborted")
+            self.assertIsNone(resumed.play_next_match())
+
     def test_open_rejects_incompatible_manifest_versions(self) -> None:
         manifest = load_manifest(self.directory).manifest
         manifest_path = self.directory / "manifest.json"
@@ -2978,6 +3149,25 @@ class TournamentResumeTests(unittest.TestCase):
         self.assertEqual(caught.exception.field, "protocol_version")
         self.assertEqual(caught.exception.expected, 1)
         self.assertEqual(caught.exception.actual, 2)
+
+    def test_open_rejects_pre_abort_record_schema(self) -> None:
+        manifest = load_manifest(self.directory).manifest
+        manifest_path = self.directory / "manifest.json"
+        manifest_path.unlink()
+        seal_manifest(self.directory, manifest | {"record_schema_version": 3})
+
+        with self.assertRaises(TournamentCompatibilityError) as caught:
+            TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: executor_result(
+                    request, winner_team_id="beta"
+                ),
+                artifact_digest_verifier=lambda team_id, digest: True,
+            )
+
+        self.assertEqual(caught.exception.field, "record_schema_version")
+        self.assertEqual(caught.exception.expected, 4)
+        self.assertEqual(caught.exception.actual, 3)
 
     def test_open_rejects_changed_nested_manifest_rule(self) -> None:
         manifest = thaw_json(load_manifest(self.directory).manifest)

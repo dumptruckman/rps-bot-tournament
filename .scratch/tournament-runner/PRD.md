@@ -8,14 +8,14 @@ Implementation status: in progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 181 passing tests under the repository's
+The implemented foundation is covered by 191 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
 Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
 execution through Tournament Champion declaration, plus qualifying Security
 Violation rulings, Disqualification effects, and every reduced Playoff Phase
-shape.
+shape, followed by canonical operator abort and durable reconstruction.
 
 ### Complete
 
@@ -75,7 +75,8 @@ shape.
 - [x] Pause a qualifying Match Attempt on a suspected Security Violation, retain
   raw evidence in Operational Telemetry, and reconstruct the pending ruling from
   a canonical opaque evidence link. Phase-aware incident, ruling, and playoff
-  transition records use Competition Record schema version 3.
+  transition records use Competition Record schema version 3; the later
+  phase-aware operator-abort record advances the schema to version 4.
 - [x] Confirm or reject attribution through attributable closed-code
   organizer rulings; confirmed rulings canonically Disqualify the Team and add
   ordered Administrative Series Wins, while rejected rulings retry the identical
@@ -99,12 +100,16 @@ shape.
   resolved final competitors, bracket-position replacement, subsequent
   scheduling, and completion in the Scoreboard Projection without exposing raw
   Security Violation evidence or diagnostics.
+- [x] Abort an unfinished Tournament through the public runner and demo CLI with
+  attributable closed-code audit fields, reconstruct the terminal aborted state
+  and projection from canonical records, preserve prior competitive facts, and
+  prevent subsequent Match execution or post-completion abort.
 
 ### Partially complete
 
 - [ ] Complete operator execution controls. Step Mode, infrastructure pause, and
-  Security Violation confirmation/rejection exist; explicit start,
-  requested pause, abort, mode switching, and record-restoration commands remain.
+  Security Violation confirmation/rejection and abort exist; explicit start,
+  requested pause, mode switching, and record-restoration commands remain.
 - [ ] Verify maximum capacity end to end. Schedule generation covers the
   thirty-two-Team roster, but the full 1,497-Match/449,100-Round Tournament and
   its non-binding performance objectives have not been benchmarked.
@@ -113,7 +118,6 @@ shape.
 
 - [ ] Implement Continuous Mode, configured parallel Match execution, canonical
   commit ordering under concurrency, and boundary-only mode switching.
-- [ ] Implement Tournament abort through the Tournament Runner.
 - [ ] Implement hash-verified Competition Record restoration from backup.
 - [ ] Add the published capacity/preflight benchmark suite.
 
@@ -121,9 +125,9 @@ shape.
 
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
-| Complete | 1–29 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, playoff Disqualification, and projection seams. |
+| Complete | 1–29, 33 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, playoff Disqualification, projection, and operator-abort seams. |
 | Partial | 30, 32, 34 | Step Mode and attributable rulings exist; broader controls and full capacity verification remain. |
-| Not started | 31, 33, 35 | Continuous Mode controls, abort, and capacity benchmarks remain. |
+| Not started | 31, 35 | Continuous Mode controls and capacity benchmarks remain. |
 
 ## Problem Statement
 

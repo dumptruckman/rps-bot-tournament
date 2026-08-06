@@ -1,4 +1,4 @@
-"""Highest-level Tournament creation and Step Mode orchestration."""
+"""Highest-level Tournament creation, controls, and Step Mode orchestration."""
 
 from __future__ import annotations
 
@@ -33,7 +33,9 @@ from .seeding import (
 from .state import (
     NO_ELIGIBLE_FINALIST_REASON,
     NO_ELIGIBLE_TEAMS_REASON,
+    OPERATOR_ABORT_REASON,
     TournamentState,
+    build_operator_abort_record,
     build_playoff_bracket_record,
     build_sole_eligible_champion_record,
     build_tournament_ended_without_champion_record,
@@ -56,7 +58,7 @@ from .storage import (
 
 
 PROTOCOL_VERSION = 1
-RECORD_SCHEMA_VERSION = 3
+RECORD_SCHEMA_VERSION = 4
 SCOREBOARD_VERSION = 1
 SCHEDULED_TURNS_PER_MATCH = 300
 FIRST_MOVE_TIMEOUT_MS = 250
@@ -384,6 +386,48 @@ class TournamentRunner:
             # The loop either commits a Match or raises for intervention.
             raise AssertionError("unreachable Match Attempt state")
 
+    def abort(
+        self,
+        *,
+        organizer_id: str,
+        reason_code: str = OPERATOR_ABORT_REASON,
+        note: Optional[str] = None,
+    ) -> StoredCompetitionRecord:
+        """Terminate an unfinished Tournament without a Tournament Champion."""
+
+        with TournamentRunLock(self.tournament_directory):
+            records = load_competition_records(self.tournament_directory)
+            state = fold_tournament_state(self._manifest, records)
+            if state.is_complete:
+                raise ValueError("Tournament is already complete")
+            if state.pending_security_ruling is not None:
+                raise ValueError(
+                    "A pending Security Violation must be ruled on before abort"
+                )
+            if state.pending_transition_records:
+                raise ValueError(
+                    "Pending canonical administrative transitions must complete "
+                    "before abort"
+                )
+            aborted = append_competition_record(
+                self.tournament_directory,
+                build_operator_abort_record(
+                    phase=state.phase,
+                    organizer_id=organizer_id,
+                    reason_code=reason_code,
+                    note=note,
+                ),
+            )
+            all_records = records + [aborted]
+            aborted_state = fold_tournament_state(self._manifest, all_records)
+            write_scoreboard_projection(
+                self.tournament_directory,
+                _projection_from_records(
+                    self._manifest, all_records, aborted_state
+                ),
+            )
+            return aborted
+
     def confirm_security_violation(
         self,
         *,
@@ -494,6 +538,7 @@ def _commit_canonical_transitions_if_ready(
     if (
         transitioned_state.qualifying_phase_complete
         and transitioned_state.phase is Phase.QUALIFYING
+        and not transitioned_state.is_complete
     ):
         transitioned_records, transitioned_state = _append_and_fold_transition(
             tournament_directory,
@@ -1161,7 +1206,16 @@ def _projection_from_records(
                 else {"suspected_team_ids": list(pending.suspected_team_ids)}
             ),
         }
-    if folded.is_complete:
+    if folded.was_aborted:
+        assert folded.operator_abort is not None
+        projection["status"] = "aborted"
+        projection["completion_reason"] = folded.operator_abort.reason_code
+        projection["operator_abort"] = {
+            "organizer_id": folded.operator_abort.organizer_id,
+            "reason_code": folded.operator_abort.reason_code,
+            "note": folded.operator_abort.note,
+        }
+    elif folded.is_complete:
         projection["status"] = "complete"
     if folded.ended_without_champion:
         projection["completion_reason"] = (

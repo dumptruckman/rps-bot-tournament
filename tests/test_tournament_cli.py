@@ -172,6 +172,88 @@ class TournamentDemoCliTests(unittest.TestCase):
         self.assertIn(str(self.directory / "telemetry"), output)
         self.assertIn(str(self.directory / "scoreboard.json"), output)
 
+    def test_abort_is_attributable_terminal_and_does_not_execute_a_match(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        exit_code = self.run_demo(
+            "--abort",
+            "--organizer-id",
+            "organizer-cli",
+            "--abort-note",
+            "Severe weather",
+            match_executor=recording_winner_executor(requests),
+        )
+
+        self.assertEqual(exit_code, 0, self.stderr.getvalue())
+        self.assertEqual(requests, [])
+        records = load_competition_records(self.directory)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(
+            records[0].record,
+            {
+                "type": "tournament_aborted",
+                "phase": "qualifying",
+                "organizer_id": "organizer-cli",
+                "reason_code": "operator_requested",
+                "note": "Severe weather",
+            },
+        )
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "aborted")
+        self.assertIsNone(projection["champion"])
+        self.assertIn("Tournament aborted by organizer-cli", self.stdout.getvalue())
+        self.assertIn("Reason: operator_requested", self.stdout.getvalue())
+        canonical = canonical_json_bytes(records[0].record).lower()
+        for prohibited in (
+            b"timestamp",
+            b"telemetry",
+            b"launch",
+            b"diagnostic",
+            b"stderr",
+        ):
+            self.assertNotIn(prohibited, canonical)
+
+    def test_abort_requires_valid_audit_inputs_and_excludes_running_scopes(
+        self,
+    ) -> None:
+        missing_identity = self.run_demo("--abort")
+
+        self.assertEqual(missing_identity, 2)
+        self.assertIn("organizer identity", self.stderr.getvalue().lower())
+        self.assertFalse(self.directory.exists())
+
+        for arguments in (
+            (
+                "--abort",
+                "--organizer-id",
+                "organizer-cli",
+                "--abort-reason",
+                "free-text",
+            ),
+            ("--abort", "--organizer-id", "organizer-cli", "--all"),
+        ):
+            with self.subTest(arguments=arguments):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "rps_runner.tournament_cli",
+                        "demo",
+                        "--directory",
+                        str(self.directory),
+                        "--seed",
+                        "12345",
+                        *arguments,
+                    ],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn("error:", completed.stderr)
+                self.assertFalse(self.directory.exists())
+
     def test_existing_demo_verifies_resumes_and_skips_committed_match(self) -> None:
         requests: list[MatchExecutionRequest] = []
 

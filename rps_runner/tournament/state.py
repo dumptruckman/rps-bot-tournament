@@ -2,8 +2,8 @@
 
 The fold understands qualifying and Playoff Phase ``match_terminal`` records,
 phase transitions, Bracket Lock, Security Violation rulings, Disqualification
-transitions, and Tournament completion. It is the semantic verification seam
-between byte-valid storage and runner/projection behavior.
+transitions, operator abort, and Tournament completion. It is the semantic
+verification seam between byte-valid storage and runner/projection behavior.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ class TournamentStateError(ValueError):
 
 NO_ELIGIBLE_TEAMS_REASON = "no_eligible_teams"
 NO_ELIGIBLE_FINALIST_REASON = "all_finalists_disqualified"
+OPERATOR_ABORT_REASON = "operator_requested"
 
 
 _MATCH_TERMINAL_FIELDS = {
@@ -113,6 +114,16 @@ class PendingSecurityRuling:
 
 
 @dataclass(frozen=True)
+class OperatorAbortDecision:
+    """The attributable canonical decision that terminated a Tournament."""
+
+    organizer_id: str
+    reason_code: str
+    note: Optional[str]
+    phase: Phase
+
+
+@dataclass(frozen=True)
 class TournamentState:
     """Tournament state derived solely from a Manifest and its records."""
 
@@ -130,6 +141,7 @@ class TournamentState:
     disqualified_team_ids: tuple[str, ...] = ()
     pending_security_ruling: Optional[PendingSecurityRuling] = None
     pending_transition_records: tuple[FrozenJsonDict, ...] = ()
+    operator_abort: Optional[OperatorAbortDecision] = None
 
     @property
     def qualifying_phase_complete(self) -> bool:
@@ -168,7 +180,15 @@ class TournamentState:
 
     @property
     def is_complete(self) -> bool:
-        return self.champion_team_id is not None or self.ended_without_champion
+        return (
+            self.champion_team_id is not None
+            or self.ended_without_champion
+            or self.operator_abort is not None
+        )
+
+    @property
+    def was_aborted(self) -> bool:
+        return self.operator_abort is not None
 
 
 @dataclass(frozen=True)
@@ -219,6 +239,7 @@ def fold_tournament_state(
     bracket_locked = False
     champion_team_id: Optional[str] = None
     ended_without_champion = False
+    operator_abort: Optional[OperatorAbortDecision] = None
     disqualified_team_ids: set[str] = set()
     pending_security_ruling: Optional[PendingSecurityRuling] = None
     pending_transition_records: list[dict[str, Any]] = []
@@ -247,7 +268,11 @@ def fold_tournament_state(
             raise TournamentStateError(
                 "Tournament Champion was declared more than once"
             )
-        if champion_team_id is not None or ended_without_champion:
+        if (
+            champion_team_id is not None
+            or ended_without_champion
+            or operator_abort is not None
+        ):
             raise TournamentStateError(
                 "A Competition Record cannot follow Tournament completion"
             )
@@ -341,6 +366,54 @@ def fold_tournament_state(
                             ),
                         )
             pending_transition_records.pop(0)
+            continue
+        if record_type == "tournament_aborted":
+            if pending_security_ruling is not None:
+                raise TournamentStateError(
+                    "An operator abort cannot leave a Security Violation ruling pending"
+                )
+            rules_driven_completion_is_due = (
+                _completed_final_winner(playoff_fixtures, playoff_series)
+                is not None
+                or (
+                    playoff_bracket_created
+                    and len(playoff_seeds) == 1
+                    and not playoff_fixtures
+                )
+                or (
+                    playoff_bracket_created
+                    and not playoff_seeds
+                )
+                or _all_finalists_disqualified(
+                    playoff_fixtures, disqualified_team_ids
+                )
+            )
+            if rules_driven_completion_is_due:
+                raise TournamentStateError(
+                    "An operator abort cannot replace rules-driven Tournament "
+                    "completion"
+                )
+            try:
+                expected_abort = build_operator_abort_record(
+                    phase=(
+                        Phase.PLAYOFF
+                        if playoff_bracket_created
+                        else Phase.QUALIFYING
+                    ),
+                    organizer_id=record.get("organizer_id"),
+                    reason_code=record.get("reason_code"),
+                    note=record.get("note"),
+                )
+            except (TypeError, ValueError) as error:
+                raise TournamentStateError(str(error)) from error
+            if record != expected_abort:
+                raise TournamentStateError("Tournament operator abort is non-canonical")
+            operator_abort = OperatorAbortDecision(
+                organizer_id=expected_abort["organizer_id"],
+                reason_code=expected_abort["reason_code"],
+                note=expected_abort["note"],
+                phase=Phase(expected_abort["phase"]),
+            )
             continue
         if record_type == "security_violation_suspected":
             if pending_security_ruling is not None:
@@ -652,6 +725,7 @@ def fold_tournament_state(
         selected_index is None
         or pending_security_ruling is not None
         or pending_transition_records
+        or operator_abort is not None
     ):
         next_match = None
     else:
@@ -677,6 +751,7 @@ def fold_tournament_state(
         playoff_bracket_created
         and pending_security_ruling is None
         and not pending_transition_records
+        and operator_abort is None
         and current_playoff_index < len(playoff_series)
     ):
         fixture = playoff_fixtures[current_playoff_index]
@@ -703,6 +778,7 @@ def fold_tournament_state(
         tuple(sorted(disqualified_team_ids)),
         pending_security_ruling,
         tuple(_frozen_record(record) for record in pending_transition_records),
+        operator_abort,
     )
 
 
@@ -743,6 +819,32 @@ def build_tournament_ended_without_champion_record(
         "type": "tournament_ended_without_champion",
         "phase": Phase.PLAYOFF.value,
         "reason_code": reason_code,
+    }
+
+
+def build_operator_abort_record(
+    *,
+    phase: Phase,
+    organizer_id: str,
+    reason_code: str = OPERATOR_ABORT_REASON,
+    note: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build the closed, attributable canonical operator-abort decision."""
+
+    if not isinstance(phase, Phase):
+        raise TypeError("Operator abort phase must be a Tournament phase")
+    if not isinstance(organizer_id, str) or not organizer_id.strip():
+        raise ValueError("Organizer identity is required")
+    if reason_code != OPERATOR_ABORT_REASON:
+        raise ValueError("Reason code is not valid for Tournament operator abort")
+    if note is not None and not isinstance(note, str):
+        raise TypeError("Operator abort note must be a string or None")
+    return {
+        "type": "tournament_aborted",
+        "phase": phase.value,
+        "organizer_id": organizer_id,
+        "reason_code": reason_code,
+        "note": note,
     }
 
 

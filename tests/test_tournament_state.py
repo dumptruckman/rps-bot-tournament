@@ -5,13 +5,14 @@ import unittest
 from rps_runner.tournament.immutable import thaw_json
 from rps_runner.tournament.state import (
     TournamentStateError,
+    build_operator_abort_record,
     build_playoff_bracket_record,
     build_tournament_ended_without_champion_record,
     build_security_violation_ruling_record,
     build_security_violation_suspected_record,
     fold_tournament_state,
 )
-from rps_runner.tournament.competition import Standing
+from rps_runner.tournament.competition import Phase, Standing
 from rps_runner.tournament.storage import StoredCompetitionRecord
 
 
@@ -181,6 +182,176 @@ def terminal_record(
 
 
 class TournamentStateFoldTests(unittest.TestCase):
+    def test_operator_abort_record_is_closed_attributable_and_canonical(self) -> None:
+        record = build_operator_abort_record(
+            phase=Phase.QUALIFYING,
+            organizer_id="organizer-7",
+            note="Venue lost power",
+        )
+
+        self.assertEqual(
+            record,
+            {
+                "type": "tournament_aborted",
+                "phase": "qualifying",
+                "organizer_id": "organizer-7",
+                "reason_code": "operator_requested",
+                "note": "Venue lost power",
+            },
+        )
+        forbidden = (
+            "timestamp",
+            "telemetry",
+            "launch",
+            "entrypoint",
+            "diagnostic",
+            "stderr",
+        )
+        serialized = repr(record).lower()
+        self.assertTrue(all(field not in serialized for field in forbidden))
+
+        invalid_values = (
+            {"organizer_id": "", "reason_code": "operator_requested"},
+            {"organizer_id": "organizer-7", "reason_code": "free_text"},
+            {
+                "organizer_id": "organizer-7",
+                "reason_code": "operator_requested",
+                "note": 7,
+            },
+        )
+        for values in invalid_values:
+            with self.subTest(values=values), self.assertRaises(
+                (TypeError, ValueError)
+            ):
+                build_operator_abort_record(phase=Phase.QUALIFYING, **values)
+
+    def test_fold_reconstructs_operator_abort_in_qualification_and_playoffs(self) -> None:
+        qualification_abort = StoredCompetitionRecord(
+            1,
+            build_operator_abort_record(
+                phase=Phase.QUALIFYING,
+                organizer_id="organizer-1",
+            ),
+            "hash-1",
+        )
+
+        qualification_state = fold_tournament_state(
+            manifest(), (qualification_abort,)
+        )
+
+        self.assertTrue(qualification_state.is_complete)
+        self.assertTrue(qualification_state.was_aborted)
+        self.assertIsNone(qualification_state.champion_team_id)
+        self.assertIsNone(qualification_state.next_qualifying_match)
+        self.assertEqual(
+            qualification_state.operator_abort.organizer_id, "organizer-1"
+        )
+
+        qualifying_records = (
+            terminal_record(1, "qualifying-0001", 1, ("alpha", "beta"), winner="alpha"),
+            terminal_record(2, "qualifying-0001", 2, ("alpha", "beta"), winner="alpha"),
+            terminal_record(
+                3, "qualifying-0002", 1, ("gamma", "delta"), winner="gamma"
+            ),
+            terminal_record(
+                4, "qualifying-0002", 2, ("gamma", "delta"), winner="gamma"
+            ),
+        )
+        qualified = fold_tournament_state(manifest(), qualifying_records)
+        bracket = StoredCompetitionRecord(
+            5,
+            build_playoff_bracket_record(manifest(), qualified.standings),
+            "hash-5",
+        )
+        playoff_abort = StoredCompetitionRecord(
+            6,
+            build_operator_abort_record(
+                phase=Phase.PLAYOFF,
+                organizer_id="organizer-2",
+                note=None,
+            ),
+            "hash-6",
+        )
+
+        playoff_state = fold_tournament_state(
+            manifest(), qualifying_records + (bracket, playoff_abort)
+        )
+
+        self.assertTrue(playoff_state.was_aborted)
+        self.assertTrue(playoff_state.qualifying_phase_complete)
+        self.assertEqual(playoff_state.phase, Phase.PLAYOFF)
+        self.assertIsNone(playoff_state.next_playoff_match)
+        self.assertIsNone(playoff_state.champion_team_id)
+
+    def test_fold_rejects_impossible_operator_abort_histories(self) -> None:
+        valid_record = build_operator_abort_record(
+            phase=Phase.QUALIFYING,
+            organizer_id="organizer-1",
+        )
+        valid = StoredCompetitionRecord(1, valid_record, "hash-1")
+        malformed = thaw_json(valid_record)
+        malformed["phase"] = "playoff"
+
+        with self.assertRaisesRegex(TournamentStateError, "abort"):
+            fold_tournament_state(
+                manifest(), (StoredCompetitionRecord(1, malformed, "bad"),)
+            )
+        with self.assertRaisesRegex(TournamentStateError, "completion"):
+            fold_tournament_state(
+                manifest(),
+                (valid, StoredCompetitionRecord(2, valid_record, "hash-2")),
+            )
+        with self.assertRaisesRegex(TournamentStateError, "completion"):
+            fold_tournament_state(
+                manifest(),
+                (
+                    valid,
+                    terminal_record(
+                        2,
+                        "qualifying-0001",
+                        1,
+                        ("alpha", "beta"),
+                        winner="alpha",
+                    ),
+                ),
+            )
+
+        for eligible_team_ids in ((), ("alpha",)):
+            with self.subTest(eligible_team_ids=eligible_team_ids):
+                reduced_manifest = manifest() | {
+                    "roster": [
+                        team
+                        for team in manifest()["roster"]
+                        if team["team_id"] in eligible_team_ids
+                    ],
+                    "tie_break_keys": {
+                        team_id: manifest()["tie_break_keys"][team_id]
+                        for team_id in eligible_team_ids
+                    },
+                    "qualifying_schedule": [],
+                }
+                standings = tuple(
+                    Standing(team_id, 0, 0, 0, 0, 0, 0, 0, 10)
+                    for team_id in eligible_team_ids
+                )
+                bracket = StoredCompetitionRecord(
+                    1,
+                    build_playoff_bracket_record(reduced_manifest, standings),
+                    "bracket-hash",
+                )
+                abort = StoredCompetitionRecord(
+                    2,
+                    build_operator_abort_record(
+                        phase=Phase.PLAYOFF,
+                        organizer_id="organizer-too-late",
+                    ),
+                    "abort-hash",
+                )
+                with self.assertRaisesRegex(
+                    TournamentStateError, "rules-driven Tournament completion"
+                ):
+                    fold_tournament_state(reduced_manifest, (bracket, abort))
+
     def test_builds_every_canonical_reduced_playoff_shape(self) -> None:
         standings = tuple(
             Standing(team_id, 0, 0, 0, 0, 0, 0, 0, tie_break_key)

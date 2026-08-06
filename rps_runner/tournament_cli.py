@@ -23,7 +23,10 @@ from rps_runner.tournament.runner import (
     TournamentRunner,
     tournament_manifest_incompatibilities,
 )
-from rps_runner.tournament.state import NO_ELIGIBLE_TEAMS_REASON
+from rps_runner.tournament.state import (
+    NO_ELIGIBLE_TEAMS_REASON,
+    OPERATOR_ABORT_REASON,
+)
 from rps_runner.tournament.storage import (
     StorageError,
     StoredCompetitionRecord,
@@ -80,6 +83,26 @@ def build_parser() -> argparse.ArgumentParser:
         const="tournament",
         help="run every remaining Match through Tournament Champion declaration",
     )
+    execution_scope.add_argument(
+        "--abort",
+        dest="execution_scope",
+        action="store_const",
+        const="abort",
+        help=(
+            "abort the unfinished Tournament without declaring a "
+            "Tournament Champion"
+        ),
+    )
+    demo.add_argument(
+        "--organizer-id",
+        help="organizer identity recorded by an administrative action",
+    )
+    demo.add_argument(
+        "--abort-reason",
+        choices=(OPERATOR_ABORT_REASON,),
+        help="closed canonical reason code for abort",
+    )
+    demo.add_argument("--abort-note", help="optional canonical organizer note")
     return parser
 
 
@@ -104,6 +127,18 @@ def main(
     resolved_project_root = project_root.expanduser().resolve()
 
     try:
+        if options.execution_scope == "abort":
+            if not options.organizer_id or not options.organizer_id.strip():
+                raise ValueError("Organizer identity is required to abort")
+        elif any(
+            value is not None
+            for value in (
+                options.organizer_id,
+                options.abort_reason,
+                options.abort_note,
+            )
+        ):
+            raise ValueError("Abort audit fields require --abort")
         executor = match_executor or LocalMatchExecutor(
             _demo_artifact_command_resolver(resolved_project_root, executable)
         ).execute
@@ -133,20 +168,27 @@ def main(
             )
             disposition = "created"
         committed_records: list[StoredCompetitionRecord] = []
-        while True:
-            projection = load_scoreboard_projection(directory)
-            if (
-                options.execution_scope == "qualification"
-                and projection is not None
-                and projection["phase"] != "qualifying"
-            ):
-                break
-            committed = runner.play_next_match()
-            if committed is None:
-                break
-            committed_records.append(committed)
-            if options.execution_scope == "next_match":
-                break
+        if options.execution_scope == "abort":
+            runner.abort(
+                organizer_id=options.organizer_id,
+                reason_code=options.abort_reason or OPERATOR_ABORT_REASON,
+                note=options.abort_note,
+            )
+        else:
+            while True:
+                projection = load_scoreboard_projection(directory)
+                if (
+                    options.execution_scope == "qualification"
+                    and projection is not None
+                    and projection["phase"] != "qualifying"
+                ):
+                    break
+                committed = runner.play_next_match()
+                if committed is None:
+                    break
+                committed_records.append(committed)
+                if options.execution_scope == "next_match":
+                    break
         _print_summary(
             directory,
             disposition=disposition,
@@ -343,7 +385,13 @@ def _print_summary(
     if complete + skipped == len(fixtures):
         print("Qualification has no unresolved Match.", file=output)
     champion = projection["champion"]
-    if projection.get("completion_reason") == NO_ELIGIBLE_TEAMS_REASON:
+    if projection["status"] == "aborted":
+        audit = projection["operator_abort"]
+        print(f"Tournament aborted by {audit['organizer_id']}.", file=output)
+        print(f"  Reason: {audit['reason_code']}", file=output)
+        if audit["note"] is not None:
+            print(f"  Note: {audit['note']}", file=output)
+    elif projection.get("completion_reason") == NO_ELIGIBLE_TEAMS_REASON:
         print(
             "Tournament ended without a Tournament Champion: "
             "no eligible Teams remain.",
