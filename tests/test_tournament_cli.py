@@ -259,7 +259,7 @@ class TournamentDemoCliTests(unittest.TestCase):
         self.assertNotIn("entrypoint", output)
 
     def test_all_finishes_reduced_direct_final_and_sole_champion(self) -> None:
-        for eligible_team_count in (2, 1):
+        for eligible_team_count in (2, 1, 0):
             with self.subTest(eligible_team_count=eligible_team_count):
                 with tempfile.TemporaryDirectory() as directory_name:
                     self.directory = Path(directory_name) / "demo-tournament"
@@ -285,10 +285,37 @@ class TournamentDemoCliTests(unittest.TestCase):
                         match_executor=suspect,
                         artifact_digest_verifier=lambda team_id, digest: True,
                     )
-                    for ordinal in range(4 - eligible_team_count):
+                    single_disqualifications = (
+                        2 if eligible_team_count == 0 else 4 - eligible_team_count
+                    )
+                    for ordinal in range(single_disqualifications):
                         runner.play_next_match()
                         runner.confirm_security_violation(
                             organizer_id=f"organizer-{ordinal + 1}"
+                        )
+                    if eligible_team_count == 0:
+                        def suspect_both(
+                            request: MatchExecutionRequest,
+                        ) -> MatchExecutionResult:
+                            return MatchExecutionResult(
+                                infrastructure_failure=False,
+                                competitive_outcome=None,
+                                operational_telemetry={
+                                    "raw_security_evidence": "double-incident"
+                                },
+                                evidence_link=(
+                                    f"evidence:cli-reduced/{request.match_id}"
+                                ),
+                                suspected_security_violation_team_ids=(
+                                    request.team_a_id,
+                                    request.team_b_id,
+                                ),
+                            )
+
+                        runner.match_executor = suspect_both
+                        runner.play_next_match()
+                        runner.confirm_security_violation(
+                            organizer_id="organizer-3"
                         )
 
                     requests: list[MatchExecutionRequest] = []
@@ -313,7 +340,14 @@ class TournamentDemoCliTests(unittest.TestCase):
                     projection = load_scoreboard_projection(self.directory)
                     assert projection is not None
                     self.assertEqual(projection["status"], "complete")
-                    self.assertIsNotNone(projection["champion"])
+                    if eligible_team_count:
+                        self.assertIsNotNone(projection["champion"])
+                    else:
+                        self.assertIsNone(projection["champion"])
+                        self.assertEqual(
+                            projection["completion_reason"],
+                            "no_eligible_teams",
+                        )
                     self.assertEqual(
                         len(
                             [
@@ -329,7 +363,16 @@ class TournamentDemoCliTests(unittest.TestCase):
                         f"{1 if eligible_team_count == 2 else 0} complete",
                         self.stdout.getvalue(),
                     )
-                    self.assertIn("Tournament Champion:", self.stdout.getvalue())
+                    if eligible_team_count:
+                        self.assertIn(
+                            "Tournament Champion:", self.stdout.getvalue()
+                        )
+                    else:
+                        self.assertIn(
+                            "without a Tournament Champion",
+                            self.stdout.getvalue(),
+                        )
+                        self.assertIn("1 skipped", self.stdout.getvalue())
 
     def test_corrupt_existing_tournament_fails_without_overwriting_it(self) -> None:
         self.assertEqual(self.run_demo(), 0, self.stderr.getvalue())

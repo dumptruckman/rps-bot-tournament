@@ -113,6 +113,29 @@ class TournamentMatchExecutorTests(unittest.TestCase):
             "evidence:summer-cup/qualifying-001-match-1/attempt-1",
         )
 
+    def test_security_incident_can_implicate_both_competing_teams(self) -> None:
+        result = MatchExecutionResult(
+            infrastructure_failure=False,
+            competitive_outcome=None,
+            operational_telemetry={"raw_evidence": "two-team-incident"},
+            suspected_security_violation_team_ids=("red-team", "blue-team"),
+            evidence_link="evidence:summer-cup/double-incident",
+        )
+
+        self.assertEqual(
+            result.suspected_security_violation_team_ids,
+            ("red-team", "blue-team"),
+        )
+        with self.assertRaisesRegex(ValueError, "either the singular or plural"):
+            MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={},
+                suspected_security_violation_team_id="red-team",
+                suspected_security_violation_team_ids=("blue-team",),
+                evidence_link="evidence:summer-cup/ambiguous-incident",
+            )
+
     def test_execution_result_rejects_ambiguous_security_outcomes(self) -> None:
         with self.assertRaisesRegex(ValueError, "evidence link"):
             MatchExecutionResult(

@@ -90,6 +90,7 @@ class MatchExecutionResult:
     operational_telemetry: FrozenJsonDict
     suspected_security_violation_team_id: Optional[str] = None
     evidence_link: Optional[str] = None
+    suspected_security_violation_team_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.competitive_outcome is not None:
@@ -104,17 +105,35 @@ class MatchExecutionResult:
             _frozen_json_object(self.operational_telemetry),
         )
         suspected = self.suspected_security_violation_team_id
-        if suspected is not None and (
-            not isinstance(suspected, str) or not suspected
+        suspected_team_ids = tuple(self.suspected_security_violation_team_ids)
+        object.__setattr__(
+            self, "suspected_security_violation_team_ids", suspected_team_ids
+        )
+        if suspected is not None and suspected_team_ids:
+            raise ValueError(
+                "Use either the singular or plural suspected Team field"
+            )
+        if suspected is not None:
+            suspected_team_ids = (suspected,)
+        if (
+            any(
+                not isinstance(team_id, str) or not team_id
+                for team_id in suspected_team_ids
+            )
+            or len(suspected_team_ids) != len(set(suspected_team_ids))
         ):
             raise ValueError("A suspected Security Violation requires a Team ID")
+        if len(suspected_team_ids) > 2:
+            raise ValueError(
+                "A Match can implicate at most its two competing Teams"
+            )
         if self.infrastructure_failure:
-            if self.competitive_outcome is not None or suspected is not None:
+            if self.competitive_outcome is not None or suspected_team_ids:
                 raise ValueError(
                     "An Infrastructure Failure cannot have a competitive or "
                     "security outcome"
                 )
-        elif suspected is not None:
+        elif suspected_team_ids:
             if self.competitive_outcome is not None:
                 raise ValueError(
                     "A suspected Security Violation cannot have a competitive outcome"
@@ -128,7 +147,7 @@ class MatchExecutionResult:
                 "Match execution must produce a competitive outcome, Infrastructure "
                 "Failure, or suspected Security Violation"
             )
-        if suspected is None and self.evidence_link is not None:
+        if not suspected_team_ids and self.evidence_link is not None:
             raise ValueError("An evidence link requires a suspected Security Violation")
 
 

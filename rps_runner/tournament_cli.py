@@ -23,6 +23,7 @@ from rps_runner.tournament.runner import (
     TournamentRunner,
     tournament_manifest_incompatibilities,
 )
+from rps_runner.tournament.state import NO_ELIGIBLE_TEAMS_REASON
 from rps_runner.tournament.storage import (
     StorageError,
     StoredCompetitionRecord,
@@ -299,10 +300,11 @@ def _print_summary(
     in_progress = sum(
         fixture["status"] == "in_progress" for fixture in fixtures
     )
-    scheduled = len(fixtures) - complete - in_progress
+    skipped = sum(fixture["status"] == "skipped" for fixture in fixtures)
+    scheduled = sum(fixture["status"] == "scheduled" for fixture in fixtures)
     print(
         f"Qualifying Fixtures: {complete}/{len(fixtures)} complete, "
-        f"{in_progress} in progress, {scheduled} scheduled",
+        f"{in_progress} in progress, {scheduled} scheduled, {skipped} skipped",
         file=output,
     )
     print("Standings:", file=output)
@@ -338,12 +340,13 @@ def _print_summary(
     print(f"  Competition Records: {directory / 'records'}", file=output)
     print(f"  Operational Telemetry: {directory / 'telemetry'}", file=output)
     print(f"  Scoreboard Projection: {directory / 'scoreboard.json'}", file=output)
-    if complete == len(fixtures):
+    if complete + skipped == len(fixtures):
         print("Qualification has no unresolved Match.", file=output)
     champion = projection["champion"]
-    if projection.get("completion_reason") == "no_eligible_teams":
+    if projection.get("completion_reason") == NO_ELIGIBLE_TEAMS_REASON:
         print(
-            "Tournament ended without a Champion: no eligible Teams remain.",
+            "Tournament ended without a Tournament Champion: "
+            "no eligible Teams remain.",
             file=output,
         )
     elif champion is None:

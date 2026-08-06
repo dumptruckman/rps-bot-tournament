@@ -222,6 +222,25 @@ class TournamentStateFoldTests(unittest.TestCase):
                 )
                 self.assertEqual(len(record["seeds"]), count)
 
+    def test_bracket_preserves_authoritative_head_to_head_standing_order(self) -> None:
+        standings = (
+            Standing("beta", 3, 1, 2, 0, 10, 0, 0, 20),
+            Standing("alpha", 3, 1, 3, 0, 20, 0, 0, 10),
+        )
+
+        record = build_playoff_bracket_record(manifest(), standings)
+
+        self.assertEqual(
+            record["seeds"],
+            [
+                {"seed": 1, "team_id": "beta"},
+                {"seed": 2, "team_id": "alpha"},
+            ],
+        )
+        self.assertEqual(
+            record["fixtures"][0]["team_ids"], ["beta", "alpha"]
+        )
+
     def test_zero_eligible_terminal_record_is_rules_driven_and_canonical(self) -> None:
         empty_manifest = manifest() | {
             "roster": [],

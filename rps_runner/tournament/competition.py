@@ -569,6 +569,19 @@ def create_playoff_bracket(
     eligible_team_ids: Optional[Iterable[str]] = None,
 ) -> PlayoffBracket:
     ranked = rank_standings(qualifying_standings)
+    return create_playoff_bracket_from_ranked_standings(
+        ranked, eligible_team_ids=eligible_team_ids
+    )
+
+
+def create_playoff_bracket_from_ranked_standings(
+    qualifying_standings: Iterable[Standing],
+    *,
+    eligible_team_ids: Optional[Iterable[str]] = None,
+) -> PlayoffBracket:
+    """Build a bracket without discarding authoritative head-to-head order."""
+
+    ranked = tuple(qualifying_standings)
     if eligible_team_ids is None:
         disqualified: frozenset[str] = frozenset()
     else:

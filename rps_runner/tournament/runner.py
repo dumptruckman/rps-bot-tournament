@@ -31,6 +31,7 @@ from .seeding import (
     derive_tiebreak_key,
 )
 from .state import (
+    NO_ELIGIBLE_TEAMS_REASON,
     TournamentState,
     build_playoff_bracket_record,
     build_sole_eligible_champion_record,
@@ -273,16 +274,25 @@ class TournamentRunner:
                     },
                 )
                 execution_result = self.match_executor(request)
-                suspected_team_id = (
-                    execution_result.suspected_security_violation_team_id
+                suspected_team_ids = (
+                    execution_result.suspected_security_violation_team_ids
+                    or (
+                        (execution_result.suspected_security_violation_team_id,)
+                        if execution_result.suspected_security_violation_team_id
+                        is not None
+                        else ()
+                    )
                 )
-                if suspected_team_id is not None:
+                if suspected_team_ids:
                     if state.phase is not Phase.QUALIFYING:
                         raise NotImplementedError(
                             "Playoff Security Violation rulings are not integrated"
                         )
                     fixture_team_ids = tuple(fixture["team_ids"])
-                    if suspected_team_id not in fixture_team_ids:
+                    if any(
+                        team_id not in fixture_team_ids
+                        for team_id in suspected_team_ids
+                    ):
                         raise ValueError(
                             "Suspected Security Violation Team does not compete "
                             "in the canonical Match"
@@ -301,7 +311,7 @@ class TournamentRunner:
                             match_id=request.match_id,
                             match_ordinal=match_ordinal,
                             team_ids=(fixture_team_ids[0], fixture_team_ids[1]),
-                            suspected_team_id=suspected_team_id,
+                            suspected_team_ids=suspected_team_ids,
                             evidence_link=execution_result.evidence_link or "",
                         ),
                     )
@@ -471,25 +481,21 @@ def _commit_canonical_transitions_if_ready(
     transitioned_records = records
     transitioned_state = state
     while transitioned_state.pending_administrative_records:
-        administrative = append_competition_record(
+        transitioned_records, transitioned_state = _append_and_fold_transition(
             tournament_directory,
+            manifest,
+            transitioned_records,
             transitioned_state.pending_administrative_records[0],
-        )
-        transitioned_records = transitioned_records + [administrative]
-        transitioned_state = fold_tournament_state(
-            manifest, transitioned_records
         )
     if (
         transitioned_state.qualifying_phase_complete
         and transitioned_state.phase is Phase.QUALIFYING
     ):
-        bracket = append_competition_record(
+        transitioned_records, transitioned_state = _append_and_fold_transition(
             tournament_directory,
+            manifest,
+            transitioned_records,
             build_playoff_bracket_record(manifest, transitioned_state.standings),
-        )
-        transitioned_records = transitioned_records + [bracket]
-        transitioned_state = fold_tournament_state(
-            manifest, transitioned_records
         )
     if (
         transitioned_state.phase is Phase.PLAYOFF
@@ -498,43 +504,50 @@ def _commit_canonical_transitions_if_ready(
         and len(transitioned_state.playoff_seeds) == 1
         and not transitioned_state.playoff_fixtures
     ):
-        declaration = append_competition_record(
+        transitioned_records, transitioned_state = _append_and_fold_transition(
             tournament_directory,
+            manifest,
+            transitioned_records,
             build_sole_eligible_champion_record(
                 transitioned_state.playoff_seeds[0].team_id
             ),
-        )
-        transitioned_records = transitioned_records + [declaration]
-        transitioned_state = fold_tournament_state(
-            manifest, transitioned_records
         )
     if (
         transitioned_state.phase is Phase.PLAYOFF
         and not transitioned_state.playoff_seeds
         and not transitioned_state.ended_without_champion
     ):
-        terminal = append_competition_record(
+        transitioned_records, transitioned_state = _append_and_fold_transition(
             tournament_directory,
+            manifest,
+            transitioned_records,
             build_tournament_ended_without_champion_record(),
-        )
-        transitioned_records = transitioned_records + [terminal]
-        transitioned_state = fold_tournament_state(
-            manifest, transitioned_records
         )
     final_winner = transitioned_state.playoff_final_winner
     if (
         transitioned_state.champion_team_id is None
         and final_winner is not None
     ):
-        declaration = append_competition_record(
+        transitioned_records, transitioned_state = _append_and_fold_transition(
             tournament_directory,
+            manifest,
+            transitioned_records,
             build_tournament_champion_record(final_winner),
         )
-        transitioned_records = transitioned_records + [declaration]
-        transitioned_state = fold_tournament_state(
-            manifest, transitioned_records
-        )
     return transitioned_records, transitioned_state
+
+
+def _append_and_fold_transition(
+    tournament_directory: Path,
+    manifest: dict[str, Any],
+    records: list[StoredCompetitionRecord],
+    record: Mapping[str, Any],
+) -> tuple[list[StoredCompetitionRecord], TournamentState]:
+    stored = append_competition_record(tournament_directory, record)
+    transitioned_records = records + [stored]
+    return transitioned_records, fold_tournament_state(
+        manifest, transitioned_records
+    )
 
 
 def tournament_manifest_incompatibilities(
@@ -1094,6 +1107,16 @@ def _projection_from_records(
         _apply_series_projection(
             fixture_projection, series, terminal_by_fixture
         )
+        if (
+            not series.is_complete
+            and {
+                series.team_one_id,
+                series.team_two_id,
+            }
+            <= set(folded.disqualified_team_ids)
+        ):
+            fixture_projection["status"] = "skipped"
+            fixture_projection["skip_reason"] = "teams_disqualified"
     projection["standings"] = _standing_projection(folded.standings)
     projection["phase"] = folded.phase.value
     projection["champion"] = folded.champion_team_id
@@ -1107,12 +1130,16 @@ def _projection_from_records(
         projection["security_review"] = {
             "fixture_id": pending.fixture_id,
             "match_id": pending.match_id,
-            "suspected_team_id": pending.suspected_team_id,
+            **(
+                {"suspected_team_id": pending.suspected_team_ids[0]}
+                if len(pending.suspected_team_ids) == 1
+                else {"suspected_team_ids": list(pending.suspected_team_ids)}
+            ),
         }
     if folded.is_complete:
         projection["status"] = "complete"
     if folded.ended_without_champion:
-        projection["completion_reason"] = "no_eligible_teams"
+        projection["completion_reason"] = NO_ELIGIBLE_TEAMS_REASON
     if folded.phase.value == "playoff":
         projection["bracket"] = {
             "locked": folded.bracket_locked,

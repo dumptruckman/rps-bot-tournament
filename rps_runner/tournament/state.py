@@ -21,7 +21,7 @@ from .competition import (
     Series,
     Standing,
     calculate_qualifying_standings,
-    create_playoff_bracket,
+    create_playoff_bracket_from_ranked_standings,
 )
 from .schedule import bot_positions
 from .seeding import derive_bot_seed, derive_fixture_seed, derive_match_seed
@@ -30,6 +30,9 @@ from .storage import StoredCompetitionRecord
 
 class TournamentStateError(ValueError):
     """A stored record cannot belong to the canonical Tournament history."""
+
+
+NO_ELIGIBLE_TEAMS_REASON = "no_eligible_teams"
 
 
 _MATCH_TERMINAL_FIELDS = {
@@ -95,8 +98,16 @@ class PendingSecurityRuling:
     match_id: str
     match_ordinal: int
     team_ids: tuple[str, str]
-    suspected_team_id: str
+    suspected_team_ids: tuple[str, ...]
     evidence_link: str
+
+    @property
+    def suspected_team_id(self) -> Optional[str]:
+        """Retain the singular view for the ordinary one-Team incident."""
+
+        if len(self.suspected_team_ids) == 1:
+            return self.suspected_team_ids[0]
+        return None
 
 
 @dataclass(frozen=True)
@@ -121,7 +132,9 @@ class TournamentState:
     @property
     def qualifying_phase_complete(self) -> bool:
         return (
-            all(series.is_complete for series in self.qualifying_series)
+            _qualifying_series_resolved(
+                self.qualifying_series, set(self.disqualified_team_ids)
+            )
             and self.pending_security_ruling is None
             and not self.pending_administrative_records
         )
@@ -144,6 +157,18 @@ class _FixtureDefinition:
     fixture_id: str
     team_ids: tuple[str, str]
     fixture_seed: int
+
+
+def _qualifying_series_resolved(
+    series: Iterable[Series], disqualified_team_ids: set[str]
+) -> bool:
+    return all(
+        item.is_complete
+        or bool(
+            {item.team_one_id, item.team_two_id} & disqualified_team_ids
+        )
+        for item in series
+    )
 
 
 def fold_tournament_state(
@@ -245,16 +270,16 @@ def fold_tournament_state(
                 record, pending_security_ruling
             )
             if decision == "confirmed":
-                team_id = pending_security_ruling.suspected_team_id
-                if team_id in disqualified_team_ids:
+                team_ids = pending_security_ruling.suspected_team_ids
+                if set(team_ids) & disqualified_team_ids:
                     raise TournamentStateError(
                         "A Team cannot be disqualified more than once"
                     )
-                disqualified_team_ids.add(team_id)
+                disqualified_team_ids.update(team_ids)
                 pending_administrative_records = (
-                    _administrative_records_for_disqualification(
+                    _administrative_records_for_disqualifications(
                         fixtures,
-                        team_id,
+                        team_ids,
                         disqualified_team_ids,
                         pending_security_ruling.match_id,
                     )
@@ -290,22 +315,23 @@ def fold_tournament_state(
         if record_type == "tournament_ended_without_champion":
             if not playoff_bracket_created:
                 raise TournamentStateError(
-                    "Tournament ended without a champion before the playoff "
-                    "field was recorded"
+                    "Tournament ended without a Tournament Champion before the "
+                    "playoff field was recorded"
                 )
             if playoff_seeds or playoff_fixtures or playoff_series:
                 raise TournamentStateError(
-                    "Tournament ended without a champion while eligible Teams remain"
+                    "Tournament ended without a Tournament Champion while eligible "
+                    "Teams remain"
                 )
             if record != build_tournament_ended_without_champion_record():
                 raise TournamentStateError(
-                    "Tournament end without a champion is non-canonical"
+                    "Tournament end without a Tournament Champion is non-canonical"
                 )
             ended_without_champion = True
             continue
         if record_type == "playoff_bracket_created":
             if (
-                not all(item.is_complete for item in series)
+                not _qualifying_series_resolved(series, disqualified_team_ids)
                 or pending_security_ruling is not None
                 or pending_administrative_records
             ):
@@ -531,7 +557,7 @@ def build_tournament_champion_record(team_id: str) -> dict[str, Any]:
 
 
 def build_sole_eligible_champion_record(team_id: str) -> dict[str, Any]:
-    """Declare a sole eligible Team champion without inventing a Fixture."""
+    """Declare a sole eligible Team Tournament Champion without a Fixture."""
 
     return {
         "type": "tournament_champion_declared",
@@ -543,12 +569,12 @@ def build_sole_eligible_champion_record(team_id: str) -> dict[str, Any]:
 
 
 def build_tournament_ended_without_champion_record() -> dict[str, Any]:
-    """End under the zero-eligible-Team rule, distinct from operator abort."""
+    """End without a Tournament Champion, distinct from operator abort."""
 
     return {
         "type": "tournament_ended_without_champion",
         "phase": Phase.PLAYOFF.value,
-        "reason_code": "no_eligible_teams",
+        "reason_code": NO_ELIGIBLE_TEAMS_REASON,
     }
 
 
@@ -628,7 +654,7 @@ def build_playoff_bracket_record(
         raise TournamentStateError(
             "Manifest contains an invalid Tournament Seed"
         ) from error
-    bracket = create_playoff_bracket(standings)
+    bracket = create_playoff_bracket_from_ranked_standings(standings)
     seeds = [
         {"seed": seeded.seed, "team_id": seeded.team_id}
         for seeded in bracket.seeds
@@ -694,25 +720,39 @@ def build_security_violation_suspected_record(
     match_id: str,
     match_ordinal: int,
     team_ids: tuple[str, str],
-    suspected_team_id: str,
     evidence_link: str,
+    suspected_team_id: Optional[str] = None,
+    suspected_team_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build the minimum canonical fact needed to recover a pending ruling."""
 
-    if suspected_team_id not in team_ids:
-        raise ValueError("Suspected Team must compete in the canonical Match")
+    if suspected_team_id is not None and suspected_team_ids:
+        raise ValueError("Use either singular or plural suspected Team IDs")
+    implicated = suspected_team_ids or (
+        (suspected_team_id,) if suspected_team_id is not None else ()
+    )
+    if (
+        not implicated
+        or len(implicated) != len(set(implicated))
+        or any(team_id not in team_ids for team_id in implicated)
+    ):
+        raise ValueError("Every suspected Team must compete in the canonical Match")
     if not isinstance(evidence_link, str) or not evidence_link:
         raise ValueError("A suspected Security Violation requires an evidence link")
-    return {
+    record = {
         "type": "security_violation_suspected",
         "phase": Phase.QUALIFYING.value,
         "fixture_id": fixture_id,
         "match_id": match_id,
         "match_ordinal": match_ordinal,
         "team_ids": list(team_ids),
-        "suspected_team_id": suspected_team_id,
         "evidence_link": evidence_link,
     }
+    if len(implicated) == 1:
+        record["suspected_team_id"] = implicated[0]
+    else:
+        record["suspected_team_ids"] = list(implicated)
+    return record
 
 
 def build_security_violation_ruling_record(
@@ -742,7 +782,11 @@ def build_security_violation_ruling_record(
         "phase": Phase.QUALIFYING.value,
         "fixture_id": pending.fixture_id,
         "match_id": pending.match_id,
-        "suspected_team_id": pending.suspected_team_id,
+        **(
+            {"suspected_team_id": pending.suspected_team_ids[0]}
+            if len(pending.suspected_team_ids) == 1
+            else {"suspected_team_ids": list(pending.suspected_team_ids)}
+        ),
         "decision": decision,
         "organizer_id": organizer_id,
         "reason_code": reason_code,
@@ -780,10 +824,19 @@ def _pending_security_ruling(
         "match_id",
         "match_ordinal",
         "team_ids",
-        "suspected_team_id",
         "evidence_link",
     }
-    suspected_team_id = record.get("suspected_team_id")
+    if "suspected_team_id" in record:
+        expected_fields.add("suspected_team_id")
+        suspected_team_ids = (record.get("suspected_team_id"),)
+    else:
+        expected_fields.add("suspected_team_ids")
+        raw_suspected_team_ids = record.get("suspected_team_ids")
+        suspected_team_ids = (
+            tuple(raw_suspected_team_ids)
+            if isinstance(raw_suspected_team_ids, (list, tuple))
+            else ()
+        )
     evidence_link = record.get("evidence_link")
     expected_match_id = f"{fixture.fixture_id}-match-{match_ordinal}"
     if (
@@ -793,7 +846,9 @@ def _pending_security_ruling(
         or record.get("match_id") != expected_match_id
         or record.get("match_ordinal") != match_ordinal
         or record.get("team_ids") != list(fixture.team_ids)
-        or suspected_team_id not in fixture.team_ids
+        or not suspected_team_ids
+        or len(suspected_team_ids) != len(set(suspected_team_ids))
+        or any(team_id not in fixture.team_ids for team_id in suspected_team_ids)
         or not isinstance(evidence_link, str)
         or not evidence_link
     ):
@@ -805,7 +860,7 @@ def _pending_security_ruling(
         expected_match_id,
         match_ordinal,
         fixture.team_ids,
-        suspected_team_id,
+        suspected_team_ids,
         evidence_link,
     )
 
@@ -836,16 +891,22 @@ def _validate_security_violation_ruling(
     return decision
 
 
-def _administrative_records_for_disqualification(
+def _administrative_records_for_disqualifications(
     fixtures: tuple[_FixtureDefinition, ...],
-    disqualified_team_id: str,
+    newly_disqualified_team_ids: tuple[str, ...],
     disqualified_team_ids: set[str],
     ruling_match_id: str,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for fixture in fixtures:
-        if disqualified_team_id not in fixture.team_ids:
+        implicated = [
+            team_id
+            for team_id in fixture.team_ids
+            if team_id in newly_disqualified_team_ids
+        ]
+        if len(implicated) != 1:
             continue
+        disqualified_team_id = implicated[0]
         winner = next(
             team_id
             for team_id in fixture.team_ids
