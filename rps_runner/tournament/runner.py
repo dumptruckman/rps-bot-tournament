@@ -392,6 +392,7 @@ class TournamentRunner:
         organizer_id: str,
         reason_code: str = "confirmed_prohibited_behavior",
         note: Optional[str] = None,
+        team_id: Optional[str] = None,
     ) -> StoredCompetitionRecord:
         """Confirm the pending attribution and disqualify the implicated Team."""
 
@@ -400,6 +401,7 @@ class TournamentRunner:
             organizer_id=organizer_id,
             reason_code=reason_code,
             note=note,
+            team_id=team_id,
         )
 
     def reject_security_violation(
@@ -408,6 +410,7 @@ class TournamentRunner:
         organizer_id: str,
         reason_code: str = "attribution_not_confirmed",
         note: Optional[str] = None,
+        team_id: Optional[str] = None,
     ) -> StoredCompetitionRecord:
         """Reject pending attribution and return the Match to retry policy."""
 
@@ -416,6 +419,7 @@ class TournamentRunner:
             organizer_id=organizer_id,
             reason_code=reason_code,
             note=note,
+            team_id=team_id,
         )
 
     def _rule_on_security_violation(
@@ -425,6 +429,7 @@ class TournamentRunner:
         organizer_id: str,
         reason_code: str,
         note: Optional[str],
+        team_id: Optional[str],
     ) -> StoredCompetitionRecord:
         with TournamentRunLock(self.tournament_directory):
             records = load_competition_records(self.tournament_directory)
@@ -440,6 +445,7 @@ class TournamentRunner:
                     organizer_id=organizer_id,
                     reason_code=reason_code,
                     note=note,
+                    suspected_team_id=team_id,
                 ),
             )
             all_records = records + [ruling]

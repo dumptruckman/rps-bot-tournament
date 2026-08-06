@@ -266,25 +266,36 @@ def fold_tournament_state(
                 raise TournamentStateError(
                     "A Security Violation ruling has no pending suspicion"
                 )
-            decision = _validate_security_violation_ruling(
+            decision, ruled_team_id = _validate_security_violation_ruling(
                 record, pending_security_ruling
             )
             if decision == "confirmed":
-                team_ids = pending_security_ruling.suspected_team_ids
-                if set(team_ids) & disqualified_team_ids:
+                if ruled_team_id in disqualified_team_ids:
                     raise TournamentStateError(
                         "A Team cannot be disqualified more than once"
                     )
-                disqualified_team_ids.update(team_ids)
+                disqualified_team_ids.add(ruled_team_id)
                 pending_administrative_records = (
                     _administrative_records_for_disqualifications(
                         fixtures,
-                        team_ids,
+                        (ruled_team_id,),
                         disqualified_team_ids,
                         pending_security_ruling.match_id,
                     )
                 )
-            pending_security_ruling = None
+            remaining_suspected_team_ids = tuple(
+                team_id
+                for team_id in pending_security_ruling.suspected_team_ids
+                if team_id != ruled_team_id
+            )
+            pending_security_ruling = (
+                replace(
+                    pending_security_ruling,
+                    suspected_team_ids=remaining_suspected_team_ids,
+                )
+                if remaining_suspected_team_ids
+                else None
+            )
             continue
         if playoff_bracket_created:
             playoff_fixtures, playoff_series = _resolve_final_if_ready(
@@ -737,6 +748,7 @@ def build_security_violation_suspected_record(
         or any(team_id not in team_ids for team_id in implicated)
     ):
         raise ValueError("Every suspected Team must compete in the canonical Match")
+    implicated = tuple(team_id for team_id in team_ids if team_id in implicated)
     if not isinstance(evidence_link, str) or not evidence_link:
         raise ValueError("A suspected Security Violation requires an evidence link")
     record = {
@@ -762,6 +774,7 @@ def build_security_violation_ruling_record(
     organizer_id: str,
     reason_code: str,
     note: Optional[str] = None,
+    suspected_team_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build an attributable organizer ruling with a closed reason code."""
 
@@ -777,16 +790,20 @@ def build_security_violation_ruling_record(
         raise ValueError("Organizer identity is required")
     if note is not None and not isinstance(note, str):
         raise TypeError("Ruling note must be a string or None")
+    if suspected_team_id is None:
+        if len(pending.suspected_team_ids) != 1:
+            raise ValueError(
+                "A multi-Team incident requires a ruling Team ID"
+            )
+        suspected_team_id = pending.suspected_team_ids[0]
+    if suspected_team_id not in pending.suspected_team_ids:
+        raise ValueError("Ruling Team is not pending attribution")
     return {
         "type": "security_violation_ruling",
         "phase": Phase.QUALIFYING.value,
         "fixture_id": pending.fixture_id,
         "match_id": pending.match_id,
-        **(
-            {"suspected_team_id": pending.suspected_team_ids[0]}
-            if len(pending.suspected_team_ids) == 1
-            else {"suspected_team_ids": list(pending.suspected_team_ids)}
-        ),
+        "suspected_team_id": suspected_team_id,
         "decision": decision,
         "organizer_id": organizer_id,
         "reason_code": reason_code,
@@ -848,7 +865,12 @@ def _pending_security_ruling(
         or record.get("team_ids") != list(fixture.team_ids)
         or not suspected_team_ids
         or len(suspected_team_ids) != len(set(suspected_team_ids))
-        or any(team_id not in fixture.team_ids for team_id in suspected_team_ids)
+        or suspected_team_ids
+        != tuple(
+            team_id
+            for team_id in fixture.team_ids
+            if team_id in suspected_team_ids
+        )
         or not isinstance(evidence_link, str)
         or not evidence_link
     ):
@@ -867,11 +889,12 @@ def _pending_security_ruling(
 
 def _validate_security_violation_ruling(
     record: Mapping[str, Any], pending: PendingSecurityRuling
-) -> str:
+) -> tuple[str, str]:
     decision = record.get("decision")
     reason_code = record.get("reason_code")
     organizer_id = record.get("organizer_id")
     note = record.get("note")
+    suspected_team_id = record.get("suspected_team_id")
     if decision not in {"confirmed", "rejected"}:
         raise TournamentStateError("Security Violation ruling has an invalid decision")
     try:
@@ -881,6 +904,7 @@ def _validate_security_violation_ruling(
             organizer_id=organizer_id,
             reason_code=reason_code,
             note=note,
+            suspected_team_id=suspected_team_id,
         )
     except (TypeError, ValueError) as error:
         raise TournamentStateError(str(error)) from error
@@ -888,7 +912,8 @@ def _validate_security_violation_ruling(
         raise TournamentStateError(
             "Security Violation ruling does not resolve the pending suspicion"
         )
-    return decision
+    assert isinstance(suspected_team_id, str)
+    return decision, suspected_team_id
 
 
 def _administrative_records_for_disqualifications(

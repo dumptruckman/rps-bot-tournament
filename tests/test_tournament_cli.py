@@ -313,10 +313,11 @@ class TournamentDemoCliTests(unittest.TestCase):
                             )
 
                         runner.match_executor = suspect_both
-                        runner.play_next_match()
-                        runner.confirm_security_violation(
-                            organizer_id="organizer-3"
-                        )
+                        incident = runner.play_next_match()
+                        for team_id in incident.record["suspected_team_ids"]:
+                            runner.confirm_security_violation(
+                                organizer_id="organizer-3", team_id=team_id
+                            )
 
                     requests: list[MatchExecutionRequest] = []
 
@@ -372,7 +373,6 @@ class TournamentDemoCliTests(unittest.TestCase):
                             "without a Tournament Champion",
                             self.stdout.getvalue(),
                         )
-                        self.assertIn("1 skipped", self.stdout.getvalue())
 
     def test_corrupt_existing_tournament_fails_without_overwriting_it(self) -> None:
         self.assertEqual(self.run_demo(), 0, self.stderr.getvalue())

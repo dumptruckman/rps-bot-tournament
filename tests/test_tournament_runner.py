@@ -654,7 +654,10 @@ class TournamentStepModeTests(unittest.TestCase):
                 incident.record["suspected_team_ids"],
                 incident.record["team_ids"],
             )
-            runner.confirm_security_violation(organizer_id="organizer-3")
+            for team_id in incident.record["suspected_team_ids"]:
+                runner.confirm_security_violation(
+                    organizer_id="organizer-3", team_id=team_id
+                )
 
         def finish(request: MatchExecutionRequest) -> MatchExecutionResult:
             requests.append(request)
@@ -669,6 +672,42 @@ class TournamentStepModeTests(unittest.TestCase):
         projection = load_scoreboard_projection(self.directory)
         assert projection is not None
         return runner, requests, projection
+
+    def _runner_at_reduced_playoffs(
+        self,
+        eligible_team_count: int,
+        playoff_executor,
+    ) -> TournamentRunner:
+        def suspect(request: MatchExecutionRequest) -> MatchExecutionResult:
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link=f"evidence:recovery-{eligible_team_count}/{request.match_id}",
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id=f"recovery-{eligible_team_count}-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=suspect,
+        )
+        for ordinal in range(4 - eligible_team_count):
+            runner.play_next_match()
+            runner.confirm_security_violation(
+                organizer_id=f"organizer-{ordinal + 1}"
+            )
+
+        runner.match_executor = lambda request: executor_result(
+            request,
+            winner_team_id=min(request.team_a_id, request.team_b_id),
+        )
+        while load_scoreboard_projection(self.directory)["phase"] == "qualifying":
+            runner.play_next_match()
+        runner.match_executor = playoff_executor
+        return runner
 
     def test_reduced_playoffs_execute_only_canonical_matches_and_reopen(
         self,
@@ -867,6 +906,91 @@ class TournamentStepModeTests(unittest.TestCase):
             load_scoreboard_projection(self.directory)["bracket"]["locked"]
         )
 
+    def test_open_recovers_three_team_final_after_semifinal_commit(self) -> None:
+        playoff_requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            playoff_requests.append(request)
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        runner = self._runner_at_reduced_playoffs(3, execute)
+        runner.play_next_match()
+        real_write_projection = write_scoreboard_projection
+
+        def interrupt_after_semifinal(
+            directory: Path, projection: dict[str, object]
+        ) -> None:
+            bracket = projection.get("bracket", {})
+            fixtures = bracket.get("fixtures", []) if isinstance(bracket, dict) else []
+            if fixtures and fixtures[0].get("status") == "complete":
+                raise RuntimeError("interrupted after reduced semifinal commit")
+            real_write_projection(directory, projection)
+
+        with patch(
+            "rps_runner.tournament.runner.write_scoreboard_projection",
+            side_effect=interrupt_after_semifinal,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "semifinal commit"):
+                runner.play_next_match()
+
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=execute,
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        state = fold_tournament_state(
+            load_manifest(self.directory).manifest,
+            load_competition_records(self.directory),
+        )
+        self.assertEqual(state.next_playoff_match.fixture_id, "playoff-final")
+        self.assertEqual(len(playoff_requests), 2)
+        reopened.play_next_match()
+        self.assertEqual(playoff_requests[-1].fixture_id, "playoff-final")
+
+    def test_open_recovers_direct_final_champion_after_terminal_commit(self) -> None:
+        playoff_requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            playoff_requests.append(request)
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        runner = self._runner_at_reduced_playoffs(2, execute)
+        runner.play_next_match()
+
+        def interrupt_before_champion(
+            directory: Path, record: dict[str, object]
+        ) -> object:
+            if record.get("type") == "tournament_champion_declared":
+                raise RuntimeError("interrupted before direct-final champion")
+            return append_competition_record(directory, record)
+
+        with patch(
+            "rps_runner.tournament.runner.append_competition_record",
+            side_effect=interrupt_before_champion,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "direct-final champion"):
+                runner.play_next_match()
+
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Recovery must not rerun the committed direct final"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        self.assertEqual(len(playoff_requests), 2)
+        self.assertEqual(reopened.status, "complete")
+        self.assertEqual(
+            load_competition_records(self.directory)[-1].record["type"],
+            "tournament_champion_declared",
+        )
+
     def test_open_recovers_zero_eligible_terminal_after_bracket_commit(self) -> None:
         def suspect_one(request: MatchExecutionRequest) -> MatchExecutionResult:
             return MatchExecutionResult(
@@ -903,7 +1027,11 @@ class TournamentStepModeTests(unittest.TestCase):
             )
 
         runner.match_executor = suspect_both
-        runner.play_next_match()
+        incident = runner.play_next_match()
+        first_team_id, second_team_id = incident.record["suspected_team_ids"]
+        runner.confirm_security_violation(
+            organizer_id="organizer-3", team_id=first_team_id
+        )
 
         def interrupt_after_bracket(
             directory: Path, record: dict[str, object]
@@ -917,7 +1045,9 @@ class TournamentStepModeTests(unittest.TestCase):
             side_effect=interrupt_after_bracket,
         ):
             with self.assertRaisesRegex(RuntimeError, "zero-eligible terminal"):
-                runner.confirm_security_violation(organizer_id="organizer-3")
+                runner.confirm_security_violation(
+                    organizer_id="organizer-3", team_id=second_team_id
+                )
 
         interrupted = load_competition_records(self.directory)
         self.assertEqual(interrupted[-1].record["type"], "playoff_bracket_created")
@@ -945,6 +1075,62 @@ class TournamentStepModeTests(unittest.TestCase):
         self.assertEqual(reopened.status, "complete")
         self.assertEqual(projection["completion_reason"], "no_eligible_teams")
         self.assertIsNone(projection["champion"])
+
+    def test_multi_team_incident_is_ruled_per_bot_artifact(self) -> None:
+        def suspect_one(request: MatchExecutionRequest) -> MatchExecutionResult:
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "single"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link=f"evidence:mixed-ruling/{request.match_id}",
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="mixed-ruling-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=suspect_one,
+        )
+        for ordinal in range(2):
+            runner.play_next_match()
+            runner.confirm_security_violation(
+                organizer_id=f"organizer-{ordinal + 1}"
+            )
+
+        runner.match_executor = lambda request: MatchExecutionResult(
+            infrastructure_failure=False,
+            competitive_outcome=None,
+            operational_telemetry={"raw_security_evidence": "double"},
+            evidence_link=f"evidence:mixed-ruling/{request.match_id}",
+            suspected_security_violation_team_ids=(
+                request.team_b_id,
+                request.team_a_id,
+            ),
+        )
+        incident = runner.play_next_match()
+        confirmed_team_id, cleared_team_id = incident.record[
+            "suspected_team_ids"
+        ]
+
+        runner.confirm_security_violation(
+            organizer_id="organizer-3", team_id=confirmed_team_id
+        )
+        runner.reject_security_violation(
+            organizer_id="organizer-4", team_id=cleared_team_id
+        )
+
+        state = fold_tournament_state(
+            load_manifest(self.directory).manifest,
+            load_competition_records(self.directory),
+        )
+        self.assertIn(confirmed_team_id, state.disqualified_team_ids)
+        self.assertNotIn(cleared_team_id, state.disqualified_team_ids)
+        self.assertEqual(state.champion_team_id, cleared_team_id)
+        self.assertEqual(
+            incident.record["suspected_team_ids"], incident.record["team_ids"]
+        )
 
     def test_first_playoff_step_locks_bracket_before_running_canonical_semifinal(
         self,

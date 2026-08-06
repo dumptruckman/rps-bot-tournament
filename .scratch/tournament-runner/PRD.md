@@ -8,7 +8,7 @@ Implementation status: in progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 171 passing tests under the repository's
+The implemented foundation is covered by 174 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
