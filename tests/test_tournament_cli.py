@@ -340,6 +340,125 @@ class TournamentDemoCliTests(unittest.TestCase):
         self.assertNotIn("artifact_digest", output)
         self.assertNotIn("entrypoint", output)
 
+    def test_continuous_creates_the_sealed_mode_and_finishes_tournament(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def stable_winner_executor(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            requests.append(request)
+            return winning_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        exit_code = self.run_demo(
+            "--continuous", match_executor=stable_winner_executor
+        )
+
+        self.assertEqual(exit_code, 0, self.stderr.getvalue())
+        self.assertEqual(
+            load_manifest(self.directory).manifest["execution_mode"],
+            "continuous",
+        )
+        self.assertEqual(len(requests), 18)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "complete")
+        self.assertIsNotNone(projection["champion"])
+
+        completed_request_count = len(requests)
+        self.stdout = StringIO()
+        self.assertEqual(
+            self.run_demo(
+                "--continuous", match_executor=stable_winner_executor
+            ),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.assertEqual(len(requests), completed_request_count)
+        self.assertIn("Tournament: resumed", self.stdout.getvalue())
+
+    def test_continuous_stops_cleanly_for_a_security_ruling(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def suspect(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link=f"evidence:cli-continuous/{request.match_id}",
+            )
+
+        exit_code = self.run_demo("--continuous", match_executor=suspect)
+
+        self.assertEqual(exit_code, 0, self.stderr.getvalue())
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"],
+            "awaiting_security_ruling",
+        )
+        self.assertIn(
+            "No Tournament Champion has been declared",
+            self.stdout.getvalue(),
+        )
+
+    def test_continuous_does_not_reinterpret_an_existing_step_tournament(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+        self.assertEqual(
+            self.run_demo(match_executor=recording_winner_executor(requests)),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.stderr = StringIO()
+
+        exit_code = self.run_demo(
+            "--continuous", match_executor=recording_winner_executor(requests)
+        )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(len(requests), 1)
+        self.assertIn("execution_mode", self.stderr.getvalue())
+        self.assertEqual(
+            load_manifest(self.directory).manifest["execution_mode"], "step"
+        )
+
+    def test_abort_preserves_sealed_continuous_mode(self) -> None:
+        def interrupt(_request: MatchExecutionRequest) -> MatchExecutionResult:
+            raise RuntimeError("stop after Continuous Mode creation")
+
+        self.assertEqual(
+            self.run_demo("--continuous", match_executor=interrupt),
+            2,
+        )
+        self.stderr = StringIO()
+
+        exit_code = self.run_demo(
+            "--abort",
+            "--organizer-id",
+            "organizer-continuous-cli",
+            match_executor=lambda request: self.fail(
+                "Abort must not execute another Match"
+            ),
+        )
+
+        self.assertEqual(exit_code, 0, self.stderr.getvalue())
+        self.assertEqual(
+            load_manifest(self.directory).manifest["execution_mode"],
+            "continuous",
+        )
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "aborted")
+        self.assertEqual(
+            projection["operator_abort"]["organizer_id"],
+            "organizer-continuous-cli",
+        )
+
     def test_all_finishes_reduced_direct_final_and_sole_champion(self) -> None:
         for eligible_team_count in (2, 1, 0):
             with self.subTest(eligible_team_count=eligible_team_count):

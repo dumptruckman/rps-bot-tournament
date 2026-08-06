@@ -1,4 +1,4 @@
-"""Highest-level Tournament creation, controls, and Step Mode orchestration."""
+"""Highest-level Tournament creation, controls, and execution orchestration."""
 
 from __future__ import annotations
 
@@ -222,7 +222,33 @@ class TournamentRunner:
             return "paused"
         return str(projection["status"])
 
+    def run_continuously(self) -> tuple[StoredCompetitionRecord, ...]:
+        """Advance a Continuous Mode Tournament to its next stop boundary."""
+
+        if self._manifest["execution_mode"] != "continuous":
+            raise ValueError(
+                "Continuous execution requires a Tournament sealed in "
+                "Continuous Mode"
+            )
+        committed: list[StoredCompetitionRecord] = []
+        while True:
+            record = self._play_next_match()
+            if record is None:
+                return tuple(committed)
+            if record.record["type"] == "security_violation_suspected":
+                return tuple(committed)
+            committed.append(record)
+
     def play_next_match(self) -> Optional[StoredCompetitionRecord]:
+        """Execute one canonical Match for a Step Mode Tournament."""
+
+        if self._manifest["execution_mode"] != "step":
+            raise ValueError(
+                "Play Next Match requires a Tournament sealed in Step Mode"
+            )
+        return self._play_next_match()
+
+    def _play_next_match(self) -> Optional[StoredCompetitionRecord]:
         with TournamentRunLock(self.tournament_directory):
             records = load_competition_records(self.tournament_directory)
             state = fold_tournament_state(self._manifest, records)

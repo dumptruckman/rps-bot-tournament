@@ -8,14 +8,15 @@ Implementation status: in progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 191 passing tests under the repository's
+The implemented foundation is covered by 200 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
 Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
 execution through Tournament Champion declaration, plus qualifying Security
 Violation rulings, Disqualification effects, and every reduced Playoff Phase
-shape, followed by canonical operator abort and durable reconstruction.
+shape, followed by canonical operator abort and durable reconstruction, and now
+sequential Continuous Mode execution through the public runner and demo CLI.
 
 ### Complete
 
@@ -104,20 +105,27 @@ shape, followed by canonical operator abort and durable reconstruction.
   attributable closed-code audit fields, reconstruct the terminal aborted state
   and projection from canonical records, preserve prior competitive facts, and
   prevent subsequent Match execution or post-completion abort.
+- [x] Advance a Tournament sealed in Continuous Mode through the public runner
+  without per-Match operator actions, stopping at completion, Security Violation,
+  Infrastructure Failure, and operator-abort boundaries while preserving
+  canonical scheduling, recovery, Series early completion, and projection
+  behavior; expose the same sealed mode through the demo CLI with sequential
+  execution.
 
 ### Partially complete
 
-- [ ] Complete operator execution controls. Step Mode, infrastructure pause, and
-  Security Violation confirmation/rejection and abort exist; explicit start,
-  requested pause, mode switching, and record-restoration commands remain.
+- [ ] Complete operator execution controls. Step Mode, sequential Continuous
+  Mode, infrastructure pause, Security Violation confirmation/rejection, and
+  abort exist; explicit start, requested pause, mode switching, and
+  record-restoration commands remain.
 - [ ] Verify maximum capacity end to end. Schedule generation covers the
   thirty-two-Team roster, but the full 1,497-Match/449,100-Round Tournament and
   its non-binding performance objectives have not been benchmarked.
 
 ### Remaining
 
-- [ ] Implement Continuous Mode, configured parallel Match execution, canonical
-  commit ordering under concurrency, and boundary-only mode switching.
+- [ ] Implement configured parallel Match execution, canonical commit ordering
+  under concurrency, requested pause, and boundary-only mode switching.
 - [ ] Implement hash-verified Competition Record restoration from backup.
 - [ ] Add the published capacity/preflight benchmark suite.
 
@@ -126,8 +134,8 @@ shape, followed by canonical operator abort and durable reconstruction.
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
 | Complete | 1–29, 33 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, playoff Disqualification, projection, and operator-abort seams. |
-| Partial | 30, 32, 34 | Step Mode and attributable rulings exist; broader controls and full capacity verification remain. |
-| Not started | 31, 35 | Continuous Mode controls and capacity benchmarks remain. |
+| Partial | 30, 32, 34 | Step Mode, sequential Continuous Mode auto-advance, and attributable rulings exist; requested pause, broader controls, and full capacity verification remain. |
+| Not started | 31, 35 | Parallel execution, boundary-only mode switching, and capacity benchmarks remain. |
 
 ## Problem Statement
 

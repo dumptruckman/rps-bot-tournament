@@ -560,6 +560,226 @@ class TournamentCreationTests(unittest.TestCase):
             config.execution_mode = "continuous"  # type: ignore[misc]
 
 
+class TournamentContinuousModeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.directory = Path(self.temporary_directory.name)
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_continuous_mode_completes_the_canonical_tournament(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="continuous-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=execute,
+        )
+
+        committed = runner.run_continuously()
+
+        self.assertEqual(len(committed), 18)
+        self.assertEqual(len(requests), 18)
+        self.assertTrue(
+            all(not request.match_id.endswith("-match-3") for request in requests)
+        )
+        self.assertEqual(
+            [record.record["match_id"] for record in committed],
+            [request.match_id for request in requests],
+        )
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "complete")
+        self.assertEqual(projection["phase"], "playoff")
+        self.assertIsNotNone(projection["champion"])
+        self.assertTrue(
+            all(
+                fixture["status"] == "complete"
+                for fixture in projection["fixtures"]
+            )
+        )
+        self.assertTrue(
+            all(
+                fixture["status"] == "complete"
+                for fixture in projection["bracket"]["fixtures"]
+            )
+        )
+
+    def test_execution_operations_reject_the_other_sealed_mode(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        continuous = TournamentRunner.create(
+            self.directory,
+            tournament_id="continuous-operation-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=execute,
+        )
+        with self.assertRaisesRegex(ValueError, "sealed in Step Mode"):
+            continuous.play_next_match()
+
+        with tempfile.TemporaryDirectory() as step_name:
+            step = TournamentRunner.create(
+                Path(step_name),
+                tournament_id="step-operation-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                match_executor=execute,
+            )
+            with self.assertRaisesRegex(ValueError, "sealed in Continuous Mode"):
+                step.run_continuously()
+
+        self.assertEqual(requests, [])
+
+    def test_continuous_mode_stops_while_awaiting_security_ruling(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def suspect(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link=f"evidence:continuous/{request.match_id}",
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="continuous-security-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=suspect,
+        )
+
+        committed = runner.run_continuously()
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(committed, ())
+        self.assertEqual(runner.status, "awaiting_security_ruling")
+        self.assertEqual(len(load_competition_records(self.directory)), 1)
+
+    def test_continuous_mode_does_not_rerun_a_match_committed_before_interruption(
+        self,
+    ) -> None:
+        initial_requests: list[MatchExecutionRequest] = []
+
+        def interrupt_next_match(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            initial_requests.append(request)
+            if len(initial_requests) == 2:
+                raise KeyboardInterrupt("operator stopped between Matches")
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        created = TournamentRunner.create(
+            self.directory,
+            tournament_id="continuous-resume-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=interrupt_next_match,
+        )
+        with self.assertRaises(KeyboardInterrupt):
+            created.run_continuously()
+        committed_match_id = initial_requests[0].match_id
+
+        resumed_requests: list[MatchExecutionRequest] = []
+
+        def resume(request: MatchExecutionRequest) -> MatchExecutionResult:
+            resumed_requests.append(request)
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        resumed = TournamentRunner.open(
+            self.directory,
+            match_executor=resume,
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        resumed.run_continuously()
+
+        self.assertNotIn(
+            committed_match_id,
+            [request.match_id for request in resumed_requests],
+        )
+        self.assertEqual(resumed.status, "complete")
+        record_count = len(load_competition_records(self.directory))
+
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "A completed Tournament must not request another Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        self.assertEqual(reopened.run_continuously(), ())
+        self.assertEqual(
+            len(load_competition_records(self.directory)), record_count
+        )
+
+    def test_continuous_mode_stops_at_infrastructure_and_abort_boundaries(
+        self,
+    ) -> None:
+        failed_requests: list[MatchExecutionRequest] = []
+
+        def fail(request: MatchExecutionRequest) -> MatchExecutionResult:
+            failed_requests.append(request)
+            return MatchExecutionResult(
+                infrastructure_failure=True,
+                competitive_outcome=None,
+                operational_telemetry={"error": "host unavailable"},
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="continuous-infrastructure-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=fail,
+        )
+        with self.assertRaises(InfrastructureInterventionRequiredError):
+            runner.run_continuously()
+
+        self.assertEqual(len(failed_requests), 3)
+        self.assertEqual(
+            {request.match_id for request in failed_requests},
+            {"qualifying-0001-match-1"},
+        )
+        self.assertEqual(load_competition_records(self.directory), [])
+
+        with tempfile.TemporaryDirectory() as aborted_name:
+            aborted_requests: list[MatchExecutionRequest] = []
+            aborted = TournamentRunner.create(
+                Path(aborted_name),
+                tournament_id="continuous-abort-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                config=TournamentConfig(execution_mode="continuous"),
+                match_executor=lambda request: aborted_requests.append(request),
+            )
+            aborted.abort(organizer_id="organizer-continuous")
+
+            self.assertEqual(aborted.run_continuously(), ())
+            self.assertEqual(aborted_requests, [])
+            self.assertEqual(aborted.status, "aborted")
+
+
 class TournamentStepModeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()

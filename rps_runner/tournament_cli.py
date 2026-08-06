@@ -20,6 +20,7 @@ from rps_runner.tournament.match_executor import (
 from rps_runner.tournament.runner import (
     BotArtifactManifest,
     Team,
+    TournamentConfig,
     TournamentRunner,
     tournament_manifest_incompatibilities,
 )
@@ -84,6 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="run every remaining Match through Tournament Champion declaration",
     )
     execution_scope.add_argument(
+        "--continuous",
+        dest="execution_scope",
+        action="store_const",
+        const="continuous",
+        help=(
+            "create or resume a Continuous Mode Tournament and advance it "
+            "through Tournament Champion declaration"
+        ),
+    )
+    execution_scope.add_argument(
         "--abort",
         dest="execution_scope",
         action="store_const",
@@ -142,6 +153,13 @@ def main(
         executor = match_executor or LocalMatchExecutor(
             _demo_artifact_command_resolver(resolved_project_root, executable)
         ).execute
+        config = TournamentConfig(
+            execution_mode=(
+                "continuous"
+                if options.execution_scope == "continuous"
+                else "step"
+            )
+        )
         if directory.exists():
             runner = TournamentRunner.open(
                 directory,
@@ -154,6 +172,11 @@ def main(
                     tournament_seed=options.seed,
                     project_root=resolved_project_root,
                     python_executable=executable,
+                    expected_execution_mode=(
+                        None
+                        if options.execution_scope == "abort"
+                        else config.execution_mode
+                    ),
                 ),
             )
             disposition = "resumed"
@@ -164,6 +187,7 @@ def main(
                 tournament_id=_DEMO_TOURNAMENT_ID,
                 tournament_seed=options.seed,
                 roster=roster,
+                config=config,
                 match_executor=executor,
             )
             disposition = "created"
@@ -174,6 +198,8 @@ def main(
                 reason_code=options.abort_reason or OPERATOR_ABORT_REASON,
                 note=options.abort_note,
             )
+        elif options.execution_scope == "continuous":
+            committed_records.extend(runner.run_continuously())
         else:
             while True:
                 projection = load_scoreboard_projection(directory)
@@ -303,12 +329,19 @@ def _verify_demo_manifest(
     tournament_seed: int,
     project_root: Path,
     python_executable: Path,
+    expected_execution_mode: Optional[str],
 ) -> None:
+    execution_mode = (
+        str(manifest["execution_mode"])
+        if expected_execution_mode is None
+        else expected_execution_mode
+    )
     incompatible_fields = tournament_manifest_incompatibilities(
         manifest,
         tournament_id=_DEMO_TOURNAMENT_ID,
         tournament_seed=tournament_seed,
         roster=_demo_roster(project_root, python_executable),
+        config=TournamentConfig(execution_mode=execution_mode),
     )
     if incompatible_fields:
         raise DemoTournamentCompatibilityError(list(incompatible_fields))
