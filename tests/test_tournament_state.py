@@ -6,6 +6,8 @@ from rps_runner.tournament.immutable import thaw_json
 from rps_runner.tournament.state import (
     TournamentStateError,
     build_playoff_bracket_record,
+    build_security_violation_ruling_record,
+    build_security_violation_suspected_record,
     fold_tournament_state,
 )
 from rps_runner.tournament.storage import StoredCompetitionRecord
@@ -177,6 +179,145 @@ def terminal_record(
 
 
 class TournamentStateFoldTests(unittest.TestCase):
+    def test_fold_reconstructs_pending_and_confirmed_qualifying_disqualification(
+        self,
+    ) -> None:
+        incident = StoredCompetitionRecord(
+            sequence=1,
+            content_hash="hash-1",
+            record=build_security_violation_suspected_record(
+                fixture_id="qualifying-0001",
+                match_id="qualifying-0001-match-1",
+                match_ordinal=1,
+                team_ids=("alpha", "beta"),
+                suspected_team_id="alpha",
+                evidence_link="evidence:cup/incident-1",
+            ),
+        )
+        pending = fold_tournament_state(manifest(), (incident,))
+        self.assertEqual(pending.pending_security_ruling.suspected_team_id, "alpha")
+        self.assertIsNone(pending.next_qualifying_match)
+
+        ruling = StoredCompetitionRecord(
+            sequence=2,
+            content_hash="hash-2",
+            record=build_security_violation_ruling_record(
+                pending.pending_security_ruling,
+                decision="confirmed",
+                organizer_id="organizer-1",
+                reason_code="confirmed_prohibited_behavior",
+                note=None,
+            ),
+        )
+        administrative = StoredCompetitionRecord(
+            sequence=3,
+            content_hash="hash-3",
+            record={
+                "type": "administrative_series_win",
+                "phase": "qualifying",
+                "fixture_id": "qualifying-0001",
+                "team_ids": ["alpha", "beta"],
+                "winner_team_id": "beta",
+                "disqualified_team_id": "alpha",
+                "reason_code": "opponent_disqualified",
+                "ruling_match_id": "qualifying-0001-match-1",
+            },
+        )
+        ruled_prefix = fold_tournament_state(manifest(), (incident, ruling))
+        with self.assertRaises(TypeError):
+            ruled_prefix.pending_administrative_records[0][
+                "winner_team_id"
+            ] = "gamma"
+
+        state = fold_tournament_state(manifest(), (incident, ruling, administrative))
+
+        self.assertEqual(state.disqualified_team_ids, ("alpha",))
+        self.assertEqual(state.qualifying_series[0].administrative_winner_id, "beta")
+        self.assertEqual(state.next_qualifying_match.fixture_id, "qualifying-0002")
+        standings = {standing.team_id: standing for standing in state.standings}
+        self.assertNotIn("alpha", standings)
+        self.assertEqual(standings["beta"].standing_points, 3)
+        self.assertEqual(standings["beta"].match_wins, 0)
+
+    def test_fold_rejects_impossible_incident_and_ruling_histories(self) -> None:
+        valid_incident_record = build_security_violation_suspected_record(
+            fixture_id="qualifying-0001",
+            match_id="qualifying-0001-match-1",
+            match_ordinal=1,
+            team_ids=("alpha", "beta"),
+            suspected_team_id="alpha",
+            evidence_link="evidence:cup/incident-1",
+        )
+        valid_incident = StoredCompetitionRecord(1, valid_incident_record, "hash-1")
+        pending = fold_tournament_state(manifest(), (valid_incident,))
+        valid_ruling_record = build_security_violation_ruling_record(
+            pending.pending_security_ruling,
+            decision="rejected",
+            organizer_id="organizer-1",
+            reason_code="attribution_not_confirmed",
+        )
+        invalid_cases = []
+        wrong_team = thaw_json(valid_incident_record)
+        wrong_team["suspected_team_id"] = "gamma"
+        invalid_cases.append(
+            (
+                "next canonical Match",
+                (StoredCompetitionRecord(1, wrong_team, "h"),),
+            )
+        )
+        ruling_first = StoredCompetitionRecord(1, valid_ruling_record, "h")
+        invalid_cases.append(("no pending suspicion", (ruling_first,)))
+        duplicate_incident = StoredCompetitionRecord(2, valid_incident_record, "h2")
+        invalid_cases.append(("already awaiting", (valid_incident, duplicate_incident)))
+        wrong_match = thaw_json(valid_ruling_record)
+        wrong_match["match_id"] = "qualifying-0001-match-2"
+        invalid_cases.append(
+            (
+                "does not resolve",
+                (valid_incident, StoredCompetitionRecord(2, wrong_match, "h2")),
+            )
+        )
+        valid_ruling = StoredCompetitionRecord(2, valid_ruling_record, "h2")
+        duplicate_ruling = StoredCompetitionRecord(3, valid_ruling_record, "h3")
+        invalid_cases.append(
+            (
+                "no pending suspicion",
+                (valid_incident, valid_ruling, duplicate_ruling),
+            )
+        )
+        confirmed_ruling_record = build_security_violation_ruling_record(
+            pending.pending_security_ruling,
+            decision="confirmed",
+            organizer_id="organizer-1",
+            reason_code="confirmed_prohibited_behavior",
+        )
+        administrative_record = {
+            "type": "administrative_series_win",
+            "phase": "qualifying",
+            "fixture_id": "qualifying-0001",
+            "team_ids": ["alpha", "beta"],
+            "winner_team_id": "beta",
+            "disqualified_team_id": "alpha",
+            "reason_code": "opponent_disqualified",
+            "ruling_match_id": "qualifying-0001-match-1",
+        }
+        invalid_cases.append(
+            (
+                "next canonical Match",
+                (
+                    valid_incident,
+                    StoredCompetitionRecord(2, confirmed_ruling_record, "h2"),
+                    StoredCompetitionRecord(3, administrative_record, "h3"),
+                    StoredCompetitionRecord(4, valid_incident_record, "h4"),
+                ),
+            )
+        )
+
+        for expected, records in invalid_cases:
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(TournamentStateError, expected):
+                    fold_tournament_state(manifest(), records)
+
     def test_empty_fold_exposes_first_canonical_match_and_empty_standings(self) -> None:
         state = fold_tournament_state(manifest(), ())
 

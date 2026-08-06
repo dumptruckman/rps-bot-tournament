@@ -10,6 +10,7 @@ from rps_runner.engine import InfrastructureError, MatchConfig
 from rps_runner.tournament.match_executor import (
     LocalMatchExecutor,
     MatchExecutionRequest,
+    MatchExecutionResult,
 )
 from rps_runner.tournament.storage import canonical_json_bytes
 
@@ -95,6 +96,32 @@ def engine_result(
 
 
 class TournamentMatchExecutorTests(unittest.TestCase):
+    def test_suspected_security_violation_is_distinct_from_other_outcomes(self) -> None:
+        result = MatchExecutionResult(
+            infrastructure_failure=False,
+            competitive_outcome=None,
+            operational_telemetry={"raw_evidence": {"network": "blocked"}},
+            suspected_security_violation_team_id="red-team",
+            evidence_link="evidence:summer-cup/qualifying-001-match-1/attempt-1",
+        )
+
+        self.assertFalse(result.infrastructure_failure)
+        self.assertIsNone(result.competitive_outcome)
+        self.assertEqual(result.suspected_security_violation_team_id, "red-team")
+        self.assertEqual(
+            result.evidence_link,
+            "evidence:summer-cup/qualifying-001-match-1/attempt-1",
+        )
+
+    def test_execution_result_rejects_ambiguous_security_outcomes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "evidence link"):
+            MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={},
+                suspected_security_violation_team_id="red-team",
+            )
+
     def test_request_requires_the_sealed_300_turn_match_contract(self) -> None:
         with self.assertRaisesRegex(ValueError, "300"):
             request(scheduled_turns=299)

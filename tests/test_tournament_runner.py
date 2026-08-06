@@ -13,12 +13,17 @@ from rps_runner.tournament.runner import (
     InfrastructureInterventionRequiredError,
     MatchLimits,
     MatchExecutionRequest,
+    SecurityRulingRequiredError,
     Team,
     TournamentCompatibilityError,
     TournamentConfig,
     TournamentRunner,
 )
-from rps_runner.tournament.state import TournamentStateError, fold_tournament_state
+from rps_runner.tournament.state import (
+    TournamentStateError,
+    build_security_violation_ruling_record,
+    fold_tournament_state,
+)
 from rps_runner.tournament.seeding import derive_fixture_seed
 from rps_runner.tournament.match_executor import MatchExecutionResult
 from rps_runner.tournament.immutable import thaw_json
@@ -143,7 +148,7 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(manifest["tournament_seed"], "123456789")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["seed_derivation_version"], 1)
-        self.assertEqual(manifest["record_schema_version"], 1)
+        self.assertEqual(manifest["record_schema_version"], 2)
         self.assertEqual(manifest["scoreboard_version"], 1)
         self.assertEqual(manifest["scheduled_turns_per_match"], 300)
         self.assertEqual(manifest["execution_mode"], "step")
@@ -529,7 +534,7 @@ class TournamentCreationTests(unittest.TestCase):
                 },
             )
             self.assertEqual(manifest["protocol_version"], 1)
-            self.assertEqual(manifest["record_schema_version"], 1)
+            self.assertEqual(manifest["record_schema_version"], 2)
             self.assertEqual(manifest["seed_derivation_version"], 1)
             self.assertEqual(manifest["scoreboard_version"], 1)
             self.assertEqual(
@@ -1628,6 +1633,294 @@ class TournamentStepModeTests(unittest.TestCase):
 
         self.assertEqual(recovery_requests[0].attempt_number, 4)
         self.assertEqual(recovered.record["match_id"], "qualifying-0001-match-1")
+
+    def test_suspected_security_violation_pauses_with_evidence_only_in_telemetry(
+        self,
+    ) -> None:
+        def suspect(request: MatchExecutionRequest) -> MatchExecutionResult:
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={
+                    "raw_security_evidence": {"blocked_host": "169.254.1.1"}
+                },
+                suspected_security_violation_team_id="beta",
+                evidence_link="evidence:security-cup/incident-1",
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="security-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=suspect,
+        )
+
+        incident = runner.play_next_match()
+
+        self.assertEqual(
+            incident.record,
+            {
+                "type": "security_violation_suspected",
+                "phase": "qualifying",
+                "fixture_id": "qualifying-0001",
+                "match_id": "qualifying-0001-match-1",
+                "match_ordinal": 1,
+                "team_ids": ["beta", "delta"],
+                "suspected_team_id": "beta",
+                "evidence_link": "evidence:security-cup/incident-1",
+            },
+        )
+        with self.assertRaises(SecurityRulingRequiredError):
+            runner.play_next_match()
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "awaiting_security_ruling")
+        self.assertEqual(
+            projection["security_review"],
+            {
+                "fixture_id": "qualifying-0001",
+                "match_id": "qualifying-0001-match-1",
+                "suspected_team_id": "beta",
+            },
+        )
+        self.assertNotIn("evidence", str(projection))
+        self.assertIn(
+            "raw_security_evidence",
+            load_operational_telemetry(self.directory)[1],
+        )
+        write_scoreboard_projection(self.directory, {"status": "stale"})
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "A pending ruling must survive recovery"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        self.assertEqual(reopened.status, "awaiting_security_ruling")
+        with self.assertRaises(SecurityRulingRequiredError):
+            reopened.play_next_match()
+
+    def test_security_evidence_variance_does_not_change_canonical_incident(self) -> None:
+        incidents = []
+        telemetry_values = []
+        for suffix, raw_evidence in (("one", "host-a"), ("two", "host-b")):
+            directory = self.directory / suffix
+            runner = TournamentRunner.create(
+                directory,
+                tournament_id="evidence-separation-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                match_executor=lambda request, raw=raw_evidence: MatchExecutionResult(
+                    infrastructure_failure=False,
+                    competitive_outcome=None,
+                    operational_telemetry={"raw_security_evidence": raw},
+                    suspected_security_violation_team_id="beta",
+                    evidence_link="evidence:evidence-separation-cup/incident-1",
+                ),
+            )
+            runner.play_next_match()
+            incidents.append(load_competition_records(directory)[0])
+            telemetry_values.append(load_operational_telemetry(directory)[1])
+
+        self.assertEqual(incidents[0], incidents[1])
+        self.assertNotEqual(telemetry_values[0], telemetry_values[1])
+
+    def test_playoff_suspicion_never_appends_a_qualifying_incident(self) -> None:
+        runner = self._runner_at_playoffs(
+            lambda request: MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id=request.team_a_id,
+                evidence_link="evidence:playoff/incident-1",
+            )
+        )
+
+        with self.assertRaisesRegex(
+            NotImplementedError, "Playoff Security Violation"
+        ):
+            runner.play_next_match()
+
+        records = load_competition_records(self.directory)
+        self.assertEqual(records[-1].record["type"], "playoff_bracket_locked")
+        self.assertNotIn(
+            "security_violation_suspected",
+            [record.record["type"] for record in records],
+        )
+        fold_tournament_state(load_manifest(self.directory).manifest, records)
+
+    def test_rejected_attribution_retries_identical_match_with_absolute_attempt(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def suspect(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id="beta",
+                evidence_link="evidence:rejected-cup/incident-1",
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="rejected-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=suspect,
+        )
+        runner.play_next_match()
+        ruling = runner.reject_security_violation(
+            organizer_id="organizer-7", note="host agent caused the request"
+        )
+        runner.match_executor = lambda request: (
+            requests.append(request) or executor_result(request, winner_team_id="beta")
+        )
+
+        terminal = runner.play_next_match()
+
+        self.assertEqual(ruling.record["decision"], "rejected")
+        self.assertEqual(ruling.record["organizer_id"], "organizer-7")
+        self.assertEqual(ruling.record["reason_code"], "attribution_not_confirmed")
+        self.assertEqual(terminal.record["match_id"], "qualifying-0001-match-1")
+        self.assertEqual([request.attempt_number for request in requests], [1, 2])
+        first = requests[0].__dict__ | {"attempt_number": 0}
+        self.assertEqual(requests[1].__dict__ | {"attempt_number": 0}, first)
+
+    def test_confirmed_violation_disqualifies_and_canonically_skips_fixtures(
+        self,
+    ) -> None:
+        attempts: list[MatchExecutionRequest] = []
+
+        def suspect(request: MatchExecutionRequest) -> MatchExecutionResult:
+            attempts.append(request)
+            return MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id="beta",
+                evidence_link="evidence:confirmed-cup/incident-1",
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="confirmed-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=suspect,
+        )
+        runner.play_next_match()
+        ruling = runner.confirm_security_violation(
+            organizer_id="organizer-9", note="network policy escape confirmed"
+        )
+
+        records = load_competition_records(self.directory)
+        self.assertEqual(
+            [record.record["type"] for record in records],
+            [
+                "security_violation_suspected",
+                "security_violation_ruling",
+                "administrative_series_win",
+                "administrative_series_win",
+                "administrative_series_win",
+            ],
+        )
+        self.assertEqual(
+            [record.record["fixture_id"] for record in records[2:]],
+            ["qualifying-0001", "qualifying-0003", "qualifying-0005"],
+        )
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        self.assertEqual(state.disqualified_team_ids, ("beta",))
+        self.assertEqual(state.next_qualifying_match.fixture_id, "qualifying-0002")
+        self.assertNotIn("beta", {standing.team_id for standing in state.standings})
+        self.assertTrue(all(item.standing_points == 3 for item in state.standings))
+        projection = load_scoreboard_projection(self.directory)
+        beta = next(team for team in projection["teams"] if team["team_id"] == "beta")
+        self.assertEqual(beta["status"], "disqualified")
+        self.assertEqual(
+            projection["fixtures"][0]["administrative_series_win"],
+            {"winner_team_id": "delta", "reason_code": "opponent_disqualified"},
+        )
+        self.assertEqual(ruling.record["organizer_id"], "organizer-9")
+
+    def test_open_finishes_canonical_admin_records_after_confirmed_ruling(self) -> None:
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="ruling-recovery-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=lambda request: MatchExecutionResult(
+                infrastructure_failure=False,
+                competitive_outcome=None,
+                operational_telemetry={"raw_security_evidence": "variable"},
+                suspected_security_violation_team_id="beta",
+                evidence_link="evidence:ruling-recovery-cup/incident-1",
+            ),
+        )
+        runner.play_next_match()
+        records = load_competition_records(self.directory)
+        pending = fold_tournament_state(
+            load_manifest(self.directory).manifest, records
+        ).pending_security_ruling
+        append_competition_record(
+            self.directory,
+            build_security_violation_ruling_record(
+                pending,
+                decision="confirmed",
+                organizer_id="organizer-11",
+                reason_code="confirmed_prohibited_behavior",
+            ),
+        )
+
+        TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: self.fail(
+                "Recovery must not execute a skipped Match"
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        recovered = load_competition_records(self.directory)
+        self.assertEqual(
+            [record.record["fixture_id"] for record in recovered[2:]],
+            ["qualifying-0001", "qualifying-0003", "qualifying-0005"],
+        )
+
+    def test_disqualification_preserves_played_match_but_excludes_its_statistics(
+        self,
+    ) -> None:
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="played-evidence-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            match_executor=lambda request: executor_result(
+                request, winner_team_id="beta"
+            ),
+        )
+        played = runner.play_next_match()
+        runner.match_executor = lambda request: MatchExecutionResult(
+            infrastructure_failure=False,
+            competitive_outcome=None,
+            operational_telemetry={"raw_security_evidence": "variable"},
+            suspected_security_violation_team_id="beta",
+            evidence_link="evidence:played-evidence-cup/incident-1",
+        )
+        runner.play_next_match()
+        runner.confirm_security_violation(organizer_id="organizer-12")
+
+        records = load_competition_records(self.directory)
+        state = fold_tournament_state(load_manifest(self.directory).manifest, records)
+        first_series = state.qualifying_series[0]
+        self.assertEqual(first_series.match_count, 1)
+        self.assertEqual(first_series.matches[0].winner, "beta")
+        self.assertEqual(records[0], played)
+        standings = {standing.team_id: standing for standing in state.standings}
+        self.assertEqual(standings["delta"].match_losses, 0)
+        self.assertEqual(standings["delta"].round_losses, 0)
+        self.assertEqual(standings["delta"].standing_points, 3)
 
     def test_interrupted_started_attempt_is_consumed_when_resuming(self) -> None:
         interrupted_requests: list[MatchExecutionRequest] = []

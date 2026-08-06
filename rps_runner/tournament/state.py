@@ -12,6 +12,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
+from .immutable import FrozenJsonDict, freeze_json
 from .competition import (
     MatchOutcome,
     MatchResult,
@@ -86,6 +87,18 @@ class PlayoffFixtureDefinition:
 
 
 @dataclass(frozen=True)
+class PendingSecurityRuling:
+    """A suspected Security Violation awaiting an organizer ruling."""
+
+    fixture_id: str
+    match_id: str
+    match_ordinal: int
+    team_ids: tuple[str, str]
+    suspected_team_id: str
+    evidence_link: str
+
+
+@dataclass(frozen=True)
 class TournamentState:
     """Tournament state derived solely from a Manifest and its records."""
 
@@ -99,10 +112,17 @@ class TournamentState:
     next_playoff_match: Optional[PlayoffMatch]
     bracket_locked: bool
     champion_team_id: Optional[str]
+    disqualified_team_ids: tuple[str, ...] = ()
+    pending_security_ruling: Optional[PendingSecurityRuling] = None
+    pending_administrative_records: tuple[FrozenJsonDict, ...] = ()
 
     @property
     def qualifying_phase_complete(self) -> bool:
-        return self.next_qualifying_match is None
+        return (
+            all(series.is_complete for series in self.qualifying_series)
+            and self.pending_security_ruling is None
+            and not self.pending_administrative_records
+        )
 
 
 @dataclass(frozen=True)
@@ -133,7 +153,6 @@ def fold_tournament_state(
         )
         for fixture in fixtures
     ]
-    current_fixture_index = 0
     playoff_bracket_created = False
     playoff_seeds: tuple[PlayoffSeed, ...] = ()
     playoff_fixtures: tuple[PlayoffFixtureDefinition, ...] = ()
@@ -141,6 +160,9 @@ def fold_tournament_state(
     current_playoff_index = 0
     bracket_locked = False
     champion_team_id: Optional[str] = None
+    disqualified_team_ids: set[str] = set()
+    pending_security_ruling: Optional[PendingSecurityRuling] = None
+    pending_administrative_records: list[dict[str, Any]] = []
 
     for expected_sequence, stored in enumerate(records, start=1):
         if not isinstance(stored, StoredCompetitionRecord):
@@ -151,6 +173,68 @@ def fold_tournament_state(
             )
         record = stored.record
         record_type = record.get("type")
+        if pending_administrative_records:
+            expected_administrative = pending_administrative_records[0]
+            if record != expected_administrative:
+                raise TournamentStateError(
+                    "Confirmed Disqualification requires canonical Administrative "
+                    "Series Wins in Fixture order"
+                )
+            fixture_id = expected_administrative["fixture_id"]
+            fixture_index = fixture_indexes[fixture_id]
+            series[fixture_index] = replace(
+                series[fixture_index],
+                administrative_winner_id=expected_administrative["winner_team_id"],
+            )
+            pending_administrative_records.pop(0)
+            continue
+        if record_type == "security_violation_suspected":
+            if playoff_bracket_created:
+                raise TournamentStateError(
+                    "Playoff Security Violation integration is not supported"
+                )
+            if pending_security_ruling is not None:
+                raise TournamentStateError(
+                    "A Security Violation suspicion is already awaiting a ruling"
+                )
+            selected_index = _next_qualifying_fixture_index(
+                series, disqualified_team_ids
+            )
+            if selected_index is None:
+                raise TournamentStateError(
+                    "A Security Violation suspicion cannot follow qualification"
+                )
+            fixture = fixtures[selected_index]
+            match_ordinal = series[selected_index].match_count + 1
+            pending_security_ruling = _pending_security_ruling(
+                record, fixture, match_ordinal
+            )
+            continue
+        if record_type == "security_violation_ruling":
+            if pending_security_ruling is None:
+                raise TournamentStateError(
+                    "A Security Violation ruling has no pending suspicion"
+                )
+            decision = _validate_security_violation_ruling(
+                record, pending_security_ruling
+            )
+            if decision == "confirmed":
+                team_id = pending_security_ruling.suspected_team_id
+                if team_id in disqualified_team_ids:
+                    raise TournamentStateError(
+                        "A Team cannot be disqualified more than once"
+                    )
+                disqualified_team_ids.add(team_id)
+                pending_administrative_records = (
+                    _administrative_records_for_disqualification(
+                        fixtures,
+                        team_id,
+                        disqualified_team_ids,
+                        pending_security_ruling.match_id,
+                    )
+                )
+            pending_security_ruling = None
+            continue
         if playoff_bracket_created:
             playoff_fixtures, playoff_series = _resolve_final_if_ready(
                 playoff_fixtures, playoff_series, playoff_seeds
@@ -174,7 +258,11 @@ def fold_tournament_state(
             champion_team_id = expected_champion
             continue
         if record_type == "playoff_bracket_created":
-            if current_fixture_index != len(fixtures):
+            if (
+                not all(item.is_complete for item in series)
+                or pending_security_ruling is not None
+                or pending_administrative_records
+            ):
                 raise TournamentStateError(
                     "Playoff bracket was created before the Qualifying Phase completed"
                 )
@@ -182,7 +270,11 @@ def fold_tournament_state(
                 raise TournamentStateError(
                     "Playoff bracket was created more than once"
                 )
-            standings = _calculate_standings(manifest, series)
+            standings = _calculate_standings(
+                manifest,
+                series,
+                disqualified_team_ids=disqualified_team_ids,
+            )
             expected = build_playoff_bracket_record(manifest, standings)
             if record != expected:
                 raise TournamentStateError(
@@ -274,22 +366,32 @@ def fold_tournament_state(
             if playoff_series[current_playoff_index].is_complete:
                 current_playoff_index += 1
             continue
+        if pending_security_ruling is not None:
+            raise TournamentStateError(
+                "A Match cannot be committed while a Security Violation awaits ruling"
+            )
         fixture_id = record.get("fixture_id")
         if not isinstance(fixture_id, str) or fixture_id not in fixture_indexes:
             raise TournamentStateError("Competition Record names an unknown Fixture")
         record_fixture_index = fixture_indexes[fixture_id]
-
-        if record_fixture_index < current_fixture_index:
+        if series[record_fixture_index].is_complete:
             raise TournamentStateError(
                 "Competition Record appears after a complete Series"
             )
-        if record_fixture_index != current_fixture_index:
+        selected_index = _next_qualifying_fixture_index(
+            series, disqualified_team_ids
+        )
+        if selected_index is None:
+            raise TournamentStateError(
+                "Competition Record appears after a complete Series"
+            )
+        if record_fixture_index != selected_index:
             raise TournamentStateError(
                 "Competition Record violates canonical Fixture order"
             )
 
-        fixture = fixtures[current_fixture_index]
-        current_series = series[current_fixture_index]
+        fixture = fixtures[selected_index]
+        current_series = series[selected_index]
         match_ordinal = record.get("match_ordinal")
         expected_match_ordinal = current_series.match_count + 1
         if (
@@ -304,26 +406,30 @@ def fold_tournament_state(
         _validate_competitive_details(manifest, record, fixture)
         result = _match_result(record, fixture, match_ordinal)
         try:
-            series[current_fixture_index] = current_series.record(result)
+            series[selected_index] = current_series.record(result)
         except ValueError as error:
             raise TournamentStateError(str(error)) from error
 
-        if series[current_fixture_index].is_complete:
-            current_fixture_index += 1
-
     next_match: Optional[QualifyingMatch]
-    if current_fixture_index == len(fixtures):
+    selected_index = _next_qualifying_fixture_index(series, disqualified_team_ids)
+    if (
+        selected_index is None
+        or pending_security_ruling is not None
+        or pending_administrative_records
+    ):
         next_match = None
     else:
-        fixture = fixtures[current_fixture_index]
+        fixture = fixtures[selected_index]
         next_match = QualifyingMatch(
             fixture_id=fixture.fixture_id,
-            match_ordinal=series[current_fixture_index].match_count + 1,
+            match_ordinal=series[selected_index].match_count + 1,
             team_ids=fixture.team_ids,
             fixture_seed=fixture.fixture_seed,
         )
 
-    standings = _calculate_standings(manifest, series)
+    standings = _calculate_standings(
+        manifest, series, disqualified_team_ids=disqualified_team_ids
+    )
     playoff_fixtures, playoff_series = _resolve_final_if_ready(
         playoff_fixtures, playoff_series, playoff_seeds
     )
@@ -349,6 +455,9 @@ def fold_tournament_state(
         next_playoff_match,
         bracket_locked,
         champion_team_id,
+        tuple(sorted(disqualified_team_ids)),
+        pending_security_ruling,
+        tuple(_frozen_record(record) for record in pending_administrative_records),
     )
 
 
@@ -455,13 +564,201 @@ def _playoff_values(
     return seeds, fixtures
 
 
+def build_security_violation_suspected_record(
+    *,
+    fixture_id: str,
+    match_id: str,
+    match_ordinal: int,
+    team_ids: tuple[str, str],
+    suspected_team_id: str,
+    evidence_link: str,
+) -> dict[str, Any]:
+    """Build the minimum canonical fact needed to recover a pending ruling."""
+
+    if suspected_team_id not in team_ids:
+        raise ValueError("Suspected Team must compete in the canonical Match")
+    if not isinstance(evidence_link, str) or not evidence_link:
+        raise ValueError("A suspected Security Violation requires an evidence link")
+    return {
+        "type": "security_violation_suspected",
+        "phase": Phase.QUALIFYING.value,
+        "fixture_id": fixture_id,
+        "match_id": match_id,
+        "match_ordinal": match_ordinal,
+        "team_ids": list(team_ids),
+        "suspected_team_id": suspected_team_id,
+        "evidence_link": evidence_link,
+    }
+
+
+def build_security_violation_ruling_record(
+    pending: PendingSecurityRuling,
+    *,
+    decision: str,
+    organizer_id: str,
+    reason_code: str,
+    note: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build an attributable organizer ruling with a closed reason code."""
+
+    allowed_reason = {
+        "confirmed": "confirmed_prohibited_behavior",
+        "rejected": "attribution_not_confirmed",
+    }
+    if decision not in allowed_reason:
+        raise ValueError("Security Violation decision must be confirmed or rejected")
+    if reason_code != allowed_reason[decision]:
+        raise ValueError("Reason code is not valid for this Security Violation ruling")
+    if not isinstance(organizer_id, str) or not organizer_id.strip():
+        raise ValueError("Organizer identity is required")
+    if note is not None and not isinstance(note, str):
+        raise TypeError("Ruling note must be a string or None")
+    return {
+        "type": "security_violation_ruling",
+        "phase": Phase.QUALIFYING.value,
+        "fixture_id": pending.fixture_id,
+        "match_id": pending.match_id,
+        "suspected_team_id": pending.suspected_team_id,
+        "decision": decision,
+        "organizer_id": organizer_id,
+        "reason_code": reason_code,
+        "note": note,
+    }
+
+
+def _next_qualifying_fixture_index(
+    series: list[Series], disqualified_team_ids: set[str]
+) -> Optional[int]:
+    for index, item in enumerate(series):
+        if item.is_complete:
+            continue
+        if {item.team_one_id, item.team_two_id} & disqualified_team_ids:
+            continue
+        return index
+    return None
+
+
+def _frozen_record(record: dict[str, Any]) -> FrozenJsonDict:
+    frozen = freeze_json(record)
+    assert isinstance(frozen, FrozenJsonDict)
+    return frozen
+
+
+def _pending_security_ruling(
+    record: Mapping[str, Any],
+    fixture: _FixtureDefinition,
+    match_ordinal: int,
+) -> PendingSecurityRuling:
+    expected_fields = {
+        "type",
+        "phase",
+        "fixture_id",
+        "match_id",
+        "match_ordinal",
+        "team_ids",
+        "suspected_team_id",
+        "evidence_link",
+    }
+    suspected_team_id = record.get("suspected_team_id")
+    evidence_link = record.get("evidence_link")
+    expected_match_id = f"{fixture.fixture_id}-match-{match_ordinal}"
+    if (
+        set(record) != expected_fields
+        or record.get("phase") != Phase.QUALIFYING.value
+        or record.get("fixture_id") != fixture.fixture_id
+        or record.get("match_id") != expected_match_id
+        or record.get("match_ordinal") != match_ordinal
+        or record.get("team_ids") != list(fixture.team_ids)
+        or suspected_team_id not in fixture.team_ids
+        or not isinstance(evidence_link, str)
+        or not evidence_link
+    ):
+        raise TournamentStateError(
+            "Security Violation suspicion does not identify the next canonical Match"
+        )
+    return PendingSecurityRuling(
+        fixture.fixture_id,
+        expected_match_id,
+        match_ordinal,
+        fixture.team_ids,
+        suspected_team_id,
+        evidence_link,
+    )
+
+
+def _validate_security_violation_ruling(
+    record: Mapping[str, Any], pending: PendingSecurityRuling
+) -> str:
+    decision = record.get("decision")
+    reason_code = record.get("reason_code")
+    organizer_id = record.get("organizer_id")
+    note = record.get("note")
+    if decision not in {"confirmed", "rejected"}:
+        raise TournamentStateError("Security Violation ruling has an invalid decision")
+    try:
+        expected = build_security_violation_ruling_record(
+            pending,
+            decision=decision,
+            organizer_id=organizer_id,
+            reason_code=reason_code,
+            note=note,
+        )
+    except (TypeError, ValueError) as error:
+        raise TournamentStateError(str(error)) from error
+    if record != expected:
+        raise TournamentStateError(
+            "Security Violation ruling does not resolve the pending suspicion"
+        )
+    return decision
+
+
+def _administrative_records_for_disqualification(
+    fixtures: tuple[_FixtureDefinition, ...],
+    disqualified_team_id: str,
+    disqualified_team_ids: set[str],
+    ruling_match_id: str,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for fixture in fixtures:
+        if disqualified_team_id not in fixture.team_ids:
+            continue
+        winner = next(
+            team_id
+            for team_id in fixture.team_ids
+            if team_id != disqualified_team_id
+        )
+        if winner in disqualified_team_ids:
+            continue
+        records.append(
+            {
+                "type": "administrative_series_win",
+                "phase": Phase.QUALIFYING.value,
+                "fixture_id": fixture.fixture_id,
+                "team_ids": list(fixture.team_ids),
+                "winner_team_id": winner,
+                "disqualified_team_id": disqualified_team_id,
+                "reason_code": "opponent_disqualified",
+                "ruling_match_id": ruling_match_id,
+            }
+        )
+    return records
+
+
 def _calculate_standings(
-    manifest: Mapping[str, Any], series: Iterable[Series]
+    manifest: Mapping[str, Any],
+    series: Iterable[Series],
+    *,
+    disqualified_team_ids: Iterable[str] = (),
 ) -> tuple[Standing, ...]:
     team_ids = _team_ids(manifest)
     tie_break_keys = _tie_break_keys(manifest, team_ids)
     try:
-        return calculate_qualifying_standings(team_ids, series, tie_break_keys)
+        return calculate_qualifying_standings(
+            team_ids,
+            series,
+            tie_break_keys,
+            disqualified_team_ids=disqualified_team_ids,
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise TournamentStateError(
             "Manifest and qualifying records cannot produce standings"

@@ -6,14 +6,15 @@ Implementation status: in progress
 
 ## Implementation Progress
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
-The implemented foundation is covered by 152 passing tests under the repository's
+The implemented foundation is covered by 163 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
 Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
-execution through Tournament Champion declaration.
+execution through Tournament Champion declaration, plus qualifying Security
+Violation rulings and Disqualification effects.
 
 ### Complete
 
@@ -70,6 +71,17 @@ execution through Tournament Champion declaration.
 - [x] Project resolved final competitors and Match progress through completed
   Tournament status, rebuild that completed view from canonical records, and
   expose an end-to-end CLI `--all` route while preserving `--all-qualification`.
+- [x] Pause a qualifying Match Attempt on a suspected Security Violation, retain
+  raw evidence in Operational Telemetry, and reconstruct the pending ruling from
+  a canonical opaque evidence link under Competition Record schema version 2.
+- [x] Confirm or reject qualifying attribution through attributable closed-code
+  organizer rulings; confirmed rulings canonically Disqualify the Team and add
+  ordered Administrative Series Wins, while rejected rulings retry the identical
+  Match under the existing absolute Match Attempt policy.
+- [x] Preserve played Match records involving a later-disqualified Team while
+  excluding their lower-level tie-break statistics, skip future affected
+  Fixtures canonically, and rebuild eligibility, scheduling, and projection state
+  after interruption.
 
 ### Partially complete
 
@@ -77,16 +89,17 @@ execution through Tournament Champion declaration.
   standard four-Team bracket through Tournament Champion declaration; reduced
   brackets and Disqualification advancement remain pure domain behavior without
   runner integration.
-- [ ] Apply qualification and playoff Disqualifications through the Tournament
-  Runner. Standing and bracket transformations exist, but administrative ruling
-  records and scheduler integration do not.
+- [ ] Apply Disqualifications through every Playoff Phase state. Qualification is
+  integrated through the Tournament Runner; post-Bracket-Lock advancement and
+  reinstatement remain pure domain behavior.
 - [ ] Complete the Scoreboard Projection. Qualifying scheduling, Match progress,
-  standings, retries, recovery, Bracket Lock, the standard final, and Tournament
-  Champion are projected; Administrative Series Win, Security Violation, and
-  reduced-bracket views remain.
-- [ ] Complete operator execution controls. Step Mode and infrastructure pause
-  behavior exist; explicit start, requested pause, resume-after-ruling, abort,
-  mode switching, and record-restoration commands remain.
+  standings, retries, qualifying Security Violation state, Disqualification,
+  Administrative Series Wins, recovery, Bracket Lock, the standard final, and
+  Tournament Champion are projected; playoff Disqualification and reduced-bracket
+  views remain.
+- [ ] Complete operator execution controls. Step Mode, infrastructure pause, and
+  qualifying Security Violation confirmation/rejection exist; explicit start,
+  requested pause, abort, mode switching, and record-restoration commands remain.
 - [ ] Verify maximum capacity end to end. Schedule generation covers the
   thirty-two-Team roster, but the full 1,497-Match/449,100-Round Tournament and
   its non-binding performance objectives have not been benchmarked.
@@ -95,11 +108,9 @@ execution through Tournament Champion declaration.
 
 - [ ] Implement Continuous Mode, configured parallel Match execution, canonical
   commit ordering under concurrency, and boundary-only mode switching.
-- [ ] Implement suspected Security Violation capture, organizer confirmation or
-  rejection, evidence linkage, and the resulting Tournament-level pause or
-  Disqualification workflow.
-- [ ] Implement administrative ruling records with organizer identity, closed
-  reason codes, and optional notes.
+- [ ] Extend Security Violation rulings and Disqualification scheduling through
+  every Playoff Phase state, including advancement and reinstatement after
+  Bracket Lock.
 - [ ] Implement Tournament abort through the Tournament Runner.
 - [ ] Implement hash-verified Competition Record restoration from backup.
 - [ ] Add the published capacity/preflight benchmark suite.
@@ -109,8 +120,8 @@ execution through Tournament Champion declaration.
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
 | Complete | 1–16, 23–28 | Implemented and covered at the creation, domain, Match, storage, Step Mode, and recovery seams. |
-| Partial | 17–18, 21–22, 29–30, 34 | Core rules or one execution mode exist; runner integration, projection coverage, or capacity verification remains. |
-| Not started | 19–20, 31–33, 35 | Security workflow, Continuous Mode controls, administrative controls/abort, and capacity benchmarks remain. |
+| Partial | 17–22, 29–30, 32, 34 | Core rules or qualifying integration exists; playoff Disqualification, projection coverage, broader controls, or capacity verification remains. |
+| Not started | 31, 33, 35 | Continuous Mode controls, abort, and capacity benchmarks remain. |
 
 ## Problem Statement
 

@@ -33,6 +33,8 @@ from .seeding import (
 from .state import (
     TournamentState,
     build_playoff_bracket_record,
+    build_security_violation_ruling_record,
+    build_security_violation_suspected_record,
     build_tournament_champion_record,
     fold_tournament_state,
 )
@@ -50,7 +52,7 @@ from .storage import (
 
 
 PROTOCOL_VERSION = 1
-RECORD_SCHEMA_VERSION = 1
+RECORD_SCHEMA_VERSION = 2
 SCOREBOARD_VERSION = 1
 SCHEDULED_TURNS_PER_MATCH = 300
 FIRST_MOVE_TIMEOUT_MS = 250
@@ -123,6 +125,16 @@ class ArtifactDigestVerificationError(RuntimeError):
         self.team_id = team_id
         self.artifact_digest = artifact_digest
         super().__init__(f"Bot Artifact digest verification failed for {team_id}")
+
+
+class SecurityRulingRequiredError(RuntimeError):
+    """Tournament execution is paused for an organizer ruling."""
+
+    def __init__(self, match_id: str):
+        self.match_id = match_id
+        super().__init__(
+            f"{match_id} has a suspected Security Violation awaiting a ruling"
+        )
 
 
 @dataclass(frozen=True)
@@ -208,6 +220,10 @@ class TournamentRunner:
         with TournamentRunLock(self.tournament_directory):
             records = load_competition_records(self.tournament_directory)
             state = fold_tournament_state(self._manifest, records)
+            if state.pending_security_ruling is not None:
+                raise SecurityRulingRequiredError(
+                    state.pending_security_ruling.match_id
+                )
             selected = _select_next_match(self._manifest, state)
             if selected is None:
                 return None
@@ -255,6 +271,49 @@ class TournamentRunner:
                     },
                 )
                 execution_result = self.match_executor(request)
+                suspected_team_id = (
+                    execution_result.suspected_security_violation_team_id
+                )
+                if suspected_team_id is not None:
+                    if state.phase is not Phase.QUALIFYING:
+                        raise NotImplementedError(
+                            "Playoff Security Violation rulings are not integrated"
+                        )
+                    fixture_team_ids = tuple(fixture["team_ids"])
+                    if suspected_team_id not in fixture_team_ids:
+                        raise ValueError(
+                            "Suspected Security Violation Team does not compete "
+                            "in the canonical Match"
+                        )
+                    telemetry = dict(execution_result.operational_telemetry)
+                    telemetry.setdefault("type", "security_violation_suspected")
+                    telemetry.setdefault("match_id", request.match_id)
+                    telemetry.setdefault("attempt_number", attempt_number)
+                    append_operational_telemetry(
+                        self.tournament_directory, telemetry
+                    )
+                    suspicion = append_competition_record(
+                        self.tournament_directory,
+                        build_security_violation_suspected_record(
+                            fixture_id=request.fixture_id,
+                            match_id=request.match_id,
+                            match_ordinal=match_ordinal,
+                            team_ids=(fixture_team_ids[0], fixture_team_ids[1]),
+                            suspected_team_id=suspected_team_id,
+                            evidence_link=execution_result.evidence_link or "",
+                        ),
+                    )
+                    incident_records = records + [suspicion]
+                    incident_state = fold_tournament_state(
+                        self._manifest, incident_records
+                    )
+                    write_scoreboard_projection(
+                        self.tournament_directory,
+                        _projection_from_records(
+                            self._manifest, incident_records, incident_state
+                        ),
+                    )
+                    return suspicion
                 if execution_result.infrastructure_failure:
                     telemetry = dict(execution_result.operational_telemetry)
                     telemetry.setdefault("type", "match_attempt_failed")
@@ -315,6 +374,91 @@ class TournamentRunner:
             # The loop either commits a Match or raises for intervention.
             raise AssertionError("unreachable Match Attempt state")
 
+    def confirm_security_violation(
+        self,
+        *,
+        organizer_id: str,
+        reason_code: str = "confirmed_prohibited_behavior",
+        note: Optional[str] = None,
+    ) -> StoredCompetitionRecord:
+        """Confirm the pending attribution and disqualify the implicated Team."""
+
+        return self._rule_on_security_violation(
+            decision="confirmed",
+            organizer_id=organizer_id,
+            reason_code=reason_code,
+            note=note,
+        )
+
+    def reject_security_violation(
+        self,
+        *,
+        organizer_id: str,
+        reason_code: str = "attribution_not_confirmed",
+        note: Optional[str] = None,
+    ) -> StoredCompetitionRecord:
+        """Reject pending attribution and return the Match to retry policy."""
+
+        return self._rule_on_security_violation(
+            decision="rejected",
+            organizer_id=organizer_id,
+            reason_code=reason_code,
+            note=note,
+        )
+
+    def _rule_on_security_violation(
+        self,
+        *,
+        decision: str,
+        organizer_id: str,
+        reason_code: str,
+        note: Optional[str],
+    ) -> StoredCompetitionRecord:
+        with TournamentRunLock(self.tournament_directory):
+            records = load_competition_records(self.tournament_directory)
+            state = fold_tournament_state(self._manifest, records)
+            pending = state.pending_security_ruling
+            if pending is None:
+                raise ValueError("No suspected Security Violation awaits a ruling")
+            ruling = append_competition_record(
+                self.tournament_directory,
+                build_security_violation_ruling_record(
+                    pending,
+                    decision=decision,
+                    organizer_id=organizer_id,
+                    reason_code=reason_code,
+                    note=note,
+                ),
+            )
+            all_records = records + [ruling]
+            ruled_state = fold_tournament_state(self._manifest, all_records)
+            if decision == "rejected":
+                append_operational_telemetry(
+                    self.tournament_directory,
+                    {
+                        "type": "match_attempt_failed",
+                        "match_id": pending.match_id,
+                        "attempt_number": _latest_attempt_number(
+                            self.tournament_directory, pending.match_id
+                        ),
+                        "infrastructure_failure": True,
+                        "reason_code": reason_code,
+                    },
+                )
+            all_records, ruled_state = _commit_canonical_transitions_if_ready(
+                self.tournament_directory,
+                self._manifest,
+                all_records,
+                ruled_state,
+            )
+            write_scoreboard_projection(
+                self.tournament_directory,
+                _projection_from_records(
+                    self._manifest, all_records, ruled_state
+                ),
+            )
+            return ruling
+
 
 def _commit_canonical_transitions_if_ready(
     tournament_directory: Path,
@@ -324,9 +468,19 @@ def _commit_canonical_transitions_if_ready(
 ) -> tuple[list[StoredCompetitionRecord], TournamentState]:
     transitioned_records = records
     transitioned_state = state
+    while transitioned_state.pending_administrative_records:
+        administrative = append_competition_record(
+            tournament_directory,
+            transitioned_state.pending_administrative_records[0],
+        )
+        transitioned_records = transitioned_records + [administrative]
+        transitioned_state = fold_tournament_state(
+            manifest, transitioned_records
+        )
     if (
         transitioned_state.qualifying_phase_complete
         and transitioned_state.phase is Phase.QUALIFYING
+        and len(transitioned_state.standings) >= 4
     ):
         bracket = append_competition_record(
             tournament_directory,
@@ -660,6 +814,13 @@ def _next_attempt_number(
     return latest_attempt + 1
 
 
+def _latest_attempt_number(tournament_directory: Path, match_id: str) -> int:
+    attempt_number = _next_attempt_number(tournament_directory, match_id) - 1
+    if attempt_number < 1:
+        raise ValueError(f"No Match Attempt exists for {match_id}")
+    return attempt_number
+
+
 def _build_match_request(
     manifest: dict[str, Any],
     fixture: dict[str, Any],
@@ -907,6 +1068,18 @@ def _projection_from_records(
     projection["standings"] = _standing_projection(folded.standings)
     projection["phase"] = folded.phase.value
     projection["champion"] = folded.champion_team_id
+    for team in projection["teams"]:
+        if team["team_id"] in folded.disqualified_team_ids:
+            team["eligible"] = False
+            team["status"] = "disqualified"
+    if folded.pending_security_ruling is not None:
+        pending = folded.pending_security_ruling
+        projection["status"] = "awaiting_security_ruling"
+        projection["security_review"] = {
+            "fixture_id": pending.fixture_id,
+            "match_id": pending.match_id,
+            "suspected_team_id": pending.suspected_team_id,
+        }
     if folded.champion_team_id is not None:
         projection["status"] = "complete"
     if folded.phase.value == "playoff":
@@ -946,11 +1119,16 @@ def _apply_series_projection(
         terminal_by_fixture.get(fixture_projection["fixture_id"], ()),
         key=lambda record: record["match_ordinal"],
     )
-    if not fixture_records:
+    if not fixture_records and series.administrative_winner_id is None:
         return
     fixture_projection["status"] = (
         "complete" if series.is_complete else "in_progress"
     )
+    if series.administrative_winner_id is not None:
+        fixture_projection["administrative_series_win"] = {
+            "winner_team_id": series.administrative_winner_id,
+            "reason_code": "opponent_disqualified",
+        }
     fixture_projection["matches"] = [
         {
             "match_id": record["match_id"],

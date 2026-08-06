@@ -88,6 +88,8 @@ class MatchExecutionResult:
     infrastructure_failure: bool
     competitive_outcome: Optional[FrozenJsonDict]
     operational_telemetry: FrozenJsonDict
+    suspected_security_violation_team_id: Optional[str] = None
+    evidence_link: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.competitive_outcome is not None:
@@ -101,6 +103,33 @@ class MatchExecutionResult:
             "operational_telemetry",
             _frozen_json_object(self.operational_telemetry),
         )
+        suspected = self.suspected_security_violation_team_id
+        if suspected is not None and (
+            not isinstance(suspected, str) or not suspected
+        ):
+            raise ValueError("A suspected Security Violation requires a Team ID")
+        if self.infrastructure_failure:
+            if self.competitive_outcome is not None or suspected is not None:
+                raise ValueError(
+                    "An Infrastructure Failure cannot have a competitive or "
+                    "security outcome"
+                )
+        elif suspected is not None:
+            if self.competitive_outcome is not None:
+                raise ValueError(
+                    "A suspected Security Violation cannot have a competitive outcome"
+                )
+            if not isinstance(self.evidence_link, str) or not self.evidence_link:
+                raise ValueError(
+                    "A suspected Security Violation requires an opaque evidence link"
+                )
+        elif self.competitive_outcome is None:
+            raise ValueError(
+                "Match execution must produce a competitive outcome, Infrastructure "
+                "Failure, or suspected Security Violation"
+            )
+        if suspected is None and self.evidence_link is not None:
+            raise ValueError("An evidence link requires a suspected Security Violation")
 
 
 def _frozen_json_object(value: dict[str, object]) -> FrozenJsonDict:
