@@ -21,6 +21,7 @@ from .competition import (
     Series,
     Standing,
     calculate_qualifying_standings,
+    create_playoff_bracket,
 )
 from .schedule import bot_positions
 from .seeding import derive_bot_seed, derive_fixture_seed, derive_match_seed
@@ -112,6 +113,7 @@ class TournamentState:
     next_playoff_match: Optional[PlayoffMatch]
     bracket_locked: bool
     champion_team_id: Optional[str]
+    ended_without_champion: bool
     disqualified_team_ids: tuple[str, ...] = ()
     pending_security_ruling: Optional[PendingSecurityRuling] = None
     pending_administrative_records: tuple[FrozenJsonDict, ...] = ()
@@ -123,6 +125,18 @@ class TournamentState:
             and self.pending_security_ruling is None
             and not self.pending_administrative_records
         )
+
+    @property
+    def playoff_final_winner(self) -> Optional[str]:
+        """Return the winner only when the canonical final Series is complete."""
+
+        return _completed_final_winner(
+            self.playoff_fixtures, list(self.playoff_series)
+        )
+
+    @property
+    def is_complete(self) -> bool:
+        return self.champion_team_id is not None or self.ended_without_champion
 
 
 @dataclass(frozen=True)
@@ -160,6 +174,7 @@ def fold_tournament_state(
     current_playoff_index = 0
     bracket_locked = False
     champion_team_id: Optional[str] = None
+    ended_without_champion = False
     disqualified_team_ids: set[str] = set()
     pending_security_ruling: Optional[PendingSecurityRuling] = None
     pending_administrative_records: list[dict[str, Any]] = []
@@ -173,6 +188,17 @@ def fold_tournament_state(
             )
         record = stored.record
         record_type = record.get("type")
+        if (
+            champion_team_id is not None
+            and record_type == "tournament_champion_declared"
+        ):
+            raise TournamentStateError(
+                "Tournament Champion was declared more than once"
+            )
+        if champion_team_id is not None or ended_without_champion:
+            raise TournamentStateError(
+                "A Competition Record cannot follow Tournament completion"
+            )
         if pending_administrative_records:
             expected_administrative = pending_administrative_records[0]
             if record != expected_administrative:
@@ -240,22 +266,42 @@ def fold_tournament_state(
                 playoff_fixtures, playoff_series, playoff_seeds
             )
         if record_type == "tournament_champion_declared":
-            if champion_team_id is not None:
-                raise TournamentStateError(
-                    "Tournament Champion was declared more than once"
+            final_winner = _completed_final_winner(
+                playoff_fixtures, playoff_series
+            )
+            if final_winner is not None:
+                expected_champion = final_winner
+                expected = build_tournament_champion_record(expected_champion)
+            elif len(playoff_seeds) == 1 and not playoff_fixtures:
+                expected_champion = playoff_seeds[0].team_id
+                expected = build_sole_eligible_champion_record(
+                    expected_champion
                 )
-            if len(playoff_series) != 3 or not playoff_series[-1].is_complete:
+            else:
                 raise TournamentStateError(
                     "Tournament Champion was declared before the final completed"
                 )
-            expected_champion = playoff_series[-1].winner
-            assert expected_champion is not None
-            expected = build_tournament_champion_record(expected_champion)
             if record != expected:
                 raise TournamentStateError(
                     "Tournament Champion declaration is non-canonical"
                 )
             champion_team_id = expected_champion
+            continue
+        if record_type == "tournament_ended_without_champion":
+            if not playoff_bracket_created:
+                raise TournamentStateError(
+                    "Tournament ended without a champion before the playoff "
+                    "field was recorded"
+                )
+            if playoff_seeds or playoff_fixtures or playoff_series:
+                raise TournamentStateError(
+                    "Tournament ended without a champion while eligible Teams remain"
+                )
+            if record != build_tournament_ended_without_champion_record():
+                raise TournamentStateError(
+                    "Tournament end without a champion is non-canonical"
+                )
+            ended_without_champion = True
             continue
         if record_type == "playoff_bracket_created":
             if (
@@ -294,8 +340,7 @@ def fold_tournament_state(
                     ),
                 )
                 for fixture in playoff_fixtures
-                if fixture.stage is PlayoffStage.SEMIFINAL
-                and fixture.team_ids[0] is not None
+                if fixture.team_ids[0] is not None
                 and fixture.team_ids[1] is not None
             ]
             continue
@@ -308,7 +353,19 @@ def fold_tournament_state(
                 raise TournamentStateError(
                     "Playoff bracket was locked more than once"
                 )
-            first_fixture = playoff_fixtures[0]
+            first_fixture = next(
+                (
+                    fixture
+                    for fixture in playoff_fixtures
+                    if fixture.team_ids[0] is not None
+                    and fixture.team_ids[1] is not None
+                ),
+                None,
+            )
+            if first_fixture is None:
+                raise TournamentStateError(
+                    "Playoff Bracket Lock requires an actual playoff Match"
+                )
             expected_lock = {
                 "type": "playoff_bracket_locked",
                 "phase": Phase.PLAYOFF.value,
@@ -455,6 +512,7 @@ def fold_tournament_state(
         next_playoff_match,
         bracket_locked,
         champion_team_id,
+        ended_without_champion,
         tuple(sorted(disqualified_team_ids)),
         pending_security_ruling,
         tuple(_frozen_record(record) for record in pending_administrative_records),
@@ -472,25 +530,91 @@ def build_tournament_champion_record(team_id: str) -> dict[str, Any]:
     }
 
 
+def build_sole_eligible_champion_record(team_id: str) -> dict[str, Any]:
+    """Declare a sole eligible Team champion without inventing a Fixture."""
+
+    return {
+        "type": "tournament_champion_declared",
+        "phase": Phase.PLAYOFF.value,
+        "fixture_id": None,
+        "team_id": team_id,
+        "reason_code": "sole_eligible_team",
+    }
+
+
+def build_tournament_ended_without_champion_record() -> dict[str, Any]:
+    """End under the zero-eligible-Team rule, distinct from operator abort."""
+
+    return {
+        "type": "tournament_ended_without_champion",
+        "phase": Phase.PLAYOFF.value,
+        "reason_code": "no_eligible_teams",
+    }
+
+
 def _resolve_final_if_ready(
     fixtures: tuple[PlayoffFixtureDefinition, ...],
     series: list[Series],
     seeds: tuple[PlayoffSeed, ...],
 ) -> tuple[tuple[PlayoffFixtureDefinition, ...], list[Series]]:
-    if len(series) != 2 or not all(item.is_complete for item in series):
+    semifinals = tuple(
+        fixture
+        for fixture in fixtures
+        if fixture.stage is PlayoffStage.SEMIFINAL
+    )
+    final = next(
+        (
+            fixture
+            for fixture in fixtures
+            if fixture.stage is PlayoffStage.FINAL
+        ),
+        None,
+    )
+    if (
+        final is None
+        or len(series) > len(semifinals)
+        or len(series) != len(semifinals)
+        or not all(item.is_complete for item in series)
+    ):
         return fixtures, series
-    finalists = (series[0].winner, series[1].winner)
-    assert finalists[0] is not None and finalists[1] is not None
+    winners = iter(item.winner for item in series)
+    finalists = tuple(
+        team_id if team_id is not None else next(winners)
+        for team_id in final.team_ids
+    )
+    if finalists[0] is None or finalists[1] is None:
+        return fixtures, series
     seed_by_team = {seed.team_id: seed.seed for seed in seeds}
-    final_fixture = fixtures[2]
-    resolved_fixture = replace(final_fixture, team_ids=finalists)
+    resolved_fixture = replace(final, team_ids=finalists)
     final_series = Series(
         finalists[0],
         finalists[1],
         Phase.PLAYOFF,
         higher_seed_team_id=min(finalists, key=seed_by_team.__getitem__),
     )
-    return fixtures[:2] + (resolved_fixture,), series + [final_series]
+    final_index = fixtures.index(final)
+    return (
+        fixtures[:final_index] + (resolved_fixture,) + fixtures[final_index + 1 :],
+        series + [final_series],
+    )
+
+
+def _completed_final_winner(
+    fixtures: tuple[PlayoffFixtureDefinition, ...],
+    series: list[Series],
+) -> Optional[str]:
+    if not fixtures or fixtures[-1].stage is not PlayoffStage.FINAL or not series:
+        return None
+    final_fixture = fixtures[-1]
+    final_series = series[-1]
+    if (
+        None in final_fixture.team_ids
+        or {final_series.team_one_id, final_series.team_two_id}
+        != set(final_fixture.team_ids)
+        or not final_series.is_complete
+    ):
+        return None
+    return final_series.winner
 
 
 def build_playoff_bracket_record(
@@ -498,31 +622,31 @@ def build_playoff_bracket_record(
 ) -> dict[str, Any]:
     """Create the canonical Playoff Phase transition from final standings."""
 
-    if len(standings) < 4:
-        raise TournamentStateError(
-            "A standard playoff bracket requires four eligible Teams"
-        )
     try:
         tournament_seed = int(manifest["tournament_seed"])
     except (KeyError, TypeError, ValueError) as error:
         raise TournamentStateError(
             "Manifest contains an invalid Tournament Seed"
         ) from error
+    bracket = create_playoff_bracket(standings)
     seeds = [
-        {"seed": seed, "team_id": standing.team_id}
-        for seed, standing in enumerate(standings[:4], start=1)
+        {"seed": seeded.seed, "team_id": seeded.team_id}
+        for seeded in bracket.seeds
     ]
-    pairings: tuple[tuple[str, tuple[Optional[str], Optional[str]]], ...] = (
+    pairings = tuple(
         (
-            "playoff-semifinal-1",
-            (seeds[0]["team_id"], seeds[3]["team_id"]),
-        ),
-        (
-            "playoff-semifinal-2",
-            (seeds[1]["team_id"], seeds[2]["team_id"]),
-        ),
-        ("playoff-final", (None, None)),
+            f"playoff-semifinal-{index}",
+            (fixture.team_one_id, fixture.team_two_id),
+        )
+        for index, fixture in enumerate(bracket.semifinals, start=1)
     )
+    if bracket.final is not None:
+        pairings += (
+            (
+                "playoff-final",
+                (bracket.final.team_one_id, bracket.final.team_two_id),
+            ),
+        )
     return {
         "type": "playoff_bracket_created",
         "phase": Phase.PLAYOFF.value,

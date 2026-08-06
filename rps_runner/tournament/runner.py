@@ -33,6 +33,8 @@ from .seeding import (
 from .state import (
     TournamentState,
     build_playoff_bracket_record,
+    build_sole_eligible_champion_record,
+    build_tournament_ended_without_champion_record,
     build_security_violation_ruling_record,
     build_security_violation_suspected_record,
     build_tournament_champion_record,
@@ -480,7 +482,6 @@ def _commit_canonical_transitions_if_ready(
     if (
         transitioned_state.qualifying_phase_complete
         and transitioned_state.phase is Phase.QUALIFYING
-        and len(transitioned_state.standings) >= 4
     ):
         bracket = append_competition_record(
             tournament_directory,
@@ -491,15 +492,43 @@ def _commit_canonical_transitions_if_ready(
             manifest, transitioned_records
         )
     if (
-        transitioned_state.champion_team_id is None
-        and len(transitioned_state.playoff_series) == 3
-        and transitioned_state.playoff_series[-1].is_complete
+        transitioned_state.phase is Phase.PLAYOFF
+        and transitioned_state.champion_team_id is None
+        and not transitioned_state.ended_without_champion
+        and len(transitioned_state.playoff_seeds) == 1
+        and not transitioned_state.playoff_fixtures
     ):
-        champion = transitioned_state.playoff_series[-1].winner
-        assert champion is not None
         declaration = append_competition_record(
             tournament_directory,
-            build_tournament_champion_record(champion),
+            build_sole_eligible_champion_record(
+                transitioned_state.playoff_seeds[0].team_id
+            ),
+        )
+        transitioned_records = transitioned_records + [declaration]
+        transitioned_state = fold_tournament_state(
+            manifest, transitioned_records
+        )
+    if (
+        transitioned_state.phase is Phase.PLAYOFF
+        and not transitioned_state.playoff_seeds
+        and not transitioned_state.ended_without_champion
+    ):
+        terminal = append_competition_record(
+            tournament_directory,
+            build_tournament_ended_without_champion_record(),
+        )
+        transitioned_records = transitioned_records + [terminal]
+        transitioned_state = fold_tournament_state(
+            manifest, transitioned_records
+        )
+    final_winner = transitioned_state.playoff_final_winner
+    if (
+        transitioned_state.champion_team_id is None
+        and final_winner is not None
+    ):
+        declaration = append_competition_record(
+            tournament_directory,
+            build_tournament_champion_record(final_winner),
         )
         transitioned_records = transitioned_records + [declaration]
         transitioned_state = fold_tournament_state(
@@ -1080,8 +1109,10 @@ def _projection_from_records(
             "match_id": pending.match_id,
             "suspected_team_id": pending.suspected_team_id,
         }
-    if folded.champion_team_id is not None:
+    if folded.is_complete:
         projection["status"] = "complete"
+    if folded.ended_without_champion:
+        projection["completion_reason"] = "no_eligible_teams"
     if folded.phase.value == "playoff":
         projection["bracket"] = {
             "locked": folded.bracket_locked,

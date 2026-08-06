@@ -6,10 +6,12 @@ from rps_runner.tournament.immutable import thaw_json
 from rps_runner.tournament.state import (
     TournamentStateError,
     build_playoff_bracket_record,
+    build_tournament_ended_without_champion_record,
     build_security_violation_ruling_record,
     build_security_violation_suspected_record,
     fold_tournament_state,
 )
+from rps_runner.tournament.competition import Standing
 from rps_runner.tournament.storage import StoredCompetitionRecord
 
 
@@ -179,6 +181,79 @@ def terminal_record(
 
 
 class TournamentStateFoldTests(unittest.TestCase):
+    def test_builds_every_canonical_reduced_playoff_shape(self) -> None:
+        standings = tuple(
+            Standing(team_id, 0, 0, 0, 0, 0, 0, 0, tie_break_key)
+            for tie_break_key, team_id in enumerate(
+                ("alpha", "beta", "gamma", "delta"), start=1
+            )
+        )
+
+        expected_fixtures = {
+            4: [
+                ("playoff-semifinal-1", "semifinal", ["alpha", "delta"]),
+                ("playoff-semifinal-2", "semifinal", ["beta", "gamma"]),
+                ("playoff-final", "final", [None, None]),
+            ],
+            3: [
+                ("playoff-semifinal-1", "semifinal", ["beta", "gamma"]),
+                ("playoff-final", "final", ["alpha", None]),
+            ],
+            2: [("playoff-final", "final", ["alpha", "beta"])],
+            1: [],
+            0: [],
+        }
+
+        for count, expected in expected_fixtures.items():
+            with self.subTest(eligible_team_count=count):
+                record = build_playoff_bracket_record(
+                    manifest(), standings[:count]
+                )
+                self.assertEqual(
+                    [
+                        (
+                            fixture["fixture_id"],
+                            fixture["stage"],
+                            fixture["team_ids"],
+                        )
+                        for fixture in record["fixtures"]
+                    ],
+                    expected,
+                )
+                self.assertEqual(len(record["seeds"]), count)
+
+    def test_zero_eligible_terminal_record_is_rules_driven_and_canonical(self) -> None:
+        empty_manifest = manifest() | {
+            "roster": [],
+            "tie_break_keys": {},
+            "qualifying_schedule": [],
+        }
+        bracket = StoredCompetitionRecord(
+            1,
+            build_playoff_bracket_record(empty_manifest, ()),
+            "hash-1",
+        )
+        terminal = StoredCompetitionRecord(
+            2,
+            build_tournament_ended_without_champion_record(),
+            "hash-2",
+        )
+
+        state = fold_tournament_state(empty_manifest, (bracket, terminal))
+
+        self.assertTrue(state.ended_without_champion)
+        self.assertIsNone(state.champion_team_id)
+        self.assertFalse(state.bracket_locked)
+        self.assertIsNone(state.next_playoff_match)
+
+        malformed = thaw_json(terminal.record)
+        malformed["reason_code"] = "operator_abort"
+        with self.assertRaisesRegex(TournamentStateError, "non-canonical"):
+            fold_tournament_state(
+                empty_manifest,
+                (bracket, StoredCompetitionRecord(2, malformed, "bad-hash")),
+            )
+
     def test_fold_reconstructs_pending_and_confirmed_qualifying_disqualification(
         self,
     ) -> None:

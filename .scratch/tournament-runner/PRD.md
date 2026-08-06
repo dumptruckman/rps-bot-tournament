@@ -8,13 +8,14 @@ Implementation status: in progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 163 passing tests under the repository's
+The implemented foundation is covered by 168 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
 Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
 execution through Tournament Champion declaration, plus qualifying Security
-Violation rulings and Disqualification effects.
+Violation rulings, Disqualification effects, and every reduced Playoff Phase
+shape.
 
 ### Complete
 
@@ -82,21 +83,21 @@ Violation rulings and Disqualification effects.
   excluding their lower-level tie-break statistics, skip future affected
   Fixtures canonically, and rebuild eligibility, scheduling, and projection state
   after interruption.
+- [x] Integrate three-, two-, one-, and zero-eligible-Team Playoff Phase shapes
+  through canonical records, authoritative folding, scheduling, projection,
+  recovery, and CLI `--all`, without emitting Bracket Lock or executing a Match
+  for the no-Match outcomes.
 
 ### Partially complete
 
-- [ ] Execute every Playoff Phase shape. The Tournament Runner now completes the
-  standard four-Team bracket through Tournament Champion declaration; reduced
-  brackets and Disqualification advancement remain pure domain behavior without
-  runner integration.
 - [ ] Apply Disqualifications through every Playoff Phase state. Qualification is
   integrated through the Tournament Runner; post-Bracket-Lock advancement and
   reinstatement remain pure domain behavior.
 - [ ] Complete the Scoreboard Projection. Qualifying scheduling, Match progress,
   standings, retries, qualifying Security Violation state, Disqualification,
   Administrative Series Wins, recovery, Bracket Lock, the standard final, and
-  Tournament Champion are projected; playoff Disqualification and reduced-bracket
-  views remain.
+  Tournament Champion are projected across standard and reduced brackets;
+  playoff Disqualification views remain.
 - [ ] Complete operator execution controls. Step Mode, infrastructure pause, and
   qualifying Security Violation confirmation/rejection exist; explicit start,
   requested pause, abort, mode switching, and record-restoration commands remain.
@@ -119,8 +120,8 @@ Violation rulings and Disqualification effects.
 
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
-| Complete | 1–16, 23–28 | Implemented and covered at the creation, domain, Match, storage, Step Mode, and recovery seams. |
-| Partial | 17–22, 29–30, 32, 34 | Core rules or qualifying integration exists; playoff Disqualification, projection coverage, broader controls, or capacity verification remains. |
+| Complete | 1–18, 23–28 | Implemented and covered at the creation, domain, Match, storage, Step Mode, and recovery seams. |
+| Partial | 19–22, 29–30, 32, 34 | Core rules or qualifying integration exists; playoff Disqualification, projection coverage, broader controls, or capacity verification remains. |
 | Not started | 31, 33, 35 | Continuous Mode controls, abort, and capacity benchmarks remain. |
 
 ## Problem Statement

@@ -341,7 +341,12 @@ def _print_summary(
     if complete == len(fixtures):
         print("Qualification has no unresolved Match.", file=output)
     champion = projection["champion"]
-    if champion is None:
+    if projection.get("completion_reason") == "no_eligible_teams":
+        print(
+            "Tournament ended without a Champion: no eligible Teams remain.",
+            file=output,
+        )
+    elif champion is None:
         print("No Tournament Champion has been declared.", file=output)
     else:
         print(f"Tournament Champion: {champion}", file=output)

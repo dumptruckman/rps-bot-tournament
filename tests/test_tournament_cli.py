@@ -16,6 +16,7 @@ from rps_runner.tournament.match_executor import (
     MatchExecutionRequest,
     MatchExecutionResult,
 )
+from rps_runner.tournament.runner import TournamentRunner
 from rps_runner.tournament.storage import (
     canonical_json_bytes,
     load_competition_records,
@@ -256,6 +257,79 @@ class TournamentDemoCliTests(unittest.TestCase):
         self.assertIn("Tournament Champion: copycat-alpha", output)
         self.assertNotIn("artifact_digest", output)
         self.assertNotIn("entrypoint", output)
+
+    def test_all_finishes_reduced_direct_final_and_sole_champion(self) -> None:
+        for eligible_team_count in (2, 1):
+            with self.subTest(eligible_team_count=eligible_team_count):
+                with tempfile.TemporaryDirectory() as directory_name:
+                    self.directory = Path(directory_name) / "demo-tournament"
+                    self.stdout = StringIO()
+                    self.stderr = StringIO()
+                    self.assertEqual(self.run_demo(), 0, self.stderr.getvalue())
+
+                    def suspect(
+                        request: MatchExecutionRequest,
+                    ) -> MatchExecutionResult:
+                        return MatchExecutionResult(
+                            infrastructure_failure=False,
+                            competitive_outcome=None,
+                            operational_telemetry={
+                                "raw_security_evidence": "variable"
+                            },
+                            suspected_security_violation_team_id=request.team_a_id,
+                            evidence_link=f"evidence:cli-reduced/{request.match_id}",
+                        )
+
+                    runner = TournamentRunner.open(
+                        self.directory,
+                        match_executor=suspect,
+                        artifact_digest_verifier=lambda team_id, digest: True,
+                    )
+                    for ordinal in range(4 - eligible_team_count):
+                        runner.play_next_match()
+                        runner.confirm_security_violation(
+                            organizer_id=f"organizer-{ordinal + 1}"
+                        )
+
+                    requests: list[MatchExecutionRequest] = []
+
+                    def stable_winner(
+                        request: MatchExecutionRequest,
+                    ) -> MatchExecutionResult:
+                        requests.append(request)
+                        return winning_result(
+                            request,
+                            winner_team_id=min(
+                                request.team_a_id, request.team_b_id
+                            ),
+                        )
+
+                    self.stdout = StringIO()
+                    self.assertEqual(
+                        self.run_demo("--all", match_executor=stable_winner),
+                        0,
+                        self.stderr.getvalue(),
+                    )
+                    projection = load_scoreboard_projection(self.directory)
+                    assert projection is not None
+                    self.assertEqual(projection["status"], "complete")
+                    self.assertIsNotNone(projection["champion"])
+                    self.assertEqual(
+                        len(
+                            [
+                                request
+                                for request in requests
+                                if request.fixture_id.startswith("playoff-")
+                            ]
+                        ),
+                        2 if eligible_team_count == 2 else 0,
+                    )
+                    self.assertIn(
+                        f"Playoff Fixtures: {1 if eligible_team_count == 2 else 0}/"
+                        f"{1 if eligible_team_count == 2 else 0} complete",
+                        self.stdout.getvalue(),
+                    )
+                    self.assertIn("Tournament Champion:", self.stdout.getvalue())
 
     def test_corrupt_existing_tournament_fails_without_overwriting_it(self) -> None:
         self.assertEqual(self.run_demo(), 0, self.stderr.getvalue())
