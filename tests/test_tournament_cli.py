@@ -380,6 +380,120 @@ class TournamentDemoCliTests(unittest.TestCase):
         self.assertEqual(len(requests), completed_request_count)
         self.assertIn("Tournament: resumed", self.stdout.getvalue())
 
+    def test_explicit_start_pause_reopen_resume_and_mode_switch_controls(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+
+        def pause_after_match(
+            request: MatchExecutionRequest,
+        ) -> MatchExecutionResult:
+            requests.append(request)
+            TournamentRunner.request_pause_at(self.directory)
+            return winning_result(request)
+
+        self.assertEqual(
+            self.run_demo("--start", match_executor=pause_after_match),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"], "paused"
+        )
+        self.assertIn("Current Mode: Continuous", self.stdout.getvalue())
+
+        self.stdout = StringIO()
+        self.assertEqual(
+            self.run_demo("--switch-mode", "step", match_executor=winning_result),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.assertEqual(
+            load_manifest(self.directory).manifest["execution_mode"],
+            "continuous",
+        )
+        self.assertIn("Current Mode: Step", self.stdout.getvalue())
+
+        self.stdout = StringIO()
+        step_requests: list[MatchExecutionRequest] = []
+        self.assertEqual(
+            self.run_demo(match_executor=recording_winner_executor(step_requests)),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.assertEqual(len(step_requests), 1)
+
+        self.stdout = StringIO()
+        self.assertEqual(
+            self.run_demo("--switch-mode", "continuous", match_executor=winning_result),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.stdout = StringIO()
+        self.assertEqual(
+            self.run_demo("--resume", match_executor=winning_result),
+            0,
+            self.stderr.getvalue(),
+        )
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"], "complete"
+        )
+
+    def test_restore_record_recovers_before_open_without_executing_a_match(
+        self,
+    ) -> None:
+        requests: list[MatchExecutionRequest] = []
+        self.assertEqual(
+            self.run_demo(match_executor=recording_winner_executor(requests)), 0
+        )
+        self.assertEqual(len(requests), 1)
+        expected_projection = load_scoreboard_projection(self.directory)
+        record_path = self.directory / "records" / "00000001.json"
+        backup_path = self.directory.parent / "operator-backup.json"
+        backup_bytes = record_path.read_bytes()
+        backup_path.write_bytes(backup_bytes)
+        record_path.chmod(0o644)
+        record_path.write_bytes(b"corrupt")
+        self.stdout = StringIO()
+        restore_requests: list[MatchExecutionRequest] = []
+
+        exit_code = self.run_demo(
+            "--restore-record",
+            str(backup_path),
+            match_executor=recording_winner_executor(restore_requests),
+        )
+
+        self.assertEqual(exit_code, 0, self.stderr.getvalue())
+        self.assertEqual(restore_requests, [])
+        self.assertEqual(
+            load_scoreboard_projection(self.directory), expected_projection
+        )
+        self.assertEqual(backup_path.read_bytes(), backup_bytes)
+        self.assertIn("Tournament: restored Competition Record", self.stdout.getvalue())
+
+    def test_restore_record_failure_does_not_execute_or_mutate_files(self) -> None:
+        self.assertEqual(self.run_demo(), 0, self.stderr.getvalue())
+        record_path = self.directory / "records" / "00000001.json"
+        backup_path = self.directory.parent / "operator-backup.json"
+        backup_path.write_bytes(
+            record_path.read_bytes().replace(b'"sequence":1', b'"sequence":2')
+        )
+        record_path.chmod(0o644)
+        record_path.write_bytes(b"corrupt")
+        target_before = record_path.read_bytes()
+        backup_before = backup_path.read_bytes()
+        restore_requests: list[MatchExecutionRequest] = []
+
+        exit_code = self.run_demo(
+            "--restore-record",
+            str(backup_path),
+            match_executor=recording_winner_executor(restore_requests),
+        )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(restore_requests, [])
+        self.assertEqual(record_path.read_bytes(), target_before)
+        self.assertEqual(backup_path.read_bytes(), backup_before)
+
     def test_continuous_stops_cleanly_for_a_security_ruling(self) -> None:
         requests: list[MatchExecutionRequest] = []
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from dataclasses import FrozenInstanceError
@@ -34,14 +35,17 @@ from rps_runner.tournament.locking import (
     TournamentRunLockHeldError,
 )
 from rps_runner.tournament.storage import (
+    IntegrityError,
     StoredCompetitionRecord,
     append_competition_record,
     append_operational_telemetry,
     load_competition_records,
+    load_control_state,
     load_manifest,
     load_operational_telemetry,
     load_scoreboard_projection,
     seal_manifest,
+    update_control_state,
     write_scoreboard_projection,
 )
 
@@ -615,6 +619,251 @@ class TournamentContinuousModeTests(unittest.TestCase):
             )
         )
 
+    def test_explicit_start_honors_pause_requested_during_active_match(self) -> None:
+        entered_executor = threading.Event()
+        release_executor = threading.Event()
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            self.assertTrue(load_control_state(self.directory)["match_active"])
+            entered_executor.set()
+            self.assertTrue(release_executor.wait(5))
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="durable-pause-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=execute,
+        )
+        result: list[tuple[StoredCompetitionRecord, ...]] = []
+        worker = threading.Thread(target=lambda: result.append(runner.start()))
+        worker.start()
+        self.assertTrue(entered_executor.wait(5))
+
+        runner.request_pause()
+        self.assertTrue(load_control_state(self.directory)["pause_requested"])
+        release_executor.set()
+        worker.join(5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(len(result[0]), 1)
+        self.assertEqual(runner.status, "paused")
+        self.assertEqual(load_control_state(self.directory)["lifecycle"], "paused")
+        self.assertFalse(load_control_state(self.directory)["pause_requested"])
+
+    def test_paused_tournament_reopens_resumes_and_skips_committed_match(self) -> None:
+        first_requests: list[MatchExecutionRequest] = []
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="reopen-control-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=lambda request: (
+                first_requests.append(request)
+                or executor_result(request, winner_team_id=request.team_a_id)
+            ),
+        )
+        runner.request_pause()
+        # A boundary pause is idempotent; start executes until a new request.
+        original_executor = runner.match_executor
+        runner.match_executor = lambda request: (
+            runner.request_pause() or original_executor(request)
+        )
+        runner.start()
+        committed_id = first_requests[0].match_id
+
+        resumed_requests: list[MatchExecutionRequest] = []
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: (
+                resumed_requests.append(request)
+                or executor_result(request, winner_team_id=request.team_a_id)
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+        reopened.resume()
+
+        self.assertNotIn(
+            committed_id, [request.match_id for request in resumed_requests]
+        )
+        self.assertEqual(reopened.status, "complete")
+
+    def test_open_recovers_interrupted_running_control_to_safe_boundary(self) -> None:
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="interrupted-control-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=lambda request: self.fail(
+                "Opening control recovery must not execute a Match"
+            ),
+        )
+        update_control_state(
+            self.directory,
+            lambda control: {
+                **control,
+                "lifecycle": "running",
+                "pause_requested": True,
+            },
+        )
+
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=runner.match_executor,
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        self.assertEqual(reopened.control_status, "paused")
+        self.assertTrue(load_control_state(self.directory)["pause_requested"])
+        self.assertEqual(load_competition_records(self.directory), [])
+
+    def test_mode_switches_apply_only_at_match_boundaries(self) -> None:
+        requests: list[MatchExecutionRequest] = []
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="mode-switch-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=lambda request: (
+                requests.append(request)
+                or executor_result(request, winner_team_id=request.team_a_id)
+            ),
+        )
+        runner.switch_mode("step")
+        runner.play_next_match()
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(runner.status, "paused")
+        self.assertEqual(
+            load_manifest(self.directory).manifest["execution_mode"],
+            "continuous",
+        )
+
+        runner.switch_mode("continuous")
+        runner.start()
+        self.assertEqual(runner.current_mode, "continuous")
+        self.assertEqual(runner.status, "complete")
+        with self.assertRaisesRegex(ValueError, "complete Tournament"):
+            runner.switch_mode("step")
+        self.assertEqual(runner.start(), ())
+        self.assertEqual(runner.resume(), ())
+        runner.request_pause()
+
+    def test_mode_switch_is_rejected_while_match_is_active(self) -> None:
+        entered_executor = threading.Event()
+        release_executor = threading.Event()
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            entered_executor.set()
+            self.assertTrue(release_executor.wait(5))
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="active-switch-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=execute,
+        )
+        worker = threading.Thread(target=runner.start)
+        worker.start()
+        self.assertTrue(entered_executor.wait(5))
+        with self.assertRaisesRegex(ValueError, "Match boundary"):
+            runner.switch_mode("step")
+        runner.request_pause()
+        release_executor.set()
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+
+    def test_mode_timing_does_not_change_competition_records_or_tournament_state(
+        self,
+    ) -> None:
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            return executor_result(request, winner_team_id=request.team_a_id)
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="canonical-controls-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=execute,
+        )
+        runner.start()
+        continuous_records = load_competition_records(self.directory)
+
+        with tempfile.TemporaryDirectory() as switched_name:
+            switched_directory = Path(switched_name)
+            switched = TournamentRunner.create(
+                switched_directory,
+                tournament_id="canonical-controls-cup",
+                tournament_seed=123456789,
+                roster=four_team_roster(),
+                config=TournamentConfig(execution_mode="continuous"),
+                match_executor=execute,
+            )
+            switched.switch_mode("step")
+            switched.play_next_match()
+            switched.switch_mode("continuous")
+            switched.start()
+            switched_records = load_competition_records(switched_directory)
+
+            self.assertEqual(
+                [stored.record for stored in switched_records],
+                [stored.record for stored in continuous_records],
+            )
+            self.assertEqual(
+                fold_tournament_state(
+                    load_manifest(switched_directory).manifest, switched_records
+                ),
+                fold_tournament_state(
+                    load_manifest(self.directory).manifest, continuous_records
+                ),
+            )
+
+    def test_start_requires_resume_after_infrastructure_intervention(self) -> None:
+        def fail(request: MatchExecutionRequest) -> MatchExecutionResult:
+            return MatchExecutionResult(
+                infrastructure_failure=True,
+                competitive_outcome=None,
+                operational_telemetry={"error": "host unavailable"},
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="intervention-control-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=fail,
+        )
+        with self.assertRaises(InfrastructureInterventionRequiredError):
+            runner.start()
+        self.assertEqual(runner.control_status, "infrastructure_intervention")
+        with self.assertRaisesRegex(ValueError, "Resume is required"):
+            runner.start()
+        with self.assertRaisesRegex(ValueError, "Match boundary"):
+            runner.switch_mode("step")
+        runner.request_pause()
+        self.assertEqual(runner.control_status, "infrastructure_intervention")
+
+        runner.match_executor = lambda request: (
+            runner.request_pause()
+            or executor_result(request, winner_team_id=request.team_a_id)
+        )
+        resumed = runner.resume()
+        self.assertEqual(len(resumed), 1)
+        self.assertEqual(resumed[0].record["match_id"], "qualifying-0001-match-1")
+        self.assertEqual(runner.control_status, "paused")
+
     def test_execution_operations_reject_the_other_sealed_mode(self) -> None:
         requests: list[MatchExecutionRequest] = []
 
@@ -674,6 +923,13 @@ class TournamentContinuousModeTests(unittest.TestCase):
         self.assertEqual(committed, ())
         self.assertEqual(runner.status, "awaiting_security_ruling")
         self.assertEqual(len(load_competition_records(self.directory)), 1)
+        with self.assertRaisesRegex(ValueError, "Security Violation"):
+            runner.switch_mode("step")
+        with self.assertRaises(SecurityRulingRequiredError):
+            runner.start()
+        with self.assertRaises(SecurityRulingRequiredError):
+            runner.resume()
+        runner.request_pause()
 
     def test_continuous_mode_does_not_rerun_a_match_committed_before_interruption(
         self,
@@ -778,6 +1034,11 @@ class TournamentContinuousModeTests(unittest.TestCase):
             self.assertEqual(aborted.run_continuously(), ())
             self.assertEqual(aborted_requests, [])
             self.assertEqual(aborted.status, "aborted")
+            with self.assertRaisesRegex(ValueError, "complete Tournament"):
+                aborted.switch_mode("step")
+            self.assertEqual(aborted.start(), ())
+            self.assertEqual(aborted.resume(), ())
+            aborted.request_pause()
 
 
 class TournamentStepModeTests(unittest.TestCase):
@@ -3539,3 +3800,67 @@ class TournamentResumeTests(unittest.TestCase):
         )
         rebuilt_again = load_scoreboard_projection(self.directory)
         self.assertEqual(rebuilt_again, rebuilt)
+
+    def test_restore_reopens_and_resumes_without_rerunning_committed_match(
+        self,
+    ) -> None:
+        committed = self.runner.play_next_match()
+        self.assertIsNotNone(committed)
+        committed_match_id = str(committed.record["match_id"])
+        expected_projection = load_scoreboard_projection(self.directory)
+        record_path = self.directory / "records" / "00000001.json"
+        backup_path = self.directory / "externally-supplied-record.json"
+        backup_bytes = record_path.read_bytes()
+        backup_path.write_bytes(backup_bytes)
+        record_path.chmod(0o644)
+        record_path.write_bytes(
+            backup_bytes.replace(b'"winner_team_id"', b'"winner-team-id"')
+        )
+        requests: list[MatchExecutionRequest] = []
+
+        with self.assertRaises(IntegrityError):
+            TournamentRunner.open(
+                self.directory,
+                match_executor=lambda request: self.fail(
+                    "A corrupt Competition Record must not execute a Match"
+                ),
+                artifact_digest_verifier=lambda team_id, digest: True,
+            )
+
+        restored = TournamentRunner.restore_competition_record_at(
+            self.directory, backup_path
+        )
+        reopened = TournamentRunner.open(
+            self.directory,
+            match_executor=lambda request: (
+                requests.append(request)
+                or executor_result(request, winner_team_id=request.team_a_id)
+            ),
+            artifact_digest_verifier=lambda team_id, digest: True,
+        )
+
+        self.assertEqual(restored, committed)
+        self.assertEqual(
+            load_scoreboard_projection(self.directory), expected_projection
+        )
+        reopened.play_next_match()
+        self.assertNotIn(
+            committed_match_id, [request.match_id for request in requests]
+        )
+        self.assertEqual(backup_path.read_bytes(), backup_bytes)
+
+    def test_restore_competes_for_the_exclusive_tournament_run_lock(self) -> None:
+        committed = self.runner.play_next_match()
+        record_path = self.directory / "records" / "00000001.json"
+        backup_path = self.directory / "externally-supplied-record.json"
+        backup_path.write_bytes(record_path.read_bytes())
+        record_path.unlink()
+
+        with TournamentRunLock(self.directory):
+            with self.assertRaises(TournamentRunLockHeldError):
+                TournamentRunner.restore_competition_record_at(
+                    self.directory, backup_path
+                )
+
+        self.assertFalse(record_path.exists())
+        self.assertIsNotNone(committed)

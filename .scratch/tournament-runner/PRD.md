@@ -8,15 +8,16 @@ Implementation status: in progress
 
 Last updated: 2026-08-06
 
-The implemented foundation is covered by 200 passing tests under the repository's
+The implemented foundation is covered by 219 passing tests under the repository's
 Python 3.9 virtual environment. Earlier work is recorded in commits `2703c20`,
 `7f1a17a`, `4e1b307`, and `876071f`; the current frontier adds the sealed rules
 contract, authoritative state fold, transition from the Qualifying Phase to the
 Playoff Phase, canonical Bracket Lock, and complete standard-bracket Step Mode
 execution through Tournament Champion declaration, plus qualifying Security
 Violation rulings, Disqualification effects, and every reduced Playoff Phase
-shape, followed by canonical operator abort and durable reconstruction, and now
-sequential Continuous Mode execution through the public runner and demo CLI.
+shape, followed by canonical operator abort and durable reconstruction,
+sequential Continuous Mode execution, durable sequential operator controls, and
+hash-verified single-record restoration through the public runner and demo CLI.
 
 ### Complete
 
@@ -111,31 +112,40 @@ sequential Continuous Mode execution through the public runner and demo CLI.
   canonical scheduling, recovery, Series early completion, and projection
   behavior; expose the same sealed mode through the demo CLI with sequential
   execution.
+- [x] Persist validated operational control state separately from the immutable
+  Tournament Manifest and Competition Records; explicitly start and resume
+  Continuous Mode, request a durable pause during an active Match without racing
+  for the run lock, stop before selecting the next Match after durable boundary
+  updates, recover interrupted running state as paused, and switch both
+  directions between Step Mode and Continuous Mode only at Match boundaries
+  without changing Competition Records or reconstructed Tournament state.
+- [x] Restore one corrupt or missing Competition Record from an externally
+  supplied canonical envelope under the exclusive run lock; verify its content
+  hash and the prospective complete sequence against the canonical index,
+  refuse healthy targets or broader corruption, publish the replacement
+  atomically without mutating the backup, and reopen through the normal state
+  fold and Scoreboard Projection reconstruction path without re-executing a
+  committed Match.
 
 ### Partially complete
 
-- [ ] Complete operator execution controls. Step Mode, sequential Continuous
-  Mode, infrastructure pause, Security Violation confirmation/rejection, and
-  abort exist; explicit start, requested pause, mode switching, and
-  record-restoration commands remain.
 - [ ] Verify maximum capacity end to end. Schedule generation covers the
   thirty-two-Team roster, but the full 1,497-Match/449,100-Round Tournament and
   its non-binding performance objectives have not been benchmarked.
 
 ### Remaining
 
-- [ ] Implement configured parallel Match execution, canonical commit ordering
-  under concurrency, requested pause, and boundary-only mode switching.
-- [ ] Implement hash-verified Competition Record restoration from backup.
+- [ ] Implement configured parallel Match execution and canonical Competition
+  Record commit ordering under concurrency.
 - [ ] Add the published capacity/preflight benchmark suite.
 
 ### Acceptance criteria status
 
 | Status | Acceptance criteria | Notes |
 | --- | --- | --- |
-| Complete | 1–29, 33 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, playoff Disqualification, projection, and operator-abort seams. |
-| Partial | 30, 32, 34 | Step Mode, sequential Continuous Mode auto-advance, and attributable rulings exist; requested pause, broader controls, and full capacity verification remain. |
-| Not started | 31, 35 | Parallel execution, boundary-only mode switching, and capacity benchmarks remain. |
+| Complete | 1–30, 32–33 | Implemented and covered at the creation, domain, Match, storage, Step Mode, recovery, hash-verified record-restoration, playoff Disqualification, projection, operator-abort, durable pause, explicit lifecycle, and sequential mode-switch seams. |
+| Partial | 31, 34 | Boundary-only mode switching and timing-invariant reconstructed Tournament state are covered sequentially; configured parallel execution and full capacity verification remain. |
+| Not started | 35 | Capacity benchmarks remain. |
 
 ## Problem Statement
 

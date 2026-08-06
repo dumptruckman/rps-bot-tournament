@@ -13,9 +13,12 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional, Union
+
+import fcntl
 
 from rps_runner.tournament.immutable import FrozenJsonDict, freeze_json, thaw_json
+from rps_runner.tournament.locking import TournamentRunLock
 
 
 class StorageError(Exception):
@@ -59,6 +62,13 @@ class StoredCompetitionRecord:
             "record",
             _freeze_json_object(thaw_json(self.record), "Competition Record"),
         )
+
+
+CONTROL_STATE_VERSION = 1
+_CONTROL_MODES = frozenset(("step", "continuous"))
+_CONTROL_LIFECYCLES = frozenset(
+    ("paused", "running", "infrastructure_intervention")
+)
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -170,46 +180,109 @@ def load_competition_records(
                 "Competition Record sequence is missing or reordered at "
                 f"{expected_name}"
             )
-        envelope = _read_json_object(path, "Competition Record")
-        if set(envelope) != {"content_hash", "record", "sequence"}:
-            raise IntegrityError(f"Competition Record envelope is invalid: {path}")
-        sequence = envelope["sequence"]
-        record = envelope["record"]
-        content_hash = envelope["content_hash"]
-        if sequence != expected_sequence or isinstance(sequence, bool):
-            raise RecordSequenceError(
-                f"Competition Record sequence is invalid: {path}"
-            )
-        if not isinstance(record, dict) or not isinstance(content_hash, str):
-            raise IntegrityError(f"Competition Record envelope is invalid: {path}")
-        body = {"record": record, "sequence": sequence}
-        actual_hash = _sha256(canonical_json_bytes(body))
-        if actual_hash != content_hash:
-            raise IntegrityError(
-                f"Competition Record content hash does not match: {path}"
-            )
         loaded.append(
-            StoredCompetitionRecord(
-                sequence=sequence,
-                record=_freeze_json_object(record, "Competition Record"),
-                content_hash=content_hash,
-            )
+            _read_competition_record(path, expected_sequence=expected_sequence)
         )
-    index = _read_json_object(index_path, "Competition Record index")
-    if set(index) != {"count", "records_hash"}:
-        raise IntegrityError("Competition Record index is invalid")
-    count = index["count"]
+    count, records_hash = _read_records_index(index_path)
     if isinstance(count, bool) or not isinstance(count, int) or count != len(loaded):
         raise RecordSequenceError(
             "Competition Record count does not match the canonical index"
         )
-    records_hash = index["records_hash"]
     actual_records_hash = _sha256(
         canonical_json_bytes([record.content_hash for record in loaded])
     )
-    if not isinstance(records_hash, str) or records_hash != actual_records_hash:
+    if records_hash != actual_records_hash:
         raise IntegrityError("Competition Record index hash does not match")
     return loaded
+
+
+def restore_competition_record(
+    tournament_directory: Union[Path, str],
+    backup_record_path: Union[Path, str],
+) -> StoredCompetitionRecord:
+    """Restore one missing or corrupt Competition Record verified by its index."""
+
+    directory = Path(tournament_directory)
+    with TournamentRunLock(directory):
+        return _restore_competition_record_under_run_lock(
+            directory, backup_record_path
+        )
+
+
+def _restore_competition_record_under_run_lock(
+    tournament_directory: Union[Path, str],
+    backup_record_path: Union[Path, str],
+) -> StoredCompetitionRecord:
+    """Restore after the caller has acquired the Tournament run lock."""
+
+    directory = Path(tournament_directory)
+    backup_path = Path(backup_record_path)
+    backup = _read_json_object(backup_path, "Competition Record backup")
+    replacement = _stored_competition_record(
+        backup, f"Competition Record backup: {backup_path}"
+    )
+    sequence = replacement.sequence
+    content_hash = replacement.content_hash
+    index_path = directory / "records.index.json"
+    count, records_hash = _read_records_index(index_path)
+    if count < 1 or sequence > count:
+        raise RecordSequenceError(
+            "Competition Record backup sequence is outside the canonical index"
+        )
+
+    records_directory = directory / "records"
+    expected_names = {f"{value:08d}.json" for value in range(1, count + 1)}
+    observed_names = {path.name for path in records_directory.glob("*.json")}
+    target_name = f"{sequence:08d}.json"
+    if (
+        observed_names - expected_names
+        or expected_names - observed_names - {target_name}
+    ):
+        raise RecordSequenceError(
+            "Competition Record sequence has corruption outside the restore target"
+        )
+
+    prospective_hashes: list[str] = []
+    target_path = records_directory / target_name
+    existing_target_hash: Optional[str] = None
+    for expected_sequence in range(1, count + 1):
+        if expected_sequence == sequence:
+            prospective_hashes.append(content_hash)
+            if target_path.exists():
+                try:
+                    existing = _read_competition_record(
+                        target_path, expected_sequence=sequence
+                    )
+                    existing_target_hash = existing.content_hash
+                except IntegrityError:
+                    pass
+            continue
+
+        path = records_directory / f"{expected_sequence:08d}.json"
+        other = _read_competition_record(
+            path, expected_sequence=expected_sequence
+        )
+        prospective_hashes.append(other.content_hash)
+
+    if _sha256(canonical_json_bytes(prospective_hashes)) != records_hash:
+        raise IntegrityError(
+            "Competition Record backup does not match the canonical index"
+        )
+    existing_hashes = list(prospective_hashes)
+    if existing_target_hash is not None:
+        existing_hashes[sequence - 1] = existing_target_hash
+    target_is_healthy = (
+        existing_target_hash is not None
+        and _sha256(canonical_json_bytes(existing_hashes)) == records_hash
+    )
+    if target_is_healthy:
+        raise IntegrityError(
+            "Refusing to overwrite a healthy verified Competition Record"
+        )
+
+    _atomic_replace_read_only(target_path, canonical_json_bytes(backup))
+    restored_records = load_competition_records(directory)
+    return restored_records[sequence - 1]
 
 
 def committed_match_ids(
@@ -298,6 +371,89 @@ def load_scoreboard_projection(
     return _read_json_object(path, "Scoreboard Projection")
 
 
+def initial_control_state(execution_mode: str) -> dict[str, Any]:
+    """Build the initial durable operational controls for a sealed Tournament."""
+
+    state = {
+        "version": CONTROL_STATE_VERSION,
+        "current_mode": execution_mode,
+        "lifecycle": "paused",
+        "match_active": False,
+        "pause_requested": False,
+    }
+    _validate_control_state(state)
+    return state
+
+
+def load_control_state(
+    tournament_directory: Union[Path, str],
+) -> Optional[dict[str, Any]]:
+    """Load detached operational controls, or ``None`` for a legacy store."""
+
+    path = Path(tournament_directory) / "control.json"
+    if not path.exists():
+        return None
+    state = _read_json_object(path, "Tournament control state")
+    _validate_control_state(state)
+    return state
+
+
+def write_control_state(
+    tournament_directory: Union[Path, str], state: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Atomically replace detached durable operational controls."""
+
+    state_value = _detached_json_object(state, "Tournament control state")
+    _validate_control_state(state_value)
+    _atomic_replace(
+        Path(tournament_directory) / "control.json",
+        canonical_json_bytes(state_value),
+    )
+    return state_value
+
+
+def update_control_state(
+    tournament_directory: Union[Path, str],
+    update: Callable[[dict[str, Any]], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Serialize a read-modify-write of detached operational controls."""
+
+    directory = Path(tournament_directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    lock_path = directory / ".tournament-control.lock"
+    with lock_path.open("a+b") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+        current = load_control_state(directory)
+        if current is None:
+            raise StorageError("Tournament control state is missing")
+        return write_control_state(directory, update(dict(current)))
+
+
+def _validate_control_state(state: Mapping[str, Any]) -> None:
+    if set(state) != {
+        "version",
+        "current_mode",
+        "lifecycle",
+        "match_active",
+        "pause_requested",
+    }:
+        raise IntegrityError("Tournament control state fields are invalid")
+    if state["version"] != CONTROL_STATE_VERSION:
+        raise IntegrityError("Tournament control state version is unsupported")
+    if state["current_mode"] not in _CONTROL_MODES:
+        raise IntegrityError("Tournament control execution mode is invalid")
+    if state["lifecycle"] not in _CONTROL_LIFECYCLES:
+        raise IntegrityError("Tournament control lifecycle is invalid")
+    if not isinstance(state["match_active"], bool):
+        raise IntegrityError("Tournament control Match activity is invalid")
+    if state["match_active"] and state["lifecycle"] != "running":
+        raise IntegrityError(
+            "Tournament control Match activity requires running lifecycle"
+        )
+    if not isinstance(state["pause_requested"], bool):
+        raise IntegrityError("Tournament control pause request is invalid")
+
+
 def _write_records_index(
     tournament_directory: Path, records: list[StoredCompetitionRecord]
 ) -> None:
@@ -310,6 +466,58 @@ def _write_records_index(
     _atomic_replace(
         tournament_directory / "records.index.json", canonical_json_bytes(index)
     )
+
+
+def _read_records_index(index_path: Path) -> tuple[int, str]:
+    index = _read_json_object(index_path, "Competition Record index")
+    if set(index) != {"count", "records_hash"}:
+        raise IntegrityError("Competition Record index is invalid")
+    count = index["count"]
+    records_hash = index["records_hash"]
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise RecordSequenceError("Competition Record index count is invalid")
+    if not isinstance(records_hash, str):
+        raise IntegrityError("Competition Record index is invalid")
+    return count, records_hash
+
+
+def _read_competition_record(
+    path: Path, *, expected_sequence: Optional[int] = None
+) -> StoredCompetitionRecord:
+    envelope = _read_json_object(path, "Competition Record")
+    return _stored_competition_record(
+        envelope,
+        f"Competition Record: {path}",
+        expected_sequence=expected_sequence,
+    )
+
+
+def _stored_competition_record(
+    envelope: Mapping[str, Any],
+    description: str,
+    *,
+    expected_sequence: Optional[int] = None,
+) -> StoredCompetitionRecord:
+    if set(envelope) != {"content_hash", "record", "sequence"}:
+        raise IntegrityError(f"{description} envelope is invalid")
+    sequence = envelope["sequence"]
+    record = envelope["record"]
+    content_hash = envelope["content_hash"]
+    if (
+        isinstance(sequence, bool)
+        or not isinstance(sequence, int)
+        or sequence <= 0
+        or (expected_sequence is not None and sequence != expected_sequence)
+    ):
+        raise RecordSequenceError(f"{description} sequence is invalid")
+    if not isinstance(record, dict) or not isinstance(content_hash, str):
+        raise IntegrityError(f"{description} envelope is invalid")
+    actual_hash = _sha256(
+        canonical_json_bytes({"record": record, "sequence": sequence})
+    )
+    if actual_hash != content_hash:
+        raise IntegrityError(f"{description} content hash does not match")
+    return StoredCompetitionRecord(sequence, record, content_hash)
 
 
 def _sha256(content: bytes) -> str:
@@ -387,6 +595,29 @@ def _atomic_replace(path: Path, content: bytes) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_replace_read_only(path: Path, content: bytes) -> None:
+    """Atomically publish immutable canonical content at an existing name."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary_path.chmod(0o444)
         os.replace(temporary_path, path)
         _fsync_directory(path.parent)
     finally:

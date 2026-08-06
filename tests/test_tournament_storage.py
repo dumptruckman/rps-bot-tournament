@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,10 +16,15 @@ from rps_runner.tournament.storage import (
     committed_match_ids,
     is_match_committed,
     load_competition_records,
+    load_control_state,
     load_manifest,
     load_operational_telemetry,
     load_scoreboard_projection,
+    restore_competition_record,
     seal_manifest,
+    initial_control_state,
+    update_control_state,
+    write_control_state,
     write_scoreboard_projection,
 )
 
@@ -261,6 +268,178 @@ class CompetitionRecordTests(unittest.TestCase):
 
         self.assertEqual(path.read_bytes(), stored_bytes)
         self.assertEqual(loaded.content_hash, stored_hash)
+
+    def test_restore_replaces_one_corrupt_record_from_verified_backup(self) -> None:
+        stored = append_competition_record(self.directory, self.started)
+        record_path = self.directory / "records" / "00000001.json"
+        backup_path = self.directory / "record-backup.json"
+        backup_bytes = record_path.read_bytes()
+        backup_path.write_bytes(backup_bytes)
+        record_path.chmod(0o644)
+        record_path.write_bytes(backup_bytes.replace(b'"q-001"', b'"q-999"'))
+
+        restored = restore_competition_record(self.directory, backup_path)
+
+        self.assertEqual(restored, stored)
+        self.assertEqual(record_path.read_bytes(), backup_bytes)
+        self.assertEqual(backup_path.read_bytes(), backup_bytes)
+        self.assertEqual(load_competition_records(self.directory), [stored])
+
+    def test_restore_replaces_one_missing_record_bound_by_the_index(self) -> None:
+        first = append_competition_record(self.directory, self.started)
+        second = append_competition_record(self.directory, self.terminal)
+        record_path = self.directory / "records" / "00000002.json"
+        backup_path = self.directory / "record-backup.json"
+        backup_bytes = record_path.read_bytes()
+        backup_path.write_bytes(backup_bytes)
+        record_path.unlink()
+
+        restored = restore_competition_record(self.directory, backup_path)
+
+        self.assertEqual(restored, second)
+        self.assertEqual(load_competition_records(self.directory), [first, second])
+        self.assertEqual(backup_path.read_bytes(), backup_bytes)
+
+    def test_restore_rejects_unverified_or_noncanonical_backup(self) -> None:
+        stored = append_competition_record(self.directory, self.started)
+        record_path = self.directory / "records" / "00000001.json"
+        canonical_backup = record_path.read_bytes()
+        record_path.chmod(0o644)
+        record_path.write_bytes(b"corrupt")
+
+        invalid_backups: list[tuple[str, bytes, str]] = []
+        invalid_backups.append(
+            ("noncanonical", b"\n" + canonical_backup, "canonical JSON")
+        )
+        stale_hash = json.loads(canonical_backup)
+        stale_hash["content_hash"] = "0" * 64
+        invalid_backups.append(
+            ("stale hash", canonical_json_bytes(stale_hash), "content hash")
+        )
+        wrong_sequence = json.loads(canonical_backup)
+        wrong_sequence["sequence"] = 2
+        wrong_sequence["content_hash"] = hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "record": wrong_sequence["record"],
+                    "sequence": wrong_sequence["sequence"],
+                }
+            )
+        ).hexdigest()
+        invalid_backups.append(
+            ("wrong sequence", canonical_json_bytes(wrong_sequence), "index")
+        )
+        wrong_record = json.loads(canonical_backup)
+        wrong_record["record"]["fixture_id"] = "q-999"
+        wrong_record["content_hash"] = hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "record": wrong_record["record"],
+                    "sequence": wrong_record["sequence"],
+                }
+            )
+        ).hexdigest()
+        invalid_backups.append(
+            ("wrong record", canonical_json_bytes(wrong_record), "canonical index")
+        )
+
+        for name, backup_bytes, message in invalid_backups:
+            with self.subTest(name=name):
+                backup_path = self.directory / f"{name}.json"
+                backup_path.write_bytes(backup_bytes)
+                target_before = record_path.read_bytes()
+
+                with self.assertRaisesRegex(IntegrityError, message):
+                    restore_competition_record(self.directory, backup_path)
+
+                self.assertEqual(record_path.read_bytes(), target_before)
+                self.assertEqual(backup_path.read_bytes(), backup_bytes)
+        self.assertEqual(stored.sequence, 1)
+
+    def test_restore_refuses_to_overwrite_a_healthy_verified_record(self) -> None:
+        append_competition_record(self.directory, self.started)
+        record_path = self.directory / "records" / "00000001.json"
+        backup_path = self.directory / "record-backup.json"
+        backup_path.write_bytes(record_path.read_bytes())
+
+        with self.assertRaisesRegex(IntegrityError, "healthy verified"):
+            restore_competition_record(self.directory, backup_path)
+
+    def test_restore_rejects_corruption_outside_the_target_or_in_the_index(
+        self,
+    ) -> None:
+        append_competition_record(self.directory, self.started)
+        append_competition_record(self.directory, self.terminal)
+        first_path = self.directory / "records" / "00000001.json"
+        second_path = self.directory / "records" / "00000002.json"
+        backup_path = self.directory / "record-backup.json"
+        backup_bytes = second_path.read_bytes()
+        backup_path.write_bytes(backup_bytes)
+        second_path.unlink()
+        first_path.chmod(0o644)
+        first_path.write_bytes(b"corrupt elsewhere")
+
+        with self.assertRaisesRegex(IntegrityError, "Competition Record"):
+            restore_competition_record(self.directory, backup_path)
+
+        self.assertFalse(second_path.exists())
+        self.assertEqual(backup_path.read_bytes(), backup_bytes)
+
+        first_path.write_bytes(
+            b'{"content_hash":"invalid","record":{},"sequence":1}'
+        )
+        index_path = self.directory / "records.index.json"
+        index_bytes = index_path.read_bytes()
+        index_path.write_bytes(b"\n" + index_bytes)
+        with self.assertRaisesRegex(IntegrityError, "canonical JSON"):
+            restore_competition_record(self.directory, backup_path)
+        self.assertFalse(second_path.exists())
+
+
+class TournamentControlStateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.directory = Path(self.temporary_directory.name)
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_control_state_is_durable_atomic_and_separate_from_competition_records(
+        self,
+    ) -> None:
+        seal_manifest(self.directory, {"tournament_id": "control-cup"})
+        manifest_bytes = (self.directory / "manifest.json").read_bytes()
+        write_control_state(self.directory, initial_control_state("continuous"))
+
+        updated = update_control_state(
+            self.directory,
+            lambda control: {
+                **control,
+                "lifecycle": "running",
+                "pause_requested": True,
+            },
+        )
+
+        self.assertEqual(load_control_state(self.directory), updated)
+        self.assertEqual(updated["current_mode"], "continuous")
+        self.assertEqual(updated["lifecycle"], "running")
+        self.assertFalse(updated["match_active"])
+        self.assertTrue(updated["pause_requested"])
+        self.assertEqual(
+            (self.directory / "manifest.json").read_bytes(), manifest_bytes
+        )
+        self.assertEqual(load_competition_records(self.directory), [])
+
+    def test_control_state_rejects_unknown_or_malformed_values(self) -> None:
+        invalid_states = (
+            {**initial_control_state("step"), "current_mode": "parallel"},
+            {**initial_control_state("step"), "lifecycle": "active"},
+            {**initial_control_state("step"), "pause_requested": 1},
+        )
+        for state in invalid_states:
+            with self.subTest(state=state):
+                with self.assertRaises(IntegrityError):
+                    write_control_state(self.directory, state)
 
 
 class ScoreboardProjectionTests(unittest.TestCase):

@@ -31,6 +31,7 @@ from rps_runner.tournament.state import (
 from rps_runner.tournament.storage import (
     StorageError,
     StoredCompetitionRecord,
+    load_control_state,
     load_scoreboard_projection,
 )
 
@@ -95,6 +96,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     execution_scope.add_argument(
+        "--start",
+        dest="execution_scope",
+        action="store_const",
+        const="start",
+        help="create or open a Continuous Mode Tournament and explicitly start it",
+    )
+    execution_scope.add_argument(
+        "--resume",
+        dest="execution_scope",
+        action="store_const",
+        const="resume",
+        help="resume an existing paused Continuous Mode Tournament",
+    )
+    execution_scope.add_argument(
+        "--request-pause",
+        dest="execution_scope",
+        action="store_const",
+        const="request_pause",
+        help="durably request a pause at the next Match boundary",
+    )
+    execution_scope.add_argument(
+        "--switch-mode",
+        choices=("step", "continuous"),
+        help="switch execution mode at a verified Match boundary",
+    )
+    execution_scope.add_argument(
         "--abort",
         dest="execution_scope",
         action="store_const",
@@ -102,6 +129,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "abort the unfinished Tournament without declaring a "
             "Tournament Champion"
+        ),
+    )
+    execution_scope.add_argument(
+        "--restore-record",
+        type=Path,
+        help=(
+            "restore one corrupt or missing Competition Record from an "
+            "operator-supplied canonical backup"
         ),
     )
     demo.add_argument(
@@ -138,6 +173,15 @@ def main(
     resolved_project_root = project_root.expanduser().resolve()
 
     try:
+        if (
+            options.execution_scope in ("resume", "request_pause")
+            or options.switch_mode
+            or options.restore_record is not None
+        ):
+            if not directory.exists():
+                raise ValueError(
+                    "The Tournament must already exist for this control"
+                )
         if options.execution_scope == "abort":
             if not options.organizer_id or not options.organizer_id.strip():
                 raise ValueError("Organizer identity is required to abort")
@@ -150,13 +194,30 @@ def main(
             )
         ):
             raise ValueError("Abort audit fields require --abort")
+        if options.execution_scope == "request_pause":
+            TournamentRunner.request_pause_at(directory)
+            _print_summary(
+                directory,
+                disposition="pause requested",
+                committed_records=[],
+                output=output,
+            )
+            return 0
+
+        restoring_record = options.restore_record is not None
+        if restoring_record:
+            TournamentRunner.restore_competition_record_at(
+                directory,
+                options.restore_record.expanduser().resolve(),
+            )
+
         executor = match_executor or LocalMatchExecutor(
             _demo_artifact_command_resolver(resolved_project_root, executable)
         ).execute
         config = TournamentConfig(
             execution_mode=(
                 "continuous"
-                if options.execution_scope == "continuous"
+                if options.execution_scope in ("continuous", "start")
                 else "step"
             )
         )
@@ -172,14 +233,13 @@ def main(
                     tournament_seed=options.seed,
                     project_root=resolved_project_root,
                     python_executable=executable,
-                    expected_execution_mode=(
-                        None
-                        if options.execution_scope == "abort"
-                        else config.execution_mode
-                    ),
                 ),
             )
-            disposition = "resumed"
+            disposition = (
+                "restored Competition Record"
+                if restoring_record
+                else "resumed"
+            )
         else:
             roster = _demo_roster(resolved_project_root, executable)
             runner = TournamentRunner.create(
@@ -191,6 +251,15 @@ def main(
                 match_executor=executor,
             )
             disposition = "created"
+        if restoring_record:
+            _print_summary(
+                directory,
+                disposition=disposition,
+                committed_records=[],
+                output=output,
+            )
+            return 0
+
         committed_records: list[StoredCompetitionRecord] = []
         if options.execution_scope == "abort":
             runner.abort(
@@ -198,8 +267,12 @@ def main(
                 reason_code=options.abort_reason or OPERATOR_ABORT_REASON,
                 note=options.abort_note,
             )
-        elif options.execution_scope == "continuous":
-            committed_records.extend(runner.run_continuously())
+        elif options.switch_mode:
+            runner.switch_mode(options.switch_mode)
+        elif options.execution_scope in ("continuous", "start"):
+            committed_records.extend(runner.start())
+        elif options.execution_scope == "resume":
+            committed_records.extend(runner.resume())
         else:
             while True:
                 projection = load_scoreboard_projection(directory)
@@ -329,19 +402,13 @@ def _verify_demo_manifest(
     tournament_seed: int,
     project_root: Path,
     python_executable: Path,
-    expected_execution_mode: Optional[str],
 ) -> None:
-    execution_mode = (
-        str(manifest["execution_mode"])
-        if expected_execution_mode is None
-        else expected_execution_mode
-    )
     incompatible_fields = tournament_manifest_incompatibilities(
         manifest,
         tournament_id=_DEMO_TOURNAMENT_ID,
         tournament_seed=tournament_seed,
         roster=_demo_roster(project_root, python_executable),
-        config=TournamentConfig(execution_mode=execution_mode),
+        config=TournamentConfig(execution_mode=str(manifest["execution_mode"])),
     )
     if incompatible_fields:
         raise DemoTournamentCompatibilityError(list(incompatible_fields))
@@ -359,6 +426,10 @@ def _print_summary(
         raise RuntimeError("Scoreboard Projection is missing")
 
     print(f"Tournament: {disposition}", file=output)
+    control = load_control_state(directory)
+    if control is not None:
+        print(f"Current Mode: {str(control['current_mode']).title()}", file=output)
+        print(f"Control State: {control['lifecycle']}", file=output)
     for stored in committed_records:
         record = stored.record
         print(f"Committed Match: {record['match_id']}", file=output)

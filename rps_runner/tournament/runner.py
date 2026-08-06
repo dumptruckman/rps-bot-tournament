@@ -46,13 +46,18 @@ from .state import (
 )
 from .storage import (
     StoredCompetitionRecord,
+    _restore_competition_record_under_run_lock,
     append_competition_record,
     append_operational_telemetry,
+    initial_control_state,
     load_competition_records,
+    load_control_state,
     load_manifest,
     load_operational_telemetry,
     load_scoreboard_projection,
     seal_manifest,
+    update_control_state,
+    write_control_state,
     write_scoreboard_projection,
 )
 
@@ -177,6 +182,9 @@ class TournamentRunner:
         directory.mkdir(parents=True, exist_ok=True)
         with TournamentRunLock(directory):
             stored = seal_manifest(directory, manifest)
+            write_control_state(
+                directory, initial_control_state(config.execution_mode)
+            )
             write_scoreboard_projection(
                 directory,
                 _initial_projection(stored.manifest),
@@ -204,6 +212,21 @@ class TournamentRunner:
             if sealed_manifest_verifier is not None:
                 sealed_manifest_verifier(stored.manifest)
             records = load_competition_records(directory)
+            control = load_control_state(directory)
+            if control is None:
+                control = write_control_state(
+                    directory,
+                    initial_control_state(str(stored.manifest["execution_mode"])),
+                )
+            elif control["lifecycle"] == "running":
+                control = update_control_state(
+                    directory,
+                    lambda value: {
+                        **value,
+                        "lifecycle": "paused",
+                        "match_active": False,
+                    },
+                )
             load_operational_telemetry(directory)
             state = fold_tournament_state(stored.manifest, records)
             records, state = _commit_canonical_transitions_if_ready(
@@ -215,6 +238,22 @@ class TournamentRunner:
             )
         return cls(directory, match_executor, stored.manifest)
 
+    @classmethod
+    def restore_competition_record_at(
+        cls,
+        tournament_directory: Union[Path, str],
+        backup_record_path: Union[Path, str],
+    ) -> StoredCompetitionRecord:
+        """Restore one indexed Competition Record before opening a Tournament."""
+
+        directory = Path(tournament_directory)
+        with TournamentRunLock(directory):
+            stored = load_manifest(directory)
+            _verify_compatibility(stored.manifest)
+            return _restore_competition_record_under_run_lock(
+                directory, backup_record_path
+            )
+
     @property
     def status(self) -> str:
         projection = load_scoreboard_projection(self.tournament_directory)
@@ -222,195 +261,402 @@ class TournamentRunner:
             return "paused"
         return str(projection["status"])
 
+    @property
+    def current_mode(self) -> str:
+        """Return the durable operational execution mode."""
+
+        control = self._control_state()
+        return str(control["current_mode"])
+
+    @property
+    def control_status(self) -> str:
+        """Return operational lifecycle distinct from competition status."""
+
+        return str(self._control_state()["lifecycle"])
+
+    def start(self) -> tuple[StoredCompetitionRecord, ...]:
+        """Explicitly start a paused Continuous Mode Tournament."""
+
+        return self._run_continuously(
+            allow_infrastructure_intervention=False
+        )
+
+    def resume(self) -> tuple[StoredCompetitionRecord, ...]:
+        """Resume a paused Continuous Mode Tournament at its canonical boundary."""
+
+        return self._run_continuously(
+            allow_infrastructure_intervention=True
+        )
+
+    def request_pause(self) -> None:
+        """Durably request a pause after the active Match reaches its boundary."""
+
+        self.request_pause_at(self.tournament_directory)
+
+    @classmethod
+    def request_pause_at(
+        cls, tournament_directory: Union[Path, str]
+    ) -> None:
+        """Request pause without competing for an active Tournament run lock."""
+
+        directory = Path(tournament_directory)
+        manifest = load_manifest(directory).manifest
+        _verify_compatibility(manifest)
+        if load_control_state(directory) is None:
+            raise RuntimeError("Tournament control state is missing")
+
+        def request(control: dict[str, Any]) -> dict[str, Any]:
+            if control["lifecycle"] == "running":
+                control["pause_requested"] = True
+            return control
+
+        update_control_state(directory, request)
+
+    def switch_mode(self, execution_mode: str) -> None:
+        """Switch Step/Continuous Mode only while paused at a Match boundary."""
+
+        if execution_mode not in ("step", "continuous"):
+            raise ValueError("Execution mode must be step or continuous")
+        control = self._control_state()
+        if control["lifecycle"] != "paused":
+            raise ValueError("Execution mode can change only at a Match boundary")
+        with TournamentRunLock(self.tournament_directory):
+            records = load_competition_records(self.tournament_directory)
+            state = fold_tournament_state(self._manifest, records)
+            if state.is_complete:
+                raise ValueError("A complete Tournament has no execution mode")
+            if state.pending_security_ruling is not None:
+                raise ValueError(
+                    "Execution mode cannot change while a Security Violation "
+                    "ruling is pending"
+                )
+            control = self._control_state()
+            if control["lifecycle"] != "paused":
+                raise ValueError("Execution mode can change only at a Match boundary")
+            update_control_state(
+                self.tournament_directory,
+                lambda value: {
+                    **value,
+                    "current_mode": execution_mode,
+                    "pause_requested": False,
+                },
+            )
+
     def run_continuously(self) -> tuple[StoredCompetitionRecord, ...]:
         """Advance a Continuous Mode Tournament to its next stop boundary."""
 
-        if self._manifest["execution_mode"] != "continuous":
+        return self._run_continuously(
+            allow_infrastructure_intervention=True
+        )
+
+    def _run_continuously(
+        self, *, allow_infrastructure_intervention: bool
+    ) -> tuple[StoredCompetitionRecord, ...]:
+        if self.current_mode != "continuous":
             raise ValueError(
-                "Continuous execution requires a Tournament sealed in "
-                "Continuous Mode"
+                "Continuous execution requires execution_mode continuous: "
+                "a Tournament sealed in Continuous Mode or switched to "
+                "current Continuous Mode"
             )
+        if self._state().is_complete:
+            return ()
+        self._begin_execution(
+            expected_mode="continuous",
+            allow_intervention=allow_infrastructure_intervention,
+        )
         committed: list[StoredCompetitionRecord] = []
-        while True:
-            record = self._play_next_match()
-            if record is None:
-                return tuple(committed)
-            if record.record["type"] == "security_violation_suspected":
-                return tuple(committed)
-            committed.append(record)
+        try:
+            while True:
+                record = self._play_next_match()
+                if record is None:
+                    self._set_lifecycle("paused")
+                    return tuple(committed)
+                if record.record["type"] == "security_violation_suspected":
+                    self._set_lifecycle("paused")
+                    return tuple(committed)
+                committed.append(record)
+                if self._pause_is_requested():
+                    self._set_lifecycle("paused", clear_pause=True)
+                    return tuple(committed)
+        except InfrastructureInterventionRequiredError:
+            self._set_lifecycle("infrastructure_intervention")
+            raise
+        except BaseException:
+            self._set_lifecycle("paused")
+            raise
 
     def play_next_match(self) -> Optional[StoredCompetitionRecord]:
         """Execute one canonical Match for a Step Mode Tournament."""
 
-        if self._manifest["execution_mode"] != "step":
+        if self.current_mode != "step":
             raise ValueError(
-                "Play Next Match requires a Tournament sealed in Step Mode"
+                "Play Next Match requires execution_mode step: a Tournament "
+                "sealed in Step Mode or switched to current Step Mode"
             )
-        return self._play_next_match()
+        if self._state().is_complete:
+            return None
+        self._begin_execution(expected_mode="step", allow_intervention=True)
+        try:
+            return self._play_next_match()
+        except InfrastructureInterventionRequiredError:
+            self._set_lifecycle("infrastructure_intervention")
+            raise
+        finally:
+            if self._control_state()["lifecycle"] == "running":
+                self._set_lifecycle("paused", clear_pause=True)
+
+    def _control_state(self) -> dict[str, Any]:
+        control = load_control_state(self.tournament_directory)
+        if control is None:
+            raise RuntimeError("Tournament control state is missing")
+        return control
+
+    def _state(self) -> TournamentState:
+        return fold_tournament_state(
+            self._manifest,
+            load_competition_records(self.tournament_directory),
+        )
+
+    def _begin_execution(
+        self, *, expected_mode: str, allow_intervention: bool
+    ) -> None:
+        state = self._state()
+        if state.pending_security_ruling is not None:
+            raise SecurityRulingRequiredError(state.pending_security_ruling.match_id)
+        if state.is_complete:
+            raise ValueError("Tournament is already complete")
+
+        def begin(control: dict[str, Any]) -> dict[str, Any]:
+            if control["lifecycle"] == "running":
+                raise ValueError("Tournament execution is already running")
+            if control["current_mode"] != expected_mode:
+                raise ValueError(
+                    f"Tournament execution mode changed before {expected_mode} "
+                    "execution began"
+                )
+            if (
+                control["lifecycle"] == "infrastructure_intervention"
+                and not allow_intervention
+            ):
+                raise ValueError(
+                    "Resume is required after infrastructure intervention"
+                )
+            control["lifecycle"] = "running"
+            control["match_active"] = False
+            control["pause_requested"] = False
+            return control
+
+        update_control_state(self.tournament_directory, begin)
+
+    def _pause_is_requested(self) -> bool:
+        return bool(self._control_state()["pause_requested"])
+
+    def _set_lifecycle(self, lifecycle: str, *, clear_pause: bool = False) -> None:
+        def set_value(control: dict[str, Any]) -> dict[str, Any]:
+            control["lifecycle"] = lifecycle
+            if lifecycle != "running":
+                control["match_active"] = False
+            if clear_pause:
+                control["pause_requested"] = False
+            return control
+
+        update_control_state(self.tournament_directory, set_value)
+
+    def _claim_match_boundary(self) -> bool:
+        """Atomically turn a runnable boundary into an active Match."""
+
+        claimed = False
+
+        def claim(control: dict[str, Any]) -> dict[str, Any]:
+            nonlocal claimed
+            if (
+                control["current_mode"] == "continuous"
+                and control["pause_requested"]
+            ):
+                control["lifecycle"] = "paused"
+                control["pause_requested"] = False
+                return control
+            control["match_active"] = True
+            claimed = True
+            return control
+
+        update_control_state(self.tournament_directory, claim)
+        return claimed
+
+    def _release_match_boundary(self) -> None:
+        update_control_state(
+            self.tournament_directory,
+            lambda control: {**control, "match_active": False},
+        )
 
     def _play_next_match(self) -> Optional[StoredCompetitionRecord]:
         with TournamentRunLock(self.tournament_directory):
-            records = load_competition_records(self.tournament_directory)
-            state = fold_tournament_state(self._manifest, records)
-            if state.pending_security_ruling is not None:
-                raise SecurityRulingRequiredError(
-                    state.pending_security_ruling.match_id
-                )
-            selected = _select_next_match(self._manifest, state)
-            if selected is None:
+            if not self._claim_match_boundary():
                 return None
-            fixture, match_ordinal = selected
-            match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
-            if state.phase is Phase.PLAYOFF and not state.bracket_locked:
-                lock = append_competition_record(
-                    self.tournament_directory,
-                    {
-                        "type": "playoff_bracket_locked",
-                        "phase": Phase.PLAYOFF.value,
-                        "fixture_id": fixture["fixture_id"],
-                        "match_id": match_id,
-                    },
-                )
-                records = records + [lock]
-            next_attempt_number = _next_attempt_number(
-                self.tournament_directory, match_id
-            )
-            if next_attempt_number <= 3:
-                attempt_numbers = range(next_attempt_number, 4)
-            else:
-                attempt_numbers = (next_attempt_number,)
-            for attempt_number in attempt_numbers:
-                request = _build_match_request(
-                    self._manifest,
-                    fixture,
-                    match_ordinal,
-                    attempt_number=attempt_number,
-                )
-                write_scoreboard_projection(
-                    self.tournament_directory,
-                    _projection_at_match_start(
-                        self._manifest, records, request
-                    ),
-                )
-                append_operational_telemetry(
-                    self.tournament_directory,
-                    {
-                        "type": "match_attempt_started",
-                        "tournament_id": request.tournament_id,
-                        "fixture_id": request.fixture_id,
-                        "match_id": request.match_id,
-                        "attempt_number": attempt_number,
-                    },
-                )
-                execution_result = self.match_executor(request)
-                suspected_team_ids = (
-                    execution_result.suspected_security_violation_team_ids
-                    or (
-                        (execution_result.suspected_security_violation_team_id,)
-                        if execution_result.suspected_security_violation_team_id
-                        is not None
-                        else ()
+            try:
+                records = load_competition_records(self.tournament_directory)
+                state = fold_tournament_state(self._manifest, records)
+                if state.pending_security_ruling is not None:
+                    raise SecurityRulingRequiredError(
+                        state.pending_security_ruling.match_id
                     )
-                )
-                if suspected_team_ids:
-                    fixture_team_ids = tuple(fixture["team_ids"])
-                    if any(
-                        team_id not in fixture_team_ids
-                        for team_id in suspected_team_ids
-                    ):
-                        raise ValueError(
-                            "Suspected Security Violation Team does not compete "
-                            "in the canonical Match"
-                        )
-                    telemetry = dict(execution_result.operational_telemetry)
-                    telemetry.setdefault("type", "security_violation_suspected")
-                    telemetry.setdefault("match_id", request.match_id)
-                    telemetry.setdefault("attempt_number", attempt_number)
-                    append_operational_telemetry(
-                        self.tournament_directory, telemetry
-                    )
-                    suspicion = append_competition_record(
+                selected = _select_next_match(self._manifest, state)
+                if selected is None:
+                    return None
+                fixture, match_ordinal = selected
+                match_id = f"{fixture['fixture_id']}-match-{match_ordinal}"
+                if state.phase is Phase.PLAYOFF and not state.bracket_locked:
+                    lock = append_competition_record(
                         self.tournament_directory,
-                        build_security_violation_suspected_record(
-                            fixture_id=request.fixture_id,
-                            match_id=request.match_id,
-                            match_ordinal=match_ordinal,
-                            team_ids=(fixture_team_ids[0], fixture_team_ids[1]),
-                            suspected_team_ids=suspected_team_ids,
-                            evidence_link=execution_result.evidence_link or "",
-                            phase=state.phase,
+                        {
+                            "type": "playoff_bracket_locked",
+                            "phase": Phase.PLAYOFF.value,
+                            "fixture_id": fixture["fixture_id"],
+                            "match_id": match_id,
+                        },
+                    )
+                    records = records + [lock]
+                next_attempt_number = _next_attempt_number(
+                    self.tournament_directory, match_id
+                )
+                if next_attempt_number <= 3:
+                    attempt_numbers = range(next_attempt_number, 4)
+                else:
+                    attempt_numbers = (next_attempt_number,)
+                for attempt_number in attempt_numbers:
+                    request = _build_match_request(
+                        self._manifest,
+                        fixture,
+                        match_ordinal,
+                        attempt_number=attempt_number,
+                    )
+                    write_scoreboard_projection(
+                        self.tournament_directory,
+                        _projection_at_match_start(
+                            self._manifest, records, request
                         ),
                     )
-                    incident_records = records + [suspicion]
-                    incident_state = fold_tournament_state(
-                        self._manifest, incident_records
+                    append_operational_telemetry(
+                        self.tournament_directory,
+                        {
+                            "type": "match_attempt_started",
+                            "tournament_id": request.tournament_id,
+                            "fixture_id": request.fixture_id,
+                            "match_id": request.match_id,
+                            "attempt_number": attempt_number,
+                        },
+                    )
+                    execution_result = self.match_executor(request)
+                    suspected_team_ids = (
+                        execution_result.suspected_security_violation_team_ids
+                        or (
+                            (execution_result.suspected_security_violation_team_id,)
+                            if execution_result.suspected_security_violation_team_id
+                            is not None
+                            else ()
+                        )
+                    )
+                    if suspected_team_ids:
+                        fixture_team_ids = tuple(fixture["team_ids"])
+                        if any(
+                            team_id not in fixture_team_ids
+                            for team_id in suspected_team_ids
+                        ):
+                            raise ValueError(
+                                "Suspected Security Violation Team does not compete "
+                                "in the canonical Match"
+                            )
+                        telemetry = dict(execution_result.operational_telemetry)
+                        telemetry.setdefault("type", "security_violation_suspected")
+                        telemetry.setdefault("match_id", request.match_id)
+                        telemetry.setdefault("attempt_number", attempt_number)
+                        append_operational_telemetry(
+                            self.tournament_directory, telemetry
+                        )
+                        suspicion = append_competition_record(
+                            self.tournament_directory,
+                            build_security_violation_suspected_record(
+                                fixture_id=request.fixture_id,
+                                match_id=request.match_id,
+                                match_ordinal=match_ordinal,
+                                team_ids=(fixture_team_ids[0], fixture_team_ids[1]),
+                                suspected_team_ids=suspected_team_ids,
+                                evidence_link=execution_result.evidence_link or "",
+                                phase=state.phase,
+                            ),
+                        )
+                        incident_records = records + [suspicion]
+                        incident_state = fold_tournament_state(
+                            self._manifest, incident_records
+                        )
+                        write_scoreboard_projection(
+                            self.tournament_directory,
+                            _projection_from_records(
+                                self._manifest, incident_records, incident_state
+                            ),
+                        )
+                        return suspicion
+                    if execution_result.infrastructure_failure:
+                        telemetry = dict(execution_result.operational_telemetry)
+                        telemetry.setdefault("type", "match_attempt_failed")
+                        telemetry.setdefault("match_id", request.match_id)
+                        telemetry.setdefault("attempt_number", attempt_number)
+                        telemetry.setdefault("infrastructure_failure", True)
+                        append_operational_telemetry(
+                            self.tournament_directory, telemetry
+                        )
+                        if attempt_number < 3:
+                            continue
+                        write_scoreboard_projection(
+                            self.tournament_directory,
+                            _projection_from_records(self._manifest, records),
+                        )
+                        raise InfrastructureInterventionRequiredError(
+                            request.match_id, attempt_number
+                        )
+
+                    result = _normalize_executor_result(
+                        execution_result, fixture
+                    )
+                    if execution_result.operational_telemetry:
+                        append_operational_telemetry(
+                            self.tournament_directory,
+                            execution_result.operational_telemetry,
+                        )
+                    stored = append_competition_record(
+                        self.tournament_directory,
+                        _terminal_record(
+                            request,
+                            fixture,
+                            match_ordinal,
+                            result,
+                            execution_result.competitive_outcome,
+                        ),
+                    )
+                    all_records = records + [stored]
+                    state_after_match = fold_tournament_state(
+                        self._manifest, all_records
+                    )
+                    all_records, state_after_match = (
+                        _commit_canonical_transitions_if_ready(
+                            self.tournament_directory,
+                            self._manifest,
+                            all_records,
+                            state_after_match,
+                        )
                     )
                     write_scoreboard_projection(
                         self.tournament_directory,
                         _projection_from_records(
-                            self._manifest, incident_records, incident_state
+                            self._manifest, all_records, state_after_match
                         ),
                     )
-                    return suspicion
-                if execution_result.infrastructure_failure:
-                    telemetry = dict(execution_result.operational_telemetry)
-                    telemetry.setdefault("type", "match_attempt_failed")
-                    telemetry.setdefault("match_id", request.match_id)
-                    telemetry.setdefault("attempt_number", attempt_number)
-                    telemetry.setdefault("infrastructure_failure", True)
-                    append_operational_telemetry(
-                        self.tournament_directory, telemetry
-                    )
-                    if attempt_number < 3:
-                        continue
-                    write_scoreboard_projection(
-                        self.tournament_directory,
-                        _projection_from_records(self._manifest, records),
-                    )
-                    raise InfrastructureInterventionRequiredError(
-                        request.match_id, attempt_number
-                    )
+                    return stored
 
-                result = _normalize_executor_result(
-                    execution_result, fixture
-                )
-                if execution_result.operational_telemetry:
-                    append_operational_telemetry(
-                        self.tournament_directory,
-                        execution_result.operational_telemetry,
-                    )
-                stored = append_competition_record(
-                    self.tournament_directory,
-                    _terminal_record(
-                        request,
-                        fixture,
-                        match_ordinal,
-                        result,
-                        execution_result.competitive_outcome,
-                    ),
-                )
-                all_records = records + [stored]
-                state_after_match = fold_tournament_state(
-                    self._manifest, all_records
-                )
-                all_records, state_after_match = (
-                    _commit_canonical_transitions_if_ready(
-                        self.tournament_directory,
-                        self._manifest,
-                        all_records,
-                        state_after_match,
-                    )
-                )
-                write_scoreboard_projection(
-                    self.tournament_directory,
-                    _projection_from_records(
-                        self._manifest, all_records, state_after_match
-                    ),
-                )
-                return stored
-
-            # The loop either commits a Match or raises for intervention.
-            raise AssertionError("unreachable Match Attempt state")
+                # The loop either commits a Match or raises for intervention.
+                raise AssertionError("unreachable Match Attempt state")
+            finally:
+                self._release_match_boundary()
 
     def abort(
         self,
