@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 import fnmatch
 import hashlib
@@ -42,15 +43,92 @@ class SourceFile:
 
 
 @dataclass(frozen=True)
-class LanguageEnvironment:
-    name: str
-    descriptor: Mapping[str, Any]
+class SourceSchema:
+    version: str
+    identity: str
+    required_paths: Sequence[str]
+    allowed_files: Sequence[str]
+    forbidden_paths: Sequence[str]
+    max_file_count: int
+    max_file_bytes: int
+    max_total_bytes: int
+
+
+@dataclass(frozen=True)
+class ParticipantContract:
+    version: str
+    callable: str
+    signature: str
+
+    def as_manifest(self) -> Mapping[str, str]:
+        return {
+            "version": self.version,
+            "callable": self.callable,
+            "signature": self.signature,
+        }
+
+
+@dataclass(frozen=True)
+class CatalogAsset:
+    version: str
+    catalog_path: str
+    path: Path
+    digest: str
 
     @property
-    def source_schema(self) -> Mapping[str, Any]:
-        value = self.descriptor["source_schema"]
-        assert isinstance(value, Mapping)
-        return value
+    def identity(self) -> str:
+        return self.version + "@" + self.digest
+
+
+@dataclass(frozen=True)
+class EnvironmentVersions:
+    descriptor: str
+    wrapper: str
+    recipe: str
+    entrypoint: str
+    dependency_definition: str
+    build_target: str
+    workflow: str
+    readiness: str
+    base_runtime: str
+    platform: str
+    conformance: str
+
+    def as_manifest(
+        self,
+        catalog_identity: str,
+        descriptor_identity: str,
+        source_schema_identity: str,
+        assets: Mapping[str, CatalogAsset],
+    ) -> Mapping[str, str]:
+        return {
+            "catalog": catalog_identity,
+            "descriptor": descriptor_identity,
+            "source_schema": source_schema_identity,
+            "wrapper": assets["wrapper"].identity,
+            "recipe": assets["recipe"].identity,
+            "entrypoint": assets["entrypoint"].identity,
+            "dependency_definition": assets["dependency_definition"].identity,
+            "build_target": assets["build_target"].identity,
+            "workflow": assets["workflow"].identity,
+            "readiness": assets["readiness"].identity,
+            "base_runtime": assets["base_runtime"].identity,
+            "platform": assets["platform"].identity,
+            "conformance": assets["conformance"].identity,
+        }
+
+
+@dataclass(frozen=True)
+class LanguageEnvironment:
+    name: str
+    language: str
+    contract_only: bool
+    participant_contract: ParticipantContract
+    source_contract_validator: str
+    source_schema: SourceSchema
+    versions: EnvironmentVersions
+    descriptor_identity: str
+    assets: Mapping[str, CatalogAsset]
 
 
 @dataclass(frozen=True)
@@ -58,6 +136,10 @@ class LanguageEnvironmentCatalog:
     version: str
     digest: str
     environments: Mapping[str, LanguageEnvironment]
+
+    @property
+    def identity(self) -> str:
+        return self.version + "@" + self.digest
 
     def environment(self, name: str) -> LanguageEnvironment:
         try:
@@ -109,52 +191,190 @@ def _validate_relative_catalog_path(value: str, location: str) -> None:
         raise CatalogError(location + " must be a safe relative POSIX path")
 
 
-def _validate_descriptor(name: str, value: Any) -> LanguageEnvironment:
+def _content_identity(version: str, value: Any) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return version + "@sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+def _validate_asset(
+    catalog_directory: Path,
+    key: str,
+    value: Any,
+    expected_version: str,
+    location: str,
+) -> CatalogAsset:
+    asset = _require_mapping(value, location)
+    version = _require_string(asset, "version", location)
+    if version != expected_version:
+        raise CatalogError(
+            location
+            + ".version must match the descriptor's "
+            + key
+            + "_version"
+        )
+    relative_path = _require_string(asset, "path", location)
+    _validate_relative_catalog_path(relative_path, location + ".path")
+    expected_digest = _require_string(asset, "sha256", location)
+    if not expected_digest.startswith("sha256:") or len(expected_digest) != 71:
+        raise CatalogError(location + ".sha256 must be a full sha256 digest")
+    path = catalog_directory / PurePosixPath(relative_path)
+    if path.is_symlink():
+        raise CatalogError(location + ".path must not be a symbolic link")
+    try:
+        path.resolve().relative_to(catalog_directory.resolve())
+    except ValueError:
+        raise CatalogError(location + ".path must stay within the catalog directory")
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise CatalogError(
+            "could not read organizer-owned asset "
+            + repr(relative_path)
+            + ": "
+            + str(error)
+        )
+    if not path.is_file():
+        raise CatalogError(location + ".path must name a regular file")
+    actual_digest = "sha256:" + hashlib.sha256(content).hexdigest()
+    if actual_digest != expected_digest:
+        raise CatalogError(
+            "organizer-owned asset "
+            + repr(relative_path)
+            + " does not match "
+            + location
+            + ".sha256"
+        )
+    return CatalogAsset(
+        version=version,
+        catalog_path=relative_path,
+        path=path,
+        digest=actual_digest,
+    )
+
+
+def _validate_descriptor(
+    name: str, value: Any, catalog_directory: Path
+) -> LanguageEnvironment:
     location = "environments." + name
     descriptor = _require_mapping(value, location)
-    for key in (
-        "descriptor_version",
-        "language",
-        "wrapper_version",
-        "recipe_version",
-        "entrypoint_version",
-        "dependency_definition_version",
-        "build_target_version",
-        "workflow_version",
-        "readiness_version",
-        "base_runtime_version",
-        "platform_version",
-        "conformance_version",
-    ):
-        _require_string(descriptor, key, location)
+    versions = EnvironmentVersions(
+        descriptor=_require_string(descriptor, "descriptor_version", location),
+        wrapper=_require_string(descriptor, "wrapper_version", location),
+        recipe=_require_string(descriptor, "recipe_version", location),
+        entrypoint=_require_string(descriptor, "entrypoint_version", location),
+        dependency_definition=_require_string(
+            descriptor, "dependency_definition_version", location
+        ),
+        build_target=_require_string(descriptor, "build_target_version", location),
+        workflow=_require_string(descriptor, "workflow_version", location),
+        readiness=_require_string(descriptor, "readiness_version", location),
+        base_runtime=_require_string(
+            descriptor, "base_runtime_version", location
+        ),
+        platform=_require_string(descriptor, "platform_version", location),
+        conformance=_require_string(descriptor, "conformance_version", location),
+    )
+    language = _require_string(descriptor, "language", location)
     if not isinstance(descriptor.get("contract_only"), bool):
         raise CatalogError(location + ".contract_only must be a boolean")
+    contract_only = bool(descriptor["contract_only"])
 
-    participant_contract = _require_mapping(
+    participant_value = _require_mapping(
         descriptor.get("participant_contract"), location + ".participant_contract"
     )
-    _require_string(participant_contract, "version", location + ".participant_contract")
-    _require_string(
-        participant_contract, "callable", location + ".participant_contract"
+    participant_location = location + ".participant_contract"
+    participant_contract = ParticipantContract(
+        version=_require_string(participant_value, "version", participant_location),
+        callable=_require_string(participant_value, "callable", participant_location),
+        signature=_require_string(
+            participant_value, "signature", participant_location
+        ),
     )
-    _require_string(
-        participant_contract, "signature", location + ".participant_contract"
+    source_contract_validator = _require_string(
+        descriptor, "source_contract_validator", location
     )
+    if source_contract_validator not in ("none-v1", "python-choose-move-v1"):
+        raise CatalogError(
+            location
+            + ".source_contract_validator "
+            + repr(source_contract_validator)
+            + " is unsupported"
+        )
 
     schema_location = location + ".source_schema"
     schema = _require_mapping(descriptor.get("source_schema"), schema_location)
     _require_string(schema, "version", schema_location)
-    for key in ("max_file_count", "max_file_bytes", "max_total_bytes"):
-        _require_positive_integer(schema, key, schema_location)
+    path_fields = {}
     for key in ("required_paths", "allowed_files", "forbidden_paths"):
-        paths = _require_string_list(
-            schema, key, schema_location, allow_empty=(key == "forbidden_paths")
+        paths = tuple(
+            _require_string_list(
+                schema, key, schema_location, allow_empty=(key == "forbidden_paths")
+            )
         )
         for index, path in enumerate(paths):
             _validate_relative_catalog_path(
                 path, schema_location + "." + key + "[" + str(index) + "]"
             )
-    return LanguageEnvironment(name=name, descriptor=descriptor)
+        path_fields[key] = paths
+    source_schema = SourceSchema(
+        version=_require_string(schema, "version", schema_location),
+        identity=_content_identity(
+            _require_string(schema, "version", schema_location), schema
+        ),
+        required_paths=path_fields["required_paths"],
+        allowed_files=path_fields["allowed_files"],
+        forbidden_paths=path_fields["forbidden_paths"],
+        max_file_count=_require_positive_integer(
+            schema, "max_file_count", schema_location
+        ),
+        max_file_bytes=_require_positive_integer(
+            schema, "max_file_bytes", schema_location
+        ),
+        max_total_bytes=_require_positive_integer(
+            schema, "max_total_bytes", schema_location
+        ),
+    )
+    assets_location = location + ".assets"
+    assets = _require_mapping(descriptor.get("assets"), assets_location)
+    expected_asset_versions = {
+        "wrapper": versions.wrapper,
+        "recipe": versions.recipe,
+        "entrypoint": versions.entrypoint,
+        "dependency_definition": versions.dependency_definition,
+        "build_target": versions.build_target,
+        "workflow": versions.workflow,
+        "readiness": versions.readiness,
+        "base_runtime": versions.base_runtime,
+        "platform": versions.platform,
+        "conformance": versions.conformance,
+    }
+    if set(assets) != set(expected_asset_versions):
+        raise CatalogError(
+            assets_location
+            + " must define exactly: "
+            + ", ".join(sorted(expected_asset_versions))
+        )
+    validated_assets = {
+        key: _validate_asset(
+            catalog_directory,
+            key,
+            assets[key],
+            version,
+            assets_location + "." + key,
+        )
+        for key, version in expected_asset_versions.items()
+    }
+    return LanguageEnvironment(
+        name=name,
+        language=language,
+        contract_only=contract_only,
+        participant_contract=participant_contract,
+        source_contract_validator=source_contract_validator,
+        source_schema=source_schema,
+        versions=versions,
+        descriptor_identity=_content_identity(versions.descriptor, descriptor),
+        assets=validated_assets,
+    )
 
 
 def load_catalog(path: Path) -> LanguageEnvironmentCatalog:
@@ -186,7 +406,7 @@ def load_catalog(path: Path) -> LanguageEnvironmentCatalog:
     if not environment_values:
         raise CatalogError("catalog.environments must not be empty")
     environments = {
-        name: _validate_descriptor(name, descriptor)
+        name: _validate_descriptor(name, descriptor, path.parent)
         for name, descriptor in environment_values.items()
         if isinstance(name, str) and name
     }
@@ -339,22 +559,11 @@ def validate_source(
         )
 
     schema = environment.source_schema
-    allowed = _require_string_list(schema, "allowed_files", "source_schema")
-    forbidden = _require_string_list(
-        schema, "forbidden_paths", "source_schema", allow_empty=True
-    )
-    maximum_count = _require_positive_integer(schema, "max_file_count", "source_schema")
-    maximum_file_bytes = _require_positive_integer(
-        schema, "max_file_bytes", "source_schema"
-    )
-    maximum_total_bytes = _require_positive_integer(
-        schema, "max_total_bytes", "source_schema"
-    )
 
     files = []
     total_bytes = 0
     for relative_path, path, details in _walk_source(source):
-        if _is_forbidden(relative_path, forbidden):
+        if _is_forbidden(relative_path, schema.forbidden_paths):
             raise SourceValidationError(
                 relative_path,
                 "forbidden_paths",
@@ -364,38 +573,84 @@ def validate_source(
             raise SourceValidationError(
                 relative_path, "regular_files", "only regular files are allowed"
             )
-        if not _is_allowed(relative_path, allowed):
+        if not _is_allowed(relative_path, schema.allowed_files):
             raise SourceValidationError(
                 relative_path,
                 "allowed_files",
                 "unsupported file type or source location for " + environment.name,
             )
-        if len(files) + 1 > maximum_count:
+        if len(files) + 1 > schema.max_file_count:
             raise SourceValidationError(
                 relative_path,
                 "max_file_count",
-                "source contains more than " + str(maximum_count) + " files",
+                "source contains more than " + str(schema.max_file_count) + " files",
             )
-        content = _read_regular_file(path, relative_path, maximum_file_bytes)
+        content = _read_regular_file(path, relative_path, schema.max_file_bytes)
         total_bytes += len(content)
-        if total_bytes > maximum_total_bytes:
+        if total_bytes > schema.max_total_bytes:
             raise SourceValidationError(
                 relative_path,
                 "max_total_bytes",
-                "aggregate source size exceeds " + str(maximum_total_bytes) + " bytes",
+                "aggregate source size exceeds "
+                + str(schema.max_total_bytes)
+                + " bytes",
             )
         files.append(SourceFile(path=relative_path, content=content))
 
     found = {item.path for item in files}
-    required = _require_string_list(schema, "required_paths", "source_schema")
-    for required_path in required:
+    for required_path in schema.required_paths:
         if required_path not in found:
             raise SourceValidationError(
                 required_path,
                 "required_paths",
                 "required Team source file is missing",
             )
+    _validate_participant_contract(files, environment)
     return files
+
+
+def _validate_participant_contract(
+    files: Sequence[SourceFile], environment: LanguageEnvironment
+) -> None:
+    if environment.source_contract_validator == "none-v1":
+        return
+    source_file = next(item for item in files if item.path == "strategy.py")
+    try:
+        tree = ast.parse(source_file.content, filename=source_file.path)
+    except (SyntaxError, ValueError) as error:
+        detail = getattr(error, "msg", str(error))
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "Python source is not valid syntax: " + detail,
+        )
+    definitions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "choose_move"
+    ]
+    if not definitions:
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define choose_move(turn, my_history, opponent_history, rng)",
+        )
+    arguments = definitions[0].args
+    positional = list(arguments.posonlyargs) + list(arguments.args)
+    names = [argument.arg for argument in positional]
+    if (
+        names != ["turn", "my_history", "opponent_history", "rng"]
+        or arguments.vararg is not None
+        or arguments.kwarg is not None
+        or arguments.kwonlyargs
+        or arguments.defaults
+    ):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "choose_move must have exactly "
+            "(turn, my_history, opponent_history, rng)",
+        )
 
 
 def _source_digest(files: Sequence[SourceFile]) -> str:
@@ -413,23 +668,12 @@ def _source_digest(files: Sequence[SourceFile]) -> str:
 def _version_manifest(
     catalog: LanguageEnvironmentCatalog, environment: LanguageEnvironment
 ) -> Mapping[str, str]:
-    descriptor = environment.descriptor
-    schema = environment.source_schema
-    return {
-        "catalog": catalog.version,
-        "descriptor": str(descriptor["descriptor_version"]),
-        "source_schema": str(schema["version"]),
-        "wrapper": str(descriptor["wrapper_version"]),
-        "recipe": str(descriptor["recipe_version"]),
-        "entrypoint": str(descriptor["entrypoint_version"]),
-        "dependency_definition": str(descriptor["dependency_definition_version"]),
-        "build_target": str(descriptor["build_target_version"]),
-        "workflow": str(descriptor["workflow_version"]),
-        "readiness": str(descriptor["readiness_version"]),
-        "base_runtime": str(descriptor["base_runtime_version"]),
-        "platform": str(descriptor["platform_version"]),
-        "conformance": str(descriptor["conformance_version"]),
-    }
+    return environment.versions.as_manifest(
+        catalog.identity,
+        environment.descriptor_identity,
+        environment.source_schema.identity,
+        environment.assets,
+    )
 
 
 def freeze_source_bundle(
@@ -456,21 +700,22 @@ def freeze_source_bundle(
         )
 
     files = validate_source(source, environment)
-    participant_contract = environment.descriptor["participant_contract"]
     result = {
         "bundle_format_version": BUNDLE_FORMAT_VERSION,
         "catalog_digest": catalog.digest,
-        "contract_only": environment.descriptor["contract_only"],
+        "contract_only": environment.contract_only,
         "environment": environment.name,
         "files": [item.path for item in files],
-        "participant_contract": participant_contract,
+        "participant_contract": environment.participant_contract.as_manifest(),
         "source_digest": _source_digest(files),
         "versions": _version_manifest(catalog, environment),
     }
 
     bundle.parent.mkdir(parents=True, exist_ok=True)
+    created_bundle = False
     try:
         bundle.mkdir()
+        created_bundle = True
         source_output = bundle / "source"
         source_output.mkdir()
         for item in files:
@@ -490,7 +735,7 @@ def freeze_source_bundle(
         source_output.chmod(0o555)
         bundle.chmod(0o555)
     except BaseException:
-        if bundle.exists():
+        if created_bundle:
             for path in bundle.rglob("*"):
                 if path.is_dir():
                     path.chmod(0o755)

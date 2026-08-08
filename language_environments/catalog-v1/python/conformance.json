@@ -1,0 +1,5 @@
+{
+  "contract": "choose-move-contract-v1",
+  "fixtures": ["fixed-move", "random", "copycat", "protocol"],
+  "version": "python-conformance-v1"
+}

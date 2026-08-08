@@ -1,0 +1,12 @@
+{
+  "base_runtime": {"version": "contract-runtime-v1"},
+  "build_target": {"version": "contract-build-target-v1"},
+  "conformance": {"version": "contract-conformance-v1"},
+  "dependency_definition": {"version": "contract-dependencies-v1"},
+  "entrypoint": {"version": "contract-entrypoint-v1"},
+  "platform": {"version": "oci-platforms-v1"},
+  "readiness": {"version": "wrapper-readiness-v1"},
+  "recipe": {"version": "contract-build-recipe-v1"},
+  "workflow": {"version": "source-validation-workflow-v1"},
+  "wrapper": {"version": "contract-wrapper-v1"}
+}

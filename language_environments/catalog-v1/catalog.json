@@ -2,6 +2,18 @@
   "catalog_version": "rps-language-environment-catalog-v1",
   "environments": {
     "contract-fixture": {
+      "assets": {
+        "base_runtime": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-runtime-v1"},
+        "build_target": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-build-target-v1"},
+        "conformance": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-conformance-v1"},
+        "dependency_definition": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-dependencies-v1"},
+        "entrypoint": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-entrypoint-v1"},
+        "platform": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "oci-platforms-v1"},
+        "readiness": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-build-recipe-v1"},
+        "workflow": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-wrapper-v1"}
+      },
       "base_runtime_version": "contract-runtime-v1",
       "build_target_version": "contract-build-target-v1",
       "conformance_version": "contract-conformance-v1",
@@ -40,10 +52,23 @@
         ],
         "version": "contract-source-schema-v1"
       },
+      "source_contract_validator": "none-v1",
       "workflow_version": "source-validation-workflow-v1",
       "wrapper_version": "contract-wrapper-v1"
     },
     "python": {
+      "assets": {
+        "base_runtime": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "python-runtime-v1"},
+        "build_target": {"path": "python/Dockerfile", "sha256": "sha256:7f5b4a1f52af811b0ab6dcdc39cc05c1c2f5d89e9d456ca896ae096a357e8c49", "version": "python-build-target-v1"},
+        "conformance": {"path": "python/conformance.json", "sha256": "sha256:103f0ed664f193daecceedfda9450cfd33f04d3b5ec14639edc51435c195a1a8", "version": "python-conformance-v1"},
+        "dependency_definition": {"path": "python/requirements.lock", "sha256": "sha256:9f8c394be1f741a5351379bab966dec8e813ce017cb4e640d1f100e40e461f5f", "version": "python-dependencies-v1"},
+        "entrypoint": {"path": "python/entrypoint.json", "sha256": "sha256:e663e70bb05c143591a06d352e325cb181136c5910fe62717056b0ed3fcb1e08", "version": "python-entrypoint-v1"},
+        "platform": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "oci-platforms-v1"},
+        "readiness": {"path": "python/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "python/Dockerfile", "sha256": "sha256:7f5b4a1f52af811b0ab6dcdc39cc05c1c2f5d89e9d456ca896ae096a357e8c49", "version": "python-build-recipe-v1"},
+        "workflow": {"path": "python/workflow.yml", "sha256": "sha256:48cb1e0053b4b370882ffb65ba56f587add00c79c6e685e4f1159ed2039bddef", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "python/wrapper.py", "sha256": "sha256:c3a0bbbbc731116ff15ca86a480d786b618329be9cfe685b59d2e66fe23baac9", "version": "python-wrapper-v1"}
+      },
       "base_runtime_version": "python-runtime-v1",
       "build_target_version": "python-build-target-v1",
       "conformance_version": "python-conformance-v1",
@@ -105,6 +130,7 @@
         ],
         "version": "python-source-schema-v1"
       },
+      "source_contract_validator": "python-choose-move-v1",
       "workflow_version": "source-validation-workflow-v1",
       "wrapper_version": "python-wrapper-v1"
     }

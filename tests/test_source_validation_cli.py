@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -71,6 +72,13 @@ class SourceValidationCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout)
 
+    def write_catalog(self, data: dict[str, Any], name: str) -> Path:
+        directory = self.directory / name
+        shutil.copytree(CATALOG.parent, directory)
+        catalog = directory / "catalog.json"
+        catalog.write_text(json.dumps(data))
+        return catalog
+
     def test_valid_python_source_is_frozen_with_a_deterministic_identity(self) -> None:
         first_source = self.valid_python_source("first")
         second_source = self.valid_python_source("second")
@@ -85,9 +93,7 @@ class SourceValidationCliTests(unittest.TestCase):
         self.assertRegex(first["source_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertEqual(first["environment"], "python")
         self.assertEqual(first["participant_contract"]["callable"], "choose_move")
-        self.assertEqual(
-            first["versions"],
-            {
+        expected_versions = {
                 "base_runtime": "python-runtime-v1",
                 "build_target": "python-build-target-v1",
                 "catalog": "rps-language-environment-catalog-v1",
@@ -101,8 +107,13 @@ class SourceValidationCliTests(unittest.TestCase):
                 "source_schema": "python-source-schema-v1",
                 "workflow": "source-validation-workflow-v1",
                 "wrapper": "python-wrapper-v1",
-            },
-        )
+            }
+        self.assertEqual(set(first["versions"]), set(expected_versions))
+        for identity_name, version in expected_versions.items():
+            self.assertRegex(
+                first["versions"][identity_name],
+                "^" + version + r"@sha256:[0-9a-f]{64}$",
+            )
         self.assertEqual((first_bundle / "source" / "strategy.py").read_bytes(),
                          (first_source / "strategy.py").read_bytes())
         self.assertFalse(
@@ -141,7 +152,10 @@ class SourceValidationCliTests(unittest.TestCase):
 
         self.assertEqual(result["environment"], "contract-fixture")
         self.assertTrue(result["contract_only"])
-        self.assertEqual(result["versions"]["descriptor"], "contract-fixture-v1")
+        self.assertRegex(
+            result["versions"]["descriptor"],
+            r"^contract-fixture-v1@sha256:[0-9a-f]{64}$",
+        )
 
     def test_forbidden_infrastructure_file_names_are_actionable(self) -> None:
         forbidden_paths = [
@@ -218,15 +232,26 @@ class SourceValidationCliTests(unittest.TestCase):
         catalog_data["environments"]["python"]["source_schema"][
             "max_file_count"
         ] = 63
-        catalog = self.directory / "changed-catalog.json"
-        catalog.write_text(json.dumps(catalog_data))
+        catalog = self.write_catalog(catalog_data, "changed-catalog")
 
         second = self.read_result(
             self.run_cli(source, self.directory / "second", catalog=catalog)
         )
 
         self.assertNotEqual(first["catalog_digest"], second["catalog_digest"])
-        self.assertEqual(first["versions"]["catalog"], second["versions"]["catalog"])
+        self.assertNotEqual(
+            first["versions"]["catalog"], second["versions"]["catalog"]
+        )
+        self.assertNotEqual(
+            first["versions"]["descriptor"], second["versions"]["descriptor"]
+        )
+        self.assertNotEqual(
+            first["versions"]["source_schema"],
+            second["versions"]["source_schema"],
+        )
+        self.assertEqual(
+            first["versions"]["wrapper"], second["versions"]["wrapper"]
+        )
 
     def test_catalog_rejects_traversal_and_absolute_source_patterns(self) -> None:
         source = self.valid_python_source("source")
@@ -238,8 +263,9 @@ class SourceValidationCliTests(unittest.TestCase):
                 catalog_data["environments"]["python"]["source_schema"][
                     "allowed_files"
                 ].append(pattern)
-                catalog = self.directory / ("unsafe-catalog-" + str(index) + ".json")
-                catalog.write_text(json.dumps(catalog_data))
+                catalog = self.write_catalog(
+                    catalog_data, "unsafe-catalog-" + str(index)
+                )
 
                 completed = self.run_cli(
                     source,
@@ -249,6 +275,39 @@ class SourceValidationCliTests(unittest.TestCase):
 
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertIn("safe relative POSIX path", completed.stderr)
+
+    def test_catalog_rejects_tampered_organizer_owned_assets(self) -> None:
+        source = self.valid_python_source("source")
+        catalog_data = json.loads(CATALOG.read_text())
+        catalog = self.write_catalog(catalog_data, "tampered-catalog")
+        (catalog.parent / "python" / "wrapper.py").write_text("tampered\n")
+
+        completed = self.run_cli(source, self.directory / "bundle", catalog=catalog)
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("'python/wrapper.py'", completed.stderr)
+        self.assertIn("does not match", completed.stderr)
+
+    def test_python_strategy_must_define_the_choose_move_contract(self) -> None:
+        invalid_strategies = [
+            "",
+            "def choose_move(:\n    pass\n",
+            "def another_function():\n    pass\n",
+            "def choose_move(turn, history):\n    return 'R'\n",
+        ]
+
+        for index, content in enumerate(invalid_strategies):
+            with self.subTest(content=content):
+                source = self.valid_python_source("invalid-contract-" + str(index))
+                (source / "strategy.py").write_text(content)
+
+                completed = self.run_cli(
+                    source, self.directory / ("invalid-contract-bundle-" + str(index))
+                )
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("'strategy.py'", completed.stderr)
+                self.assertIn("rule: participant_contract", completed.stderr)
 
     def test_file_count_individual_and_aggregate_limits_are_enforced(self) -> None:
         cases = [
@@ -266,8 +325,9 @@ class SourceValidationCliTests(unittest.TestCase):
                     (source / name).write_bytes(content)
                 catalog_data = json.loads(CATALOG.read_text())
                 catalog_data["environments"]["python"]["source_schema"][rule] = limit
-                catalog = self.directory / ("catalog-" + str(index) + ".json")
-                catalog.write_text(json.dumps(catalog_data))
+                catalog = self.write_catalog(
+                    catalog_data, "limited-catalog-" + str(index)
+                )
 
                 completed = self.run_cli(
                     source,

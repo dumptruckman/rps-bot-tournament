@@ -1,0 +1,13 @@
+{
+  "platforms": {
+    "linux/amd64": {
+      "image": "docker.io/library/python@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f",
+      "version": "linux-amd64-python-runtime-v1"
+    },
+    "linux/arm64": {
+      "image": "docker.io/library/python@sha256:8c5de2243cba89f49a93e05cacb78e27058bcaa69c148baac127005da03af39e",
+      "version": "linux-arm64-python-runtime-v1"
+    }
+  },
+  "version": "python-runtime-v1"
+}

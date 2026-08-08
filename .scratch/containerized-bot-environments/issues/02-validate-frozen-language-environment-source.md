@@ -34,12 +34,15 @@ Added `rps-validate-source`, which loads a content-identified, versioned Languag
 Environment catalog and validates an already-present Team source directory before
 creating a new, non-overwritable frozen bundle. Bundle identity is deterministic
 over sorted relative paths and file bytes, and the resulting manifest records the
-catalog digest, participant contract, and every organizer-controlled version.
+catalog digest, participant contract, and content-bound identity of every
+organizer-controlled version. Catalog loading verifies the referenced assets,
+including pinned ARM64 and AMD64 runtime definitions, before source validation.
 
 The Python descriptor preserves `strategy.py` and the organizer-owned
 `choose_move` contract while allowing accessory Python modules and controlled
 resource files. Validation rejects unsafe catalog paths, all symlinks, special
 files, unsupported locations and types, infrastructure paths, and count or size
-limit breaches with the offending path and rule. A contract-only non-Python
-descriptor exercises the same catalog and command without touching Tournament
-behavior.
+limit breaches with the offending path and rule. It parses `strategy.py` without
+executing Team code and requires the exact four-argument `choose_move` surface. A
+contract-only non-Python descriptor exercises the same catalog and command
+without touching Tournament behavior.
