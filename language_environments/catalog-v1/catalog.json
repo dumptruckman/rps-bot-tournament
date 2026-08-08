@@ -1,0 +1,113 @@
+{
+  "catalog_version": "rps-language-environment-catalog-v1",
+  "environments": {
+    "contract-fixture": {
+      "base_runtime_version": "contract-runtime-v1",
+      "build_target_version": "contract-build-target-v1",
+      "conformance_version": "contract-conformance-v1",
+      "contract_only": true,
+      "dependency_definition_version": "contract-dependencies-v1",
+      "descriptor_version": "contract-fixture-v1",
+      "entrypoint_version": "contract-entrypoint-v1",
+      "language": "contract-fixture",
+      "participant_contract": {
+        "callable": "choose_move",
+        "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",
+        "version": "choose-move-contract-v1"
+      },
+      "platform_version": "oci-platforms-v1",
+      "readiness_version": "wrapper-readiness-v1",
+      "recipe_version": "contract-build-recipe-v1",
+      "source_schema": {
+        "allowed_files": [
+          "strategy.contract",
+          "accessories/*.contract"
+        ],
+        "forbidden_paths": [
+          ".git",
+          ".github",
+          "Dockerfile",
+          "Makefile",
+          "entrypoint.sh",
+          "requirements.txt",
+          "wrapper.py"
+        ],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": [
+          "strategy.contract"
+        ],
+        "version": "contract-source-schema-v1"
+      },
+      "workflow_version": "source-validation-workflow-v1",
+      "wrapper_version": "contract-wrapper-v1"
+    },
+    "python": {
+      "base_runtime_version": "python-runtime-v1",
+      "build_target_version": "python-build-target-v1",
+      "conformance_version": "python-conformance-v1",
+      "contract_only": false,
+      "dependency_definition_version": "python-dependencies-v1",
+      "descriptor_version": "python-language-environment-v1",
+      "entrypoint_version": "python-entrypoint-v1",
+      "language": "python",
+      "participant_contract": {
+        "callable": "choose_move",
+        "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",
+        "version": "choose-move-contract-v1"
+      },
+      "platform_version": "oci-platforms-v1",
+      "readiness_version": "wrapper-readiness-v1",
+      "recipe_version": "python-build-recipe-v1",
+      "source_schema": {
+        "allowed_files": [
+          "*.py",
+          "**/*.py",
+          "resources/*.csv",
+          "resources/*.json",
+          "resources/*.txt",
+          "resources/**/*.csv",
+          "resources/**/*.json",
+          "resources/**/*.txt"
+        ],
+        "forbidden_paths": [
+          ".git",
+          ".github",
+          ".hg",
+          ".gitlab-ci.yml",
+          ".svn",
+          "Dockerfile",
+          "Justfile",
+          "Makefile",
+          "compose.yml",
+          "docker-compose.yml",
+          "entrypoint.sh",
+          "package-lock.json",
+          "package.json",
+          "poetry.lock",
+          "pyproject.toml",
+          "requirements.in",
+          "requirements.lock",
+          "requirements.txt",
+          "setup.cfg",
+          "setup.py",
+          "tox.ini",
+          "python_wrapper.py",
+          "rps_wrapper.py",
+          "wrapper.py"
+        ],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": [
+          "strategy.py"
+        ],
+        "version": "python-source-schema-v1"
+      },
+      "workflow_version": "source-validation-workflow-v1",
+      "wrapper_version": "python-wrapper-v1"
+    }
+  },
+  "format_version": "language-environment-catalog-format-v1"
+}

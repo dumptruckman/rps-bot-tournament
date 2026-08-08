@@ -379,6 +379,26 @@ The organizer-owned Python wrapper supplies a deterministic `rng`, translates
 the stdin/stdout protocol, and flushes each response. The complete runnable
 example is in `bots/random_bot.py`.
 
+### Validate and freeze Team source
+
+Use the frozen Language Environment catalog to validate an already-present Team
+source directory before any container build receives it:
+
+```text
+rps-validate-source \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --environment python \
+  --source path/to/team-source \
+  --bundle path/to/new-frozen-bundle
+```
+
+Python source must provide `strategy.py` with the `choose_move` contract. It may
+include accessory Python modules and `.csv`, `.json`, or `.txt` resources under
+`resources/`. The command rejects infrastructure files, symlinks, special files,
+unsupported paths, and descriptor size/count breaches. It never replaces an
+existing bundle. On success it prints the deterministic source digest and writes
+the same identity record to `source-bundle.json`; copied source is read-only.
+
 ---
 
 # Submission Format
