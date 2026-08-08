@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
-import selectors
 import shlex
 import signal
 import subprocess
@@ -10,10 +9,10 @@ import threading
 import time
 from typing import BinaryIO, Optional, cast
 
+from rps_runner.engine.bot_session import BotArtifactDisconnected
 from rps_runner.engine.models import InfrastructureError, MatchConfig
 
 
-MOVES = frozenset({"R", "P", "S"})
 TERMINATION_GRACE_NS = 200_000_000
 FINAL_WAIT_SECONDS = 1
 
@@ -50,371 +49,185 @@ class StderrCapture:
 
 
 @dataclass
-class BotProcess:
-    label: str
-    command: str
-    process: subprocess.Popen[bytes]
-    stderr: StderrCapture
-    stdout_limit_bytes: int
-    stdout_buffer: bytearray = field(default_factory=bytearray)
-    total_response_ns: int = 0
+class HostProcessBotSession:
+    """Explicitly insecure host-process implementation of a Bot session."""
 
+    bot_position: str
+    artifact_reference: str
+    config: MatchConfig
+    process: Optional[subprocess.Popen[bytes]] = None
+    stderr: Optional[StderrCapture] = None
+    stop_deadline_ns: Optional[int] = None
 
-def start_bot(label: str, command: str, config: MatchConfig) -> BotProcess:
-    try:
-        arguments = shlex.split(command)
-    except ValueError as error:
-        raise InfrastructureError(
-            f"Could not parse bot {label} command: {error}"
-        ) from error
-    if not arguments:
-        raise InfrastructureError(f"Could not start bot {label}: command is empty")
+    @property
+    def output_descriptor(self) -> int:
+        process = self._started_process()
+        assert process.stdout is not None
+        return process.stdout.fileno()
 
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("RPS_")
-    }
-    environment.update(
-        {
-            "RPS_PROTOCOL_VERSION": "1",
-            "RPS_ROUNDS": str(config.rounds),
-            "RPS_SEED": str(config.seed_for_bot_position(label)),
-        }
-    )
-    try:
-        process = subprocess.Popen(
-            arguments,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=environment,
-            start_new_session=True,
-        )
-    except OSError as error:
-        raise InfrastructureError(
-            f"Could not start bot {label} ({command!r}): {error}"
-        ) from error
-
-    assert process.stderr is not None
-    capture = StderrCapture(
-        cast(BinaryIO, process.stderr), config.stderr_limit_bytes
-    )
-    capture.start()
-    return BotProcess(
-        label, command, process, capture, config.stdout_limit_bytes
-    )
-
-
-def stop_bots(bots: list[BotProcess]) -> None:
-    _close_bot_inputs(bots)
-    _signal_running_bots(bots, signal.SIGTERM)
-    _wait_for_bots_until(
-        bots, time.monotonic_ns() + TERMINATION_GRACE_NS
-    )
-    _signal_running_bots(bots, signal.SIGKILL)
-    _reap_bots(bots)
-
-
-def _close_bot_inputs(bots: list[BotProcess]) -> None:
-    for bot in bots:
-        process_input = bot.process.stdin
-        if process_input is None:
-            continue
+    def start(self) -> None:
         try:
-            process_input.close()
+            arguments = shlex.split(self.artifact_reference)
+        except ValueError as error:
+            raise InfrastructureError(
+                f"Could not parse bot {self.bot_position} command: {error}"
+            ) from error
+        if not arguments:
+            raise InfrastructureError(
+                f"Could not start bot {self.bot_position}: command is empty"
+            )
+
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("RPS_")
+        }
+        environment.update(
+            {
+                "RPS_PROTOCOL_VERSION": "1",
+                "RPS_ROUNDS": str(self.config.rounds),
+                "RPS_SEED": str(
+                    self.config.seed_for_bot_position(self.bot_position)
+                ),
+            }
+        )
+        try:
+            process = subprocess.Popen(
+                arguments,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                start_new_session=True,
+            )
+        except OSError as error:
+            raise InfrastructureError(
+                "Could not start bot "
+                f"{self.bot_position} ({self.artifact_reference!r}): {error}"
+            ) from error
+
+        self.process = process
+        assert process.stderr is not None
+        self.stderr = StderrCapture(
+            cast(BinaryIO, process.stderr), self.config.stderr_limit_bytes
+        )
+        self.stderr.start()
+
+    def send(self, request: bytes) -> None:
+        process = self._started_process()
+        assert process.stdin is not None
+        try:
+            process.stdin.write(request)
+            process.stdin.flush()
+        except (BrokenPipeError, OSError) as error:
+            self.terminate()
+            raise BotArtifactDisconnected from error
+
+    def read_output(self, maximum_bytes: int) -> bytes:
+        try:
+            return os.read(self.output_descriptor, maximum_bytes)
+        except OSError as error:
+            raise InfrastructureError(
+                f"Could not read bot {self.bot_position} output: {error}"
+            ) from error
+
+    def terminate(self) -> None:
+        process = self.process
+        if process is None or process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            try:
+                process.send_signal(signal.SIGTERM)
+            except OSError:
+                pass
+
+    def stop(self) -> None:
+        process = self.process
+        if process is None:
+            return
+
+        self._close_input(process)
+        self._signal_if_running(process, signal.SIGTERM)
+        self.stop_deadline_ns = time.monotonic_ns() + TERMINATION_GRACE_NS
+
+    def force_stop(self) -> None:
+        process = self.process
+        if process is None:
+            return
+
+        deadline_ns = self.stop_deadline_ns
+        if deadline_ns is None:
+            self.stop()
+            assert self.stop_deadline_ns is not None
+            deadline_ns = self.stop_deadline_ns
+        self._wait_until(process, deadline_ns)
+        self._signal_if_running(process, signal.SIGKILL)
+
+    def finish_stop(self) -> None:
+        process = self.process
+        if process is None:
+            return
+        self._reap(process)
+
+    def stderr_text(self) -> str:
+        return "" if self.stderr is None else self.stderr.text()
+
+    @property
+    def stderr_truncated(self) -> bool:
+        return False if self.stderr is None else self.stderr.truncated
+
+    def _started_process(self) -> subprocess.Popen[bytes]:
+        if self.process is None:
+            raise InfrastructureError(
+                f"Bot {self.bot_position} session has not been started"
+            )
+        return self.process
+
+    def _close_input(self, process: subprocess.Popen[bytes]) -> None:
+        if process.stdin is None:
+            return
+        try:
+            process.stdin.close()
         except OSError:
             pass
 
+    def _signal_if_running(
+        self,
+        process: subprocess.Popen[bytes],
+        requested_signal: signal.Signals,
+    ) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, requested_signal)
+        except OSError:
+            try:
+                process.send_signal(requested_signal)
+            except OSError:
+                pass
 
-def _signal_running_bots(
-    bots: list[BotProcess], requested_signal: signal.Signals
-) -> None:
-    for bot in bots:
-        if bot.process.poll() is None:
-            signal_bot(bot, requested_signal)
-
-
-def _wait_for_bots_until(
-    bots: list[BotProcess], deadline_ns: int
-) -> None:
-    for bot in bots:
+    def _wait_until(
+        self, process: subprocess.Popen[bytes], deadline_ns: int
+    ) -> None:
         remaining = max(0, deadline_ns - time.monotonic_ns()) / 1_000_000_000
         try:
-            bot.process.wait(timeout=remaining)
+            process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
             pass
 
-
-def _reap_bots(bots: list[BotProcess]) -> None:
-    for bot in bots:
+    def _reap(self, process: subprocess.Popen[bytes]) -> None:
         try:
-            bot.process.wait(timeout=FINAL_WAIT_SECONDS)
+            process.wait(timeout=FINAL_WAIT_SECONDS)
         except subprocess.TimeoutExpired:
             pass
-        bot.stderr.finish()
-        for stream in (bot.process.stdout, bot.process.stderr):
+        if self.stderr is not None:
+            self.stderr.finish()
+        for stream in (process.stdout, process.stderr):
             if stream is None:
                 continue
             try:
                 stream.close()
             except OSError:
                 pass
-
-
-def signal_bot(bot: BotProcess, requested_signal: signal.Signals) -> None:
-    try:
-        os.killpg(bot.process.pid, requested_signal)
-    except OSError:
-        try:
-            bot.process.send_signal(requested_signal)
-        except OSError:
-            pass
-
-
-def fault(kind: str, turn: int, detail: str) -> dict[str, object]:
-    return {"kind": kind, "turn": turn, "detail": detail}
-
-
-def pre_request_faults(
-    bots: dict[str, BotProcess], turn: int
-) -> dict[str, dict[str, object]]:
-    faults: dict[str, dict[str, object]] = {}
-    selector = selectors.DefaultSelector()
-    try:
-        for label, bot in bots.items():
-            assert bot.process.stdout is not None
-            os.set_blocking(bot.process.stdout.fileno(), False)
-            selector.register(bot.process.stdout, selectors.EVENT_READ, label)
-
-        for key, _ in selector.select(0):
-            label = key.data
-            bot = bots[label]
-            try:
-                output = os.read(key.fd, bot.stdout_limit_bytes + 1)
-            except BlockingIOError:
-                continue
-            if output:
-                faults[label] = fault(
-                    "unexpected_output",
-                    turn,
-                    "Bot wrote output before receiving this turn's request",
-                )
-            else:
-                faults[label] = fault(
-                    "unexpected_exit",
-                    turn,
-                    "Bot closed stdout before receiving this turn's request",
-                )
-            signal_bot(bot, signal.SIGTERM)
-    finally:
-        selector.close()
-    return faults
-
-
-@dataclass
-class _ResponseReader:
-    bots: dict[str, BotProcess]
-    turn: int
-    sent_ns: int
-    timeout_ns: int
-    total_budget_ns: int
-    responses: dict[str, str] = field(default_factory=dict)
-    faults: dict[str, dict[str, object]] = field(default_factory=dict)
-    response_times_ns: dict[str, int] = field(default_factory=dict)
-    pending: set[str] = field(default_factory=set)
-    deadlines: dict[str, int] = field(default_factory=dict)
-
-    def read(self) -> tuple[
-        dict[str, str], dict[str, dict[str, object]], dict[str, int]
-    ]:
-        selector = selectors.DefaultSelector()
-        try:
-            self._register_bots(selector)
-            while self.pending:
-                self._expire_timeouts(selector)
-                if self.pending:
-                    self._read_ready_streams(selector)
-        finally:
-            selector.close()
-
-        return self.responses, self.faults, self.response_times_ns
-
-    def _register_bots(self, selector: selectors.BaseSelector) -> None:
-        for label, bot in self.bots.items():
-            if bot.stdout_buffer:
-                self.faults[label] = fault(
-                    "unexpected_output",
-                    self.turn,
-                    "Bot wrote output before receiving this turn's request",
-                )
-                continue
-
-            remaining_budget = self.total_budget_ns - bot.total_response_ns
-            self.deadlines[label] = self.sent_ns + min(
-                self.timeout_ns, max(0, remaining_budget)
-            )
-            assert bot.process.stdout is not None
-            os.set_blocking(bot.process.stdout.fileno(), False)
-            selector.register(bot.process.stdout, selectors.EVENT_READ, label)
-            self.pending.add(label)
-
-    def _expire_timeouts(self, selector: selectors.BaseSelector) -> None:
-        now_ns = time.monotonic_ns()
-        expired = [
-            label
-            for label in self.pending
-            if now_ns >= self.deadlines[label]
-        ]
-        for label in expired:
-            self._record_fault(
-                selector,
-                label,
-                "timeout",
-                "Bot exceeded its response-time limit",
-                terminate=True,
-            )
-
-    def _read_ready_streams(self, selector: selectors.BaseSelector) -> None:
-        nearest_deadline = min(
-            self.deadlines[label] for label in self.pending
-        )
-        wait_seconds = max(
-            0, nearest_deadline - time.monotonic_ns()
-        ) / 1_000_000_000
-        for key, _ in selector.select(wait_seconds):
-            label = key.data
-            if label in self.pending:
-                self._read_stream(selector, key, label)
-
-    def _read_stream(
-        self,
-        selector: selectors.BaseSelector,
-        key: selectors.SelectorKey,
-        label: str,
-    ) -> None:
-        try:
-            chunk = os.read(
-                key.fd, self.bots[label].stdout_limit_bytes + 1
-            )
-        except BlockingIOError:
-            return
-
-        if not chunk:
-            self._record_fault(
-                selector,
-                label,
-                "unexpected_exit",
-                "Bot closed stdout before returning a move",
-            )
-            return
-
-        bot = self.bots[label]
-        bot.stdout_buffer.extend(chunk)
-        if len(bot.stdout_buffer) > bot.stdout_limit_bytes:
-            self._record_fault(
-                selector,
-                label,
-                "excessive_output",
-                "Bot response exceeded the stdout limit",
-                terminate=True,
-            )
-            return
-        if b"\n" in bot.stdout_buffer:
-            self._process_line(selector, label)
-
-    def _process_line(
-        self, selector: selectors.BaseSelector, label: str
-    ) -> None:
-        bot = self.bots[label]
-        response_bytes, remainder = bot.stdout_buffer.split(b"\n", 1)
-        bot.stdout_buffer = bytearray(remainder)
-        self._record_response_time(label)
-        self._complete(selector, label)
-
-        if remainder:
-            self._record_fault(
-                selector,
-                label,
-                "unexpected_output",
-                "Bot returned more than one line for a request",
-                terminate=True,
-            )
-            return
-
-        response = self._decode_response(selector, label, response_bytes)
-        if response is None:
-            return
-        if response not in MOVES:
-            self._record_fault(
-                selector,
-                label,
-                "invalid_response",
-                f"Expected exactly R, P, or S; received {response!r}",
-                terminate=True,
-            )
-            return
-        self.responses[label] = response
-
-    def _decode_response(
-        self,
-        selector: selectors.BaseSelector,
-        label: str,
-        response_bytes: bytes,
-    ) -> Optional[str]:
-        try:
-            return response_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            self._record_fault(
-                selector,
-                label,
-                "invalid_response",
-                "Bot response was not valid UTF-8",
-                terminate=True,
-            )
-            return None
-
-    def _record_response_time(self, label: str) -> None:
-        response_time_ns = time.monotonic_ns() - self.sent_ns
-        self.response_times_ns[label] = response_time_ns
-        self.bots[label].total_response_ns += response_time_ns
-
-    def _record_fault(
-        self,
-        selector: selectors.BaseSelector,
-        label: str,
-        kind: str,
-        detail: str,
-        *,
-        terminate: bool = False,
-    ) -> None:
-        self.faults[label] = fault(kind, self.turn, detail)
-        self._complete(selector, label)
-        if terminate:
-            signal_bot(self.bots[label], signal.SIGTERM)
-
-    def _complete(
-        self, selector: selectors.BaseSelector, label: str
-    ) -> None:
-        self.pending.discard(label)
-        stream = self.bots[label].process.stdout
-        if stream is None:
-            return
-        try:
-            selector.unregister(stream)
-        except KeyError:
-            pass
-
-
-def read_responses(
-    bots: dict[str, BotProcess],
-    turn: int,
-    sent_ns: int,
-    timeout_ns: int,
-    total_budget_ns: int,
-) -> tuple[
-    dict[str, str], dict[str, dict[str, object]], dict[str, int]
-]:
-    return _ResponseReader(
-        bots, turn, sent_ns, timeout_ns, total_budget_ns
-    ).read()

@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import signal
+from dataclasses import dataclass, field
+import selectors
 import time
 from typing import Optional
 
-from rps_runner.engine.bot_process import (
-    BotProcess,
-    fault,
-    pre_request_faults,
-    read_responses,
-    signal_bot,
-    start_bot,
-    stop_bots,
+from rps_runner.engine.bot_process import HostProcessBotSession
+from rps_runner.engine.bot_session import (
+    BotArtifactDisconnected,
+    BotSession,
+    BotSessionFactory,
 )
 from rps_runner.engine.models import InfrastructureError, MatchConfig
 
 
+MOVES = frozenset({"R", "P", "S"})
 WINNING_MATCHUPS = {("R", "S"), ("S", "P"), ("P", "R")}
 
 
@@ -36,29 +35,268 @@ def _round_winner(move_a: str, move_b: str) -> str:
     return "a" if (move_a, move_b) in WINNING_MATCHUPS else "b"
 
 
-def _bot_result(bot: BotProcess) -> dict[str, object]:
+def _fault(kind: str, turn: int, detail: str) -> dict[str, object]:
+    return {"kind": kind, "turn": turn, "detail": detail}
+
+
+def _bot_result(session: BotSession) -> dict[str, object]:
     return {
-        "command": bot.command,
-        "stderr": bot.stderr.text(),
-        "stderr_truncated": bot.stderr.truncated,
+        "command": session.artifact_reference,
+        "stderr": session.stderr_text(),
+        "stderr_truncated": session.stderr_truncated,
     }
 
 
-def _start_bots(config: MatchConfig) -> list[BotProcess]:
-    bots: list[BotProcess] = []
+def _start_sessions(
+    config: MatchConfig, session_factory: BotSessionFactory
+) -> list[BotSession]:
+    sessions: list[BotSession] = []
+    artifact_references = {"a": config.bot_a, "b": config.bot_b}
     try:
-        bots.append(start_bot("a", config.bot_a, config))
-        bots.append(start_bot("b", config.bot_b, config))
+        for bot_position in ("a", "b"):
+            session = session_factory(
+                bot_position, artifact_references[bot_position], config
+            )
+            sessions.append(session)
+            session.start()
     except InfrastructureError:
-        stop_bots(bots)
+        _stop_sessions(sessions)
         raise
-    return bots
+    return sessions
+
+
+def _stop_sessions(sessions: list[BotSession]) -> None:
+    cleanup_error: Optional[InfrastructureError] = None
+    for session in sessions:
+        try:
+            session.stop()
+        except InfrastructureError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    for session in sessions:
+        try:
+            session.force_stop()
+        except InfrastructureError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    for session in sessions:
+        try:
+            session.finish_stop()
+        except InfrastructureError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is not None:
+        raise cleanup_error
+
+
+@dataclass
+class _ResponseReader:
+    sessions: dict[str, BotSession]
+    output_buffers: dict[str, bytearray]
+    total_response_ns: dict[str, int]
+    stdout_limit_bytes: int
+    turn: int
+    sent_ns: int
+    timeout_ns: int
+    total_budget_ns: int
+    responses: dict[str, str] = field(default_factory=dict)
+    faults: dict[str, dict[str, object]] = field(default_factory=dict)
+    response_times_ns: dict[str, int] = field(default_factory=dict)
+    pending: set[str] = field(default_factory=set)
+    deadlines: dict[str, int] = field(default_factory=dict)
+
+    def read(self) -> tuple[
+        dict[str, str], dict[str, dict[str, object]], dict[str, int]
+    ]:
+        selector = selectors.DefaultSelector()
+        try:
+            self._register_sessions(selector)
+            while self.pending:
+                self._expire_timeouts(selector)
+                if self.pending:
+                    self._read_ready_sessions(selector)
+        finally:
+            selector.close()
+
+        return self.responses, self.faults, self.response_times_ns
+
+    def _register_sessions(self, selector: selectors.BaseSelector) -> None:
+        for bot_position, session in self.sessions.items():
+            if self.output_buffers[bot_position]:
+                self.faults[bot_position] = _fault(
+                    "unexpected_output",
+                    self.turn,
+                    "Bot wrote output before receiving this turn's request",
+                )
+                continue
+
+            remaining_budget = (
+                self.total_budget_ns
+                - self.total_response_ns[bot_position]
+            )
+            self.deadlines[bot_position] = self.sent_ns + min(
+                self.timeout_ns, max(0, remaining_budget)
+            )
+            selector.register(
+                session.output_descriptor,
+                selectors.EVENT_READ,
+                bot_position,
+            )
+            self.pending.add(bot_position)
+
+    def _expire_timeouts(self, selector: selectors.BaseSelector) -> None:
+        now_ns = time.monotonic_ns()
+        expired = [
+            bot_position
+            for bot_position in self.pending
+            if now_ns >= self.deadlines[bot_position]
+        ]
+        for bot_position in expired:
+            self._record_fault(
+                selector,
+                bot_position,
+                "timeout",
+                "Bot exceeded its response-time limit",
+                terminate=True,
+            )
+
+    def _read_ready_sessions(
+        self, selector: selectors.BaseSelector
+    ) -> None:
+        nearest_deadline = min(
+            self.deadlines[bot_position]
+            for bot_position in self.pending
+        )
+        wait_seconds = max(
+            0, nearest_deadline - time.monotonic_ns()
+        ) / 1_000_000_000
+        for key, _ in selector.select(wait_seconds):
+            bot_position = key.data
+            if bot_position in self.pending:
+                self._read_session(selector, bot_position)
+
+    def _read_session(
+        self, selector: selectors.BaseSelector, bot_position: str
+    ) -> None:
+        chunk = self.sessions[bot_position].read_output(
+            self.stdout_limit_bytes + 1
+        )
+        if not chunk:
+            self._record_fault(
+                selector,
+                bot_position,
+                "unexpected_exit",
+                "Bot closed stdout before returning a move",
+            )
+            return
+
+        output_buffer = self.output_buffers[bot_position]
+        output_buffer.extend(chunk)
+        if len(output_buffer) > self.stdout_limit_bytes:
+            self._record_fault(
+                selector,
+                bot_position,
+                "excessive_output",
+                "Bot response exceeded the stdout limit",
+                terminate=True,
+            )
+            return
+        if b"\n" in output_buffer:
+            self._process_line(selector, bot_position)
+
+    def _process_line(
+        self, selector: selectors.BaseSelector, bot_position: str
+    ) -> None:
+        response_bytes, remainder = self.output_buffers[bot_position].split(
+            b"\n", 1
+        )
+        self.output_buffers[bot_position] = bytearray(remainder)
+        self._record_response_time(bot_position)
+        self._complete(selector, bot_position)
+
+        if remainder:
+            self._record_fault(
+                selector,
+                bot_position,
+                "unexpected_output",
+                "Bot returned more than one line for a request",
+                terminate=True,
+            )
+            return
+
+        response = self._decode_response(
+            selector, bot_position, response_bytes
+        )
+        if response is None:
+            return
+        if response not in MOVES:
+            self._record_fault(
+                selector,
+                bot_position,
+                "invalid_response",
+                f"Expected exactly R, P, or S; received {response!r}",
+                terminate=True,
+            )
+            return
+        self.responses[bot_position] = response
+
+    def _decode_response(
+        self,
+        selector: selectors.BaseSelector,
+        bot_position: str,
+        response_bytes: bytes,
+    ) -> Optional[str]:
+        try:
+            return response_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            self._record_fault(
+                selector,
+                bot_position,
+                "invalid_response",
+                "Bot response was not valid UTF-8",
+                terminate=True,
+            )
+            return None
+
+    def _record_response_time(self, bot_position: str) -> None:
+        response_time_ns = time.monotonic_ns() - self.sent_ns
+        self.response_times_ns[bot_position] = response_time_ns
+        self.total_response_ns[bot_position] += response_time_ns
+
+    def _record_fault(
+        self,
+        selector: selectors.BaseSelector,
+        bot_position: str,
+        kind: str,
+        detail: str,
+        *,
+        terminate: bool = False,
+    ) -> None:
+        self.faults[bot_position] = _fault(kind, self.turn, detail)
+        self._complete(selector, bot_position)
+        if terminate:
+            self.sessions[bot_position].terminate()
+
+    def _complete(
+        self, selector: selectors.BaseSelector, bot_position: str
+    ) -> None:
+        self.pending.discard(bot_position)
+        try:
+            selector.unregister(
+                self.sessions[bot_position].output_descriptor
+            )
+        except KeyError:
+            pass
 
 
 class _MatchRunner:
-    def __init__(self, config: MatchConfig, bots: list[BotProcess]) -> None:
+    def __init__(self, config: MatchConfig, sessions: list[BotSession]) -> None:
         self.config = config
-        self.bots_by_label = {bot.label: bot for bot in bots}
+        self.sessions_by_position = {
+            session.bot_position: session for session in sessions
+        }
+        self.output_buffers = {"a": bytearray(), "b": bytearray()}
+        self.total_response_ns = {"a": 0, "b": 0}
         self.moves = {"a": "", "b": ""}
         self.score = {"a": 0, "b": 0, "draws": 0}
         self.played_rounds: list[dict[str, object]] = []
@@ -73,22 +311,23 @@ class _MatchRunner:
                 return
 
     def _play_turn(self, turn: int) -> bool:
-        before_request_faults = pre_request_faults(
-            self.bots_by_label, turn
-        )
+        before_request_faults = self._pre_request_faults(turn)
         if before_request_faults:
             return self._stop_for_faults(before_request_faults)
 
         requests = self._requests(turn)
         send_faults = self._send_requests(turn, requests)
         sent_ns = time.monotonic_ns()
-        responses, response_faults, response_times_ns = read_responses(
-            self._waiting_bots(send_faults),
+        responses, response_faults, response_times_ns = _ResponseReader(
+            self._waiting_sessions(send_faults),
+            self.output_buffers,
+            self.total_response_ns,
+            self.config.stdout_limit_bytes,
             turn,
             sent_ns,
             self._timeout_ns(turn),
             self.config.total_timeout_ms * 1_000_000,
-        )
+        ).read()
 
         turn_faults = send_faults | response_faults
         if turn_faults:
@@ -96,6 +335,41 @@ class _MatchRunner:
 
         self._record_round(turn, responses, response_times_ns)
         return True
+
+    def _pre_request_faults(
+        self, turn: int
+    ) -> dict[str, dict[str, object]]:
+        faults: dict[str, dict[str, object]] = {}
+        selector = selectors.DefaultSelector()
+        try:
+            for bot_position, session in self.sessions_by_position.items():
+                selector.register(
+                    session.output_descriptor,
+                    selectors.EVENT_READ,
+                    bot_position,
+                )
+
+            for key, _ in selector.select(0):
+                bot_position = key.data
+                output = self.sessions_by_position[
+                    bot_position
+                ].read_output(self.config.stdout_limit_bytes + 1)
+                if output:
+                    faults[bot_position] = _fault(
+                        "unexpected_output",
+                        turn,
+                        "Bot wrote output before receiving this turn's request",
+                    )
+                else:
+                    faults[bot_position] = _fault(
+                        "unexpected_exit",
+                        turn,
+                        "Bot closed stdout before receiving this turn's request",
+                    )
+                self.sessions_by_position[bot_position].terminate()
+        finally:
+            selector.close()
+        return faults
 
     def _requests(self, turn: int) -> dict[str, bytes]:
         return {
@@ -107,37 +381,26 @@ class _MatchRunner:
         self, turn: int, requests: dict[str, bytes]
     ) -> dict[str, dict[str, object]]:
         send_faults: dict[str, dict[str, object]] = {}
-        for label in ("a", "b"):
-            bot_fault = self._send_request(label, turn, requests[label])
-            if bot_fault is not None:
-                send_faults[label] = bot_fault
+        for bot_position in ("a", "b"):
+            try:
+                self.sessions_by_position[bot_position].send(
+                    requests[bot_position]
+                )
+            except BotArtifactDisconnected:
+                send_faults[bot_position] = _fault(
+                    "unexpected_exit",
+                    turn,
+                    "Bot exited or closed stdin before receiving the request",
+                )
         return send_faults
 
-    def _send_request(
-        self, label: str, turn: int, request: bytes
-    ) -> Optional[dict[str, object]]:
-        bot = self.bots_by_label[label]
-        process_input = bot.process.stdin
-        assert process_input is not None
-        try:
-            process_input.write(request)
-            process_input.flush()
-            return None
-        except (BrokenPipeError, OSError):
-            signal_bot(bot, signal.SIGTERM)
-            return fault(
-                "unexpected_exit",
-                turn,
-                "Bot exited or closed stdin before receiving the request",
-            )
-
-    def _waiting_bots(
+    def _waiting_sessions(
         self, send_faults: dict[str, dict[str, object]]
-    ) -> dict[str, BotProcess]:
+    ) -> dict[str, BotSession]:
         return {
-            label: bot
-            for label, bot in self.bots_by_label.items()
-            if label not in send_faults
+            bot_position: session
+            for bot_position, session in self.sessions_by_position.items()
+            if bot_position not in send_faults
         }
 
     def _timeout_ns(self, turn: int) -> int:
@@ -191,21 +454,18 @@ class _MatchRunner:
             "faults": self.faults,
             "timing": {
                 "clock": "monotonic",
-                "total_response_ns": {
-                    label: bot.total_response_ns
-                    for label, bot in self.bots_by_label.items()
-                },
+                "total_response_ns": self.total_response_ns,
             },
             "bots": {
-                "a": _bot_result(self.bots_by_label["a"]),
-                "b": _bot_result(self.bots_by_label["b"]),
+                "a": _bot_result(self.sessions_by_position["a"]),
+                "b": _bot_result(self.sessions_by_position["b"]),
             },
         }
 
     def _outcome(self) -> tuple[str, Optional[str]]:
         faulted = [
-            label
-            for label, bot_fault in self.faults.items()
+            bot_position
+            for bot_position, bot_fault in self.faults.items()
             if bot_fault is not None
         ]
         if len(faulted) == 2:
@@ -219,15 +479,19 @@ class _MatchRunner:
         return "completed", winner
 
 
-def run_match(config: MatchConfig) -> dict[str, object]:
-    bots = _start_bots(config)
-    runner = _MatchRunner(config, bots)
+def run_match(
+    config: MatchConfig,
+    *,
+    session_factory: BotSessionFactory = HostProcessBotSession,
+) -> dict[str, object]:
+    sessions = _start_sessions(config, session_factory)
+    runner = _MatchRunner(config, sessions)
 
     try:
         runner.play()
     except OSError as error:
         raise InfrastructureError(f"Match runner failed: {error}") from error
     finally:
-        stop_bots(bots)
+        _stop_sessions(sessions)
 
     return runner.result()
