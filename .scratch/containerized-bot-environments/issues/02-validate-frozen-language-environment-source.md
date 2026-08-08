@@ -44,6 +44,8 @@ resource files. Validation rejects unsafe catalog paths, all symlinks, special
 files, unsupported locations and types, infrastructure paths, and count or size
 limit breaches with the offending path and rule. It parses `strategy.py` without
 executing Team code and requires an unambiguous `choose_move` callable compatible
-with the wrapper's four positional arguments. A contract-only non-Python
-descriptor exercises the same catalog and command without touching Tournament
-behavior.
+with the wrapper's four positional arguments. The descriptor explicitly versions
+this conservative single-unconditional-function static policy; dynamic binding
+behavior is left to later isolated conformance rather than executed during source
+validation. A contract-only non-Python descriptor exercises the same catalog and
+command without touching Tournament behavior.

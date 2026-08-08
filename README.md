@@ -398,6 +398,9 @@ include accessory Python modules and `.csv`, `.json`, or `.txt` resources under
 unsupported paths, and descriptor size/count breaches. It never replaces an
 existing bundle. On success it prints the deterministic source digest and writes
 the same identity record to `source-bundle.json`; copied source is read-only.
+The versioned Python source schema requires one unconditional, undecorated
+module-level `choose_move` definition whose signature accepts the wrapper's four
+positional arguments; source validation never executes Team code.
 Catalog loading also verifies the content digest of every organizer-owned asset,
 including the wrapper, build recipe, entrypoint, runtime/platform definition,
 readiness contract, workflow, dependency policy, and conformance definition.

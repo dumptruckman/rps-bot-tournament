@@ -20,6 +20,7 @@
       "participant_contract": {
         "callable": "choose_move",
         "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",
+        "static_validation": "none-v1",
         "version": "choose-move-contract-v1"
       },
       "source_schema": {
@@ -43,8 +44,7 @@
           "strategy.contract"
         ],
         "version": "contract-source-schema-v1"
-      },
-      "source_contract_validator": "none-v1"
+      }
     },
     "python": {
       "assets": {
@@ -65,6 +65,7 @@
       "participant_contract": {
         "callable": "choose_move",
         "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",
+        "static_validation": "single-unconditional-function-v1",
         "version": "choose-move-contract-v1"
       },
       "source_schema": {
@@ -111,8 +112,7 @@
           "strategy.py"
         ],
         "version": "python-source-schema-v1"
-      },
-      "source_contract_validator": "python-choose-move-v1"
+      }
     }
   },
   "format_version": "language-environment-catalog-format-v1"

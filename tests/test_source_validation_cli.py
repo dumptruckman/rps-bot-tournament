@@ -303,6 +303,14 @@ class SourceValidationCliTests(unittest.TestCase):
                 "def choose_move(a):\n    return 'P'\n"
             ),
             "@(lambda function: 42)\ndef choose_move(a, b, c, d):\n    return 'R'\n",
+            (
+                "def choose_move(a, b, c, d):\n    return 'R'\n\n"
+                "(choose_move := 42)\n"
+            ),
+            (
+                "def choose_move(a, b, c, d):\n    return 'R'\n\n"
+                "if False:\n    choose_move = 42\n"
+            ),
         ]
 
         for index, content in enumerate(invalid_strategies):

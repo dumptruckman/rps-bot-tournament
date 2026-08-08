@@ -59,12 +59,14 @@ class ParticipantContract:
     version: str
     callable: str
     signature: str
+    static_validation: str
 
     def as_manifest(self) -> Mapping[str, str]:
         return {
             "version": self.version,
             "callable": self.callable,
             "signature": self.signature,
+            "static_validation": self.static_validation,
         }
 
 
@@ -86,7 +88,6 @@ class LanguageEnvironment:
     language: str
     contract_only: bool
     participant_contract: ParticipantContract
-    source_contract_validator: str
     source_schema: SourceSchema
     descriptor_version: str
     descriptor_identity: str
@@ -228,15 +229,18 @@ def _validate_descriptor(
         signature=_require_string(
             participant_value, "signature", participant_location
         ),
+        static_validation=_require_string(
+            participant_value, "static_validation", participant_location
+        ),
     )
-    source_contract_validator = _require_string(
-        descriptor, "source_contract_validator", location
-    )
-    if source_contract_validator not in ("none-v1", "python-choose-move-v1"):
+    if participant_contract.static_validation not in (
+        "none-v1",
+        "single-unconditional-function-v1",
+    ):
         raise CatalogError(
-            location
-            + ".source_contract_validator "
-            + repr(source_contract_validator)
+            participant_location
+            + ".static_validation "
+            + repr(participant_contract.static_validation)
             + " is unsupported"
         )
 
@@ -306,7 +310,6 @@ def _validate_descriptor(
         language=language,
         contract_only=contract_only,
         participant_contract=participant_contract,
-        source_contract_validator=source_contract_validator,
         source_schema=source_schema,
         descriptor_version=descriptor_version,
         descriptor_identity=_content_identity(descriptor_version, descriptor),
@@ -549,7 +552,7 @@ def validate_source(
 def _validate_participant_contract(
     files: Sequence[SourceFile], environment: LanguageEnvironment
 ) -> None:
-    if environment.source_contract_validator == "none-v1":
+    if environment.participant_contract.static_validation == "none-v1":
         return
     source_file = next(item for item in files if item.path == "strategy.py")
     try:
@@ -613,6 +616,10 @@ def _module_bindings(
     statements: Sequence[ast.stmt], name: str
 ) -> Iterable[ast.AST]:
     for node in statements:
+        if not isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ) and _contains_module_named_expression(node, name):
+            yield node
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node.name == name:
                 yield node
@@ -651,6 +658,17 @@ def _module_bindings(
                 if handler.name == name:
                     yield handler
                 yield from _module_bindings(handler.body, name)
+
+
+def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(child, ast.NamedExpr) and _target_binds_name(child.target, name):
+            return True
+        if _contains_module_named_expression(child, name):
+            return True
+    return False
 
 
 def _source_digest(files: Sequence[SourceFile]) -> str:
