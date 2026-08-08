@@ -1,8 +1,7 @@
-# syntax=docker/dockerfile:1
 ARG RPS_BASE_RUNTIME
 FROM ${RPS_BASE_RUNTIME} AS artifact
 
-COPY source/ /opt/rps/team/
+COPY --from=team / /opt/rps/team/
 COPY organizer/wrapper.py /opt/rps/wrapper.py
 
 WORKDIR /opt/rps/team

@@ -405,6 +405,28 @@ Catalog loading also verifies the content digest of every organizer-owned asset,
 including the wrapper, build recipe, entrypoint, runtime/platform definition,
 readiness contract, workflow, dependency policy, and conformance definition.
 
+### Build a Bot Artifact candidate
+
+After organizer preparation has placed the pinned platform runtime in the active
+Docker-compatible engine, build exactly one platform-specific candidate from the
+frozen bundle:
+
+```text
+rps-build-artifact \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --bundle path/to/new-frozen-bundle \
+  --platform linux/arm64 \
+  --candidate path/to/new-artifact-candidate
+```
+
+The builder honors the active Docker context, verifies the local base runtime by
+its platform-specific digest, and builds without networking. Team source and the
+organizer-owned recipe and wrapper enter Docker through separate contexts. The
+new candidate directory retains read-only source, bounded build diagnostics, and
+`artifact-candidate.json`. That record identifies the exact produced image and
+all frozen build inputs. It is a suite candidate, not an official Bot Artifact,
+until conformance certification succeeds.
+
 ---
 
 # Submission Format

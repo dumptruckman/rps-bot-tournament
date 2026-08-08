@@ -76,6 +76,7 @@ class CatalogAsset:
     catalog_path: str
     path: Path
     digest: str
+    content: bytes
 
     @property
     def identity(self) -> str:
@@ -113,6 +114,15 @@ class LanguageEnvironmentCatalog:
                 "Language Environment " + repr(name) + " is not in the catalog; "
                 "available environments: " + choices
             )
+
+
+@dataclass(frozen=True)
+class FrozenSourceBundle:
+    path: Path
+    source_path: Path
+    manifest: Mapping[str, Any]
+    environment: LanguageEnvironment
+    files: Sequence[SourceFile]
 
 
 def _require_mapping(value: Any, location: str) -> Mapping[str, Any]:
@@ -203,6 +213,7 @@ def _validate_asset(
         catalog_path=relative_path,
         path=path,
         digest=actual_digest,
+        content=content,
     )
 
 
@@ -671,7 +682,7 @@ def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
     return False
 
 
-def _source_digest(files: Sequence[SourceFile]) -> str:
+def source_digest(files: Sequence[SourceFile]) -> str:
     digest = hashlib.sha256()
     digest.update((BUNDLE_FORMAT_VERSION + "\0").encode("utf-8"))
     for item in files:
@@ -683,7 +694,7 @@ def _source_digest(files: Sequence[SourceFile]) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _version_manifest(
+def environment_identity_manifest(
     catalog: LanguageEnvironmentCatalog, environment: LanguageEnvironment
 ) -> Mapping[str, str]:
     assets = environment.assets
@@ -702,6 +713,24 @@ def _version_manifest(
         "platform": assets["platform"].identity,
         "conformance": assets["conformance"].identity,
     }
+
+
+def materialize_source_files(
+    files: Sequence[SourceFile], destination: Path
+) -> None:
+    destination.mkdir()
+    for item in files:
+        output = destination / PurePosixPath(item.path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(item.content)
+        output.chmod(0o444)
+    for directory in sorted(
+        (path for path in destination.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        directory.chmod(0o555)
+    destination.chmod(0o555)
 
 
 def freeze_source_bundle(
@@ -735,8 +764,8 @@ def freeze_source_bundle(
         "environment": environment.name,
         "files": [item.path for item in files],
         "participant_contract": environment.participant_contract.as_manifest(),
-        "source_digest": _source_digest(files),
-        "versions": _version_manifest(catalog, environment),
+        "source_digest": source_digest(files),
+        "versions": environment_identity_manifest(catalog, environment),
     }
 
     bundle.parent.mkdir(parents=True, exist_ok=True)
@@ -745,22 +774,10 @@ def freeze_source_bundle(
         bundle.mkdir()
         created_bundle = True
         source_output = bundle / "source"
-        source_output.mkdir()
-        for item in files:
-            destination = source_output / PurePosixPath(item.path)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(item.content)
-            destination.chmod(0o444)
+        materialize_source_files(files, source_output)
         manifest = bundle / "source-bundle.json"
         manifest.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
         manifest.chmod(0o444)
-        for directory in sorted(
-            (path for path in source_output.rglob("*") if path.is_dir()),
-            key=lambda path: len(path.parts),
-            reverse=True,
-        ):
-            directory.chmod(0o555)
-        source_output.chmod(0o555)
         bundle.chmod(0o555)
     except BaseException:
         if created_bundle:
@@ -773,3 +790,77 @@ def freeze_source_bundle(
             shutil.rmtree(bundle)
         raise
     return result
+
+
+def load_frozen_source_bundle(
+    bundle: Path, catalog: LanguageEnvironmentCatalog
+) -> FrozenSourceBundle:
+    manifest_path = bundle / "source-bundle.json"
+    if bundle.is_symlink() or not bundle.is_dir():
+        raise SourceValidationError(
+            str(bundle), "frozen_bundle", "validated source bundle is not a directory"
+        )
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise SourceValidationError(
+            "source-bundle.json",
+            "frozen_bundle",
+            "validated source bundle manifest is missing or is not a regular file",
+        )
+    try:
+        manifest_value = json.loads(manifest_path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SourceValidationError(
+            "source-bundle.json",
+            "frozen_bundle",
+            "could not read a valid source bundle manifest: " + str(error),
+        )
+    if not isinstance(manifest_value, dict):
+        raise SourceValidationError(
+            "source-bundle.json",
+            "frozen_bundle",
+            "source bundle manifest must be an object",
+        )
+    environment_name = manifest_value.get("environment")
+    if not isinstance(environment_name, str):
+        raise SourceValidationError(
+            "source-bundle.json",
+            "frozen_bundle",
+            "source bundle manifest has no valid Language Environment",
+        )
+    environment = catalog.environment(environment_name)
+    expected_values = {
+        "bundle_format_version": BUNDLE_FORMAT_VERSION,
+        "catalog_digest": catalog.digest,
+        "contract_only": environment.contract_only,
+        "participant_contract": environment.participant_contract.as_manifest(),
+        "versions": environment_identity_manifest(catalog, environment),
+    }
+    for key, expected in expected_values.items():
+        if manifest_value.get(key) != expected:
+            raise SourceValidationError(
+                "source-bundle.json",
+                "frozen_bundle_identity",
+                "source bundle " + key + " does not match the selected frozen catalog",
+            )
+    source_path = bundle / "source"
+    files = validate_source(source_path, environment)
+    if manifest_value.get("files") != [item.path for item in files]:
+        raise SourceValidationError(
+            "source-bundle.json",
+            "frozen_bundle_identity",
+            "source bundle file list does not match its frozen source",
+        )
+    actual_digest = source_digest(files)
+    if manifest_value.get("source_digest") != actual_digest:
+        raise SourceValidationError(
+            "source-bundle.json",
+            "frozen_bundle_identity",
+            "source digest does not match the frozen source bytes",
+        )
+    return FrozenSourceBundle(
+        path=bundle,
+        source_path=source_path,
+        manifest=manifest_value,
+        environment=environment,
+        files=files,
+    )
