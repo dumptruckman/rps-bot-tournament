@@ -81,44 +81,6 @@ class CatalogAsset:
 
 
 @dataclass(frozen=True)
-class EnvironmentVersions:
-    descriptor: str
-    wrapper: str
-    recipe: str
-    entrypoint: str
-    dependency_definition: str
-    build_target: str
-    workflow: str
-    readiness: str
-    base_runtime: str
-    platform: str
-    conformance: str
-
-    def as_manifest(
-        self,
-        catalog_identity: str,
-        descriptor_identity: str,
-        source_schema_identity: str,
-        assets: Mapping[str, CatalogAsset],
-    ) -> Mapping[str, str]:
-        return {
-            "catalog": catalog_identity,
-            "descriptor": descriptor_identity,
-            "source_schema": source_schema_identity,
-            "wrapper": assets["wrapper"].identity,
-            "recipe": assets["recipe"].identity,
-            "entrypoint": assets["entrypoint"].identity,
-            "dependency_definition": assets["dependency_definition"].identity,
-            "build_target": assets["build_target"].identity,
-            "workflow": assets["workflow"].identity,
-            "readiness": assets["readiness"].identity,
-            "base_runtime": assets["base_runtime"].identity,
-            "platform": assets["platform"].identity,
-            "conformance": assets["conformance"].identity,
-        }
-
-
-@dataclass(frozen=True)
 class LanguageEnvironment:
     name: str
     language: str
@@ -126,7 +88,7 @@ class LanguageEnvironment:
     participant_contract: ParticipantContract
     source_contract_validator: str
     source_schema: SourceSchema
-    versions: EnvironmentVersions
+    descriptor_version: str
     descriptor_identity: str
     assets: Mapping[str, CatalogAsset]
 
@@ -198,20 +160,11 @@ def _content_identity(version: str, value: Any) -> str:
 
 def _validate_asset(
     catalog_directory: Path,
-    key: str,
     value: Any,
-    expected_version: str,
     location: str,
 ) -> CatalogAsset:
     asset = _require_mapping(value, location)
     version = _require_string(asset, "version", location)
-    if version != expected_version:
-        raise CatalogError(
-            location
-            + ".version must match the descriptor's "
-            + key
-            + "_version"
-        )
     relative_path = _require_string(asset, "path", location)
     _validate_relative_catalog_path(relative_path, location + ".path")
     expected_digest = _require_string(asset, "sha256", location)
@@ -257,22 +210,8 @@ def _validate_descriptor(
 ) -> LanguageEnvironment:
     location = "environments." + name
     descriptor = _require_mapping(value, location)
-    versions = EnvironmentVersions(
-        descriptor=_require_string(descriptor, "descriptor_version", location),
-        wrapper=_require_string(descriptor, "wrapper_version", location),
-        recipe=_require_string(descriptor, "recipe_version", location),
-        entrypoint=_require_string(descriptor, "entrypoint_version", location),
-        dependency_definition=_require_string(
-            descriptor, "dependency_definition_version", location
-        ),
-        build_target=_require_string(descriptor, "build_target_version", location),
-        workflow=_require_string(descriptor, "workflow_version", location),
-        readiness=_require_string(descriptor, "readiness_version", location),
-        base_runtime=_require_string(
-            descriptor, "base_runtime_version", location
-        ),
-        platform=_require_string(descriptor, "platform_version", location),
-        conformance=_require_string(descriptor, "conformance_version", location),
+    descriptor_version = _require_string(
+        descriptor, "descriptor_version", location
     )
     language = _require_string(descriptor, "language", location)
     if not isinstance(descriptor.get("contract_only"), bool):
@@ -336,33 +275,31 @@ def _validate_descriptor(
     )
     assets_location = location + ".assets"
     assets = _require_mapping(descriptor.get("assets"), assets_location)
-    expected_asset_versions = {
-        "wrapper": versions.wrapper,
-        "recipe": versions.recipe,
-        "entrypoint": versions.entrypoint,
-        "dependency_definition": versions.dependency_definition,
-        "build_target": versions.build_target,
-        "workflow": versions.workflow,
-        "readiness": versions.readiness,
-        "base_runtime": versions.base_runtime,
-        "platform": versions.platform,
-        "conformance": versions.conformance,
+    expected_assets = {
+        "wrapper",
+        "recipe",
+        "entrypoint",
+        "dependency_definition",
+        "build_target",
+        "workflow",
+        "readiness",
+        "base_runtime",
+        "platform",
+        "conformance",
     }
-    if set(assets) != set(expected_asset_versions):
+    if set(assets) != expected_assets:
         raise CatalogError(
             assets_location
             + " must define exactly: "
-            + ", ".join(sorted(expected_asset_versions))
+            + ", ".join(sorted(expected_assets))
         )
     validated_assets = {
         key: _validate_asset(
             catalog_directory,
-            key,
             assets[key],
-            version,
             assets_location + "." + key,
         )
-        for key, version in expected_asset_versions.items()
+        for key in expected_assets
     }
     return LanguageEnvironment(
         name=name,
@@ -371,8 +308,8 @@ def _validate_descriptor(
         participant_contract=participant_contract,
         source_contract_validator=source_contract_validator,
         source_schema=source_schema,
-        versions=versions,
-        descriptor_identity=_content_identity(versions.descriptor, descriptor),
+        descriptor_version=descriptor_version,
+        descriptor_identity=_content_identity(descriptor_version, descriptor),
         assets=validated_assets,
     )
 
@@ -624,33 +561,96 @@ def _validate_participant_contract(
             "participant_contract",
             "Python source is not valid syntax: " + detail,
         )
-    definitions = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "choose_move"
-    ]
-    if not definitions:
+    bindings = list(_module_bindings(tree.body, "choose_move"))
+    if not bindings:
         raise SourceValidationError(
             source_file.path,
             "participant_contract",
-            "define choose_move(turn, my_history, opponent_history, rng)",
+            "define a module-level choose_move callable that accepts four "
+            "positional arguments",
         )
-    arguments = definitions[0].args
+    if len(bindings) != 1 or not isinstance(bindings[0], ast.FunctionDef):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "choose_move must have one unambiguous module-level function binding",
+        )
+    binding = bindings[0]
+    if binding.decorator_list:
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "choose_move decorators cannot be validated without executing Team code",
+        )
+    arguments = binding.args
     positional = list(arguments.posonlyargs) + list(arguments.args)
-    names = [argument.arg for argument in positional]
-    if (
-        names != ["turn", "my_history", "opponent_history", "rng"]
-        or arguments.vararg is not None
-        or arguments.kwarg is not None
-        or arguments.kwonlyargs
-        or arguments.defaults
-    ):
+    required_positionals = len(positional) - len(arguments.defaults)
+    accepts_four_positionals = (
+        required_positionals <= 4
+        and (len(positional) >= 4 or arguments.vararg is not None)
+    )
+    has_required_keyword_only = any(
+        default is None for default in arguments.kw_defaults
+    )
+    if not accepts_four_positionals or has_required_keyword_only:
         raise SourceValidationError(
             source_file.path,
             "participant_contract",
-            "choose_move must have exactly "
-            "(turn, my_history, opponent_history, rng)",
+            "choose_move must accept the wrapper's four positional arguments "
+            "without requiring additional arguments",
         )
+
+
+def _target_binds_name(target: ast.AST, name: str) -> bool:
+    if isinstance(target, ast.Name):
+        return target.id == name
+    if isinstance(target, (ast.List, ast.Tuple)):
+        return any(_target_binds_name(item, name) for item in target.elts)
+    return False
+
+
+def _module_bindings(
+    statements: Sequence[ast.stmt], name: str
+) -> Iterable[ast.AST]:
+    for node in statements:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                yield node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(_target_binds_name(target, name) for target in targets):
+                yield node
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound_name = alias.asname or alias.name.split(".")[0]
+                if bound_name == name:
+                    yield node
+        elif isinstance(node, ast.Delete):
+            if any(_target_binds_name(target, name) for target in node.targets):
+                yield node
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            if _target_binds_name(node.target, name):
+                yield node
+            yield from _module_bindings(node.body, name)
+            yield from _module_bindings(node.orelse, name)
+        elif isinstance(node, (ast.If, ast.While)):
+            yield from _module_bindings(node.body, name)
+            yield from _module_bindings(node.orelse, name)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None and _target_binds_name(
+                    item.optional_vars, name
+                ):
+                    yield node
+            yield from _module_bindings(node.body, name)
+        elif isinstance(node, ast.Try):
+            yield from _module_bindings(node.body, name)
+            yield from _module_bindings(node.orelse, name)
+            yield from _module_bindings(node.finalbody, name)
+            for handler in node.handlers:
+                if handler.name == name:
+                    yield handler
+                yield from _module_bindings(handler.body, name)
 
 
 def _source_digest(files: Sequence[SourceFile]) -> str:
@@ -668,12 +668,22 @@ def _source_digest(files: Sequence[SourceFile]) -> str:
 def _version_manifest(
     catalog: LanguageEnvironmentCatalog, environment: LanguageEnvironment
 ) -> Mapping[str, str]:
-    return environment.versions.as_manifest(
-        catalog.identity,
-        environment.descriptor_identity,
-        environment.source_schema.identity,
-        environment.assets,
-    )
+    assets = environment.assets
+    return {
+        "catalog": catalog.identity,
+        "descriptor": environment.descriptor_identity,
+        "source_schema": environment.source_schema.identity,
+        "wrapper": assets["wrapper"].identity,
+        "recipe": assets["recipe"].identity,
+        "entrypoint": assets["entrypoint"].identity,
+        "dependency_definition": assets["dependency_definition"].identity,
+        "build_target": assets["build_target"].identity,
+        "workflow": assets["workflow"].identity,
+        "readiness": assets["readiness"].identity,
+        "base_runtime": assets["base_runtime"].identity,
+        "platform": assets["platform"].identity,
+        "conformance": assets["conformance"].identity,
+    }
 
 
 def freeze_source_bundle(

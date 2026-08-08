@@ -14,22 +14,14 @@
         "workflow": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "source-validation-workflow-v1"},
         "wrapper": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-wrapper-v1"}
       },
-      "base_runtime_version": "contract-runtime-v1",
-      "build_target_version": "contract-build-target-v1",
-      "conformance_version": "contract-conformance-v1",
       "contract_only": true,
-      "dependency_definition_version": "contract-dependencies-v1",
       "descriptor_version": "contract-fixture-v1",
-      "entrypoint_version": "contract-entrypoint-v1",
       "language": "contract-fixture",
       "participant_contract": {
         "callable": "choose_move",
         "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",
         "version": "choose-move-contract-v1"
       },
-      "platform_version": "oci-platforms-v1",
-      "readiness_version": "wrapper-readiness-v1",
-      "recipe_version": "contract-build-recipe-v1",
       "source_schema": {
         "allowed_files": [
           "strategy.contract",
@@ -52,9 +44,7 @@
         ],
         "version": "contract-source-schema-v1"
       },
-      "source_contract_validator": "none-v1",
-      "workflow_version": "source-validation-workflow-v1",
-      "wrapper_version": "contract-wrapper-v1"
+      "source_contract_validator": "none-v1"
     },
     "python": {
       "assets": {
@@ -69,22 +59,14 @@
         "workflow": {"path": "python/workflow.yml", "sha256": "sha256:48cb1e0053b4b370882ffb65ba56f587add00c79c6e685e4f1159ed2039bddef", "version": "source-validation-workflow-v1"},
         "wrapper": {"path": "python/wrapper.py", "sha256": "sha256:c3a0bbbbc731116ff15ca86a480d786b618329be9cfe685b59d2e66fe23baac9", "version": "python-wrapper-v1"}
       },
-      "base_runtime_version": "python-runtime-v1",
-      "build_target_version": "python-build-target-v1",
-      "conformance_version": "python-conformance-v1",
       "contract_only": false,
-      "dependency_definition_version": "python-dependencies-v1",
       "descriptor_version": "python-language-environment-v1",
-      "entrypoint_version": "python-entrypoint-v1",
       "language": "python",
       "participant_contract": {
         "callable": "choose_move",
         "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",
         "version": "choose-move-contract-v1"
       },
-      "platform_version": "oci-platforms-v1",
-      "readiness_version": "wrapper-readiness-v1",
-      "recipe_version": "python-build-recipe-v1",
       "source_schema": {
         "allowed_files": [
           "*.py",
@@ -130,9 +112,7 @@
         ],
         "version": "python-source-schema-v1"
       },
-      "source_contract_validator": "python-choose-move-v1",
-      "workflow_version": "source-validation-workflow-v1",
-      "wrapper_version": "python-wrapper-v1"
+      "source_contract_validator": "python-choose-move-v1"
     }
   },
   "format_version": "language-environment-catalog-format-v1"

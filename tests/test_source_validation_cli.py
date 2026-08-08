@@ -294,6 +294,15 @@ class SourceValidationCliTests(unittest.TestCase):
             "def choose_move(:\n    pass\n",
             "def another_function():\n    pass\n",
             "def choose_move(turn, history):\n    return 'R'\n",
+            (
+                "def choose_move(a, b, c, d):\n    return 'R'\n\n"
+                "choose_move = 42\n"
+            ),
+            (
+                "def choose_move(a, b, c, d):\n    return 'R'\n\n"
+                "def choose_move(a):\n    return 'P'\n"
+            ),
+            "@(lambda function: 42)\ndef choose_move(a, b, c, d):\n    return 'R'\n",
         ]
 
         for index, content in enumerate(invalid_strategies):
@@ -308,6 +317,24 @@ class SourceValidationCliTests(unittest.TestCase):
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertIn("'strategy.py'", completed.stderr)
                 self.assertIn("rule: participant_contract", completed.stderr)
+
+    def test_choose_move_preserves_four_argument_call_compatibility(self) -> None:
+        compatible_strategies = [
+            "def choose_move(a, b, c, d=None):\n    return 'R'\n",
+            "def choose_move(*values):\n    return 'R'\n",
+            "def choose_move(a, b, c, d, optional='value'):\n    return 'R'\n",
+        ]
+
+        for index, content in enumerate(compatible_strategies):
+            with self.subTest(content=content):
+                source = self.valid_python_source("compatible-" + str(index))
+                (source / "strategy.py").write_text(content)
+
+                completed = self.run_cli(
+                    source, self.directory / ("compatible-bundle-" + str(index))
+                )
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_file_count_individual_and_aggregate_limits_are_enforced(self) -> None:
         cases = [
