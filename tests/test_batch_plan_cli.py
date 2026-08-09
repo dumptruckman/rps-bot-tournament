@@ -42,12 +42,19 @@ class FakeBatchPipeline:
         target = bundle / "source"
         target.mkdir()
         content = (source / "strategy.py").read_text()
-        (target / "strategy.py").write_text(content)
+        source_files = []
+        for source_file in sorted(source.rglob("*")):
+            if source_file.is_file():
+                relative = source_file.relative_to(source)
+                destination = target / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source_file.read_bytes())
+                source_files.append(relative.as_posix())
         source_digest = digest(content[0].lower())
         manifest = {
             "bundle_format_version": "source-bundle-v1",
             "source_digest": source_digest,
-            "files": ["strategy.py"],
+            "files": source_files,
         }
         (bundle / "source-bundle.json").write_text(json.dumps(manifest))
         return manifest
@@ -297,6 +304,9 @@ class BatchPlanCliTests(unittest.TestCase):
     def test_repair_retains_original_diff_and_final_identities(self) -> None:
         original = self.source("team-a-original", "A")
         repaired = self.source("team-a-repaired", "Z")
+        repair_resources = repaired / "resources"
+        repair_resources.mkdir()
+        (repair_resources / "empty.txt").write_bytes(b"")
         teams = [
             {
                 "team_id": "team-a",
@@ -329,6 +339,7 @@ class BatchPlanCliTests(unittest.TestCase):
         self.assertEqual(repair["replacement_source_digest"], digest("z"))
         self.assertIn("-A strategy", repair["diff"])
         self.assertIn("+Z strategy", repair["diff"])
+        self.assertIn("+++ b/resources/empty.txt", repair["diff"])
         self.assertRegex(repair["diff_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertEqual(
             repair["final_validation_identity"],

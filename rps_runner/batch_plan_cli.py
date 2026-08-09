@@ -34,7 +34,7 @@ _TEAM_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,62}\Z")
 
 @dataclass(frozen=True)
 class BatchOperations:
-    """Source-to-Bot-Artifact operations used by the public batch boundary."""
+    """Operations that turn source into a Bot Artifact at the batch boundary."""
 
     freeze: Callable[..., Mapping[str, Any]]
     build: Callable[..., Mapping[str, Any]]
@@ -93,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="rps-batch-plan",
         description=(
             "Build and validate organizer-selected local Team sources, preserve "
-            "their artifacts, and write a draft JSON Tournament plan"
+            "their Bot Artifacts, and write a draft JSON Tournament plan"
         ),
     )
     parser.add_argument("--teams", required=True, type=Path)
@@ -212,23 +212,43 @@ def _complete_source_diff(original: Path, replacement: Path) -> str:
     after = _source_files(replacement)
     output: list[str] = []
     for name in sorted(set(before) | set(after)):
-        old = before.get(name, b"")
-        new = after.get(name, b"")
+        old = before.get(name)
+        new = after.get(name)
         if old == new:
             continue
+        if old is None and new == b"":
+            output.extend(
+                (
+                    "--- /dev/null\n",
+                    "+++ b/" + name + "\n",
+                    "@@ empty file added @@\n",
+                )
+            )
+            continue
+        if old == b"" and new is None:
+            output.extend(
+                (
+                    "--- a/" + name + "\n",
+                    "+++ /dev/null\n",
+                    "@@ empty file deleted @@\n",
+                )
+            )
+            continue
+        old_content = old or b""
+        new_content = new or b""
         try:
-            old_lines = old.decode("utf-8").splitlines(keepends=True)
-            new_lines = new.decode("utf-8").splitlines(keepends=True)
+            old_lines = old_content.decode("utf-8").splitlines(keepends=True)
+            new_lines = new_content.decode("utf-8").splitlines(keepends=True)
         except UnicodeDecodeError:
             output.extend(
                 (
                     "--- a/" + name + "\n",
                     "+++ b/" + name + "\n",
                     "@@ binary content @@\n",
-                    "-sha256:" + hashlib.sha256(old).hexdigest() + "\n",
-                    "+sha256:" + hashlib.sha256(new).hexdigest() + "\n",
-                    "-hex:" + old.hex() + "\n",
-                    "+hex:" + new.hex() + "\n",
+                    "-sha256:" + hashlib.sha256(old_content).hexdigest() + "\n",
+                    "+sha256:" + hashlib.sha256(new_content).hexdigest() + "\n",
+                    "-hex:" + old_content.hex() + "\n",
+                    "+hex:" + new_content.hex() + "\n",
                 )
             )
             continue
