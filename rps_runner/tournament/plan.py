@@ -47,6 +47,13 @@ class ValidatedTournamentPlan:
     shutdown_timeout_seconds: float
 
 
+@dataclass(frozen=True)
+class ValidatedSealedArtifacts:
+    platform_by_digest: Mapping[str, str]
+    startup_timeout_seconds: float
+    shutdown_timeout_seconds: float
+
+
 def read_tournament_plan(path: Path) -> Mapping[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise ValueError("Tournament plan must be an existing non-symlink file")
@@ -276,8 +283,102 @@ def validate_tournament_plan(
                 catalog_identity=catalog.identity,
                 artifact_store_index_identity=str(index_identity),
                 target_platform="linux/arm64",
+                startup_timeout_seconds=profile.startup_timeout_seconds,
+                shutdown_timeout_seconds=profile.shutdown_timeout_seconds,
             ),
         ),
+        platform_by_digest=platforms,
+        startup_timeout_seconds=profile.startup_timeout_seconds,
+        shutdown_timeout_seconds=profile.shutdown_timeout_seconds,
+    )
+
+
+def validate_sealed_tournament_artifacts(
+    manifest: Mapping[str, Any],
+    artifact_store: Path,
+    catalog: LanguageEnvironmentCatalog,
+) -> ValidatedSealedArtifacts:
+    """Verify archived execution inputs directly against a sealed Tournament."""
+
+    if manifest.get("executor_kind") != "container":
+        raise ValueError("Sealed Tournament is not an official container Tournament")
+    if (
+        manifest.get("catalog_version") != catalog.version
+        or manifest.get("catalog_identity") != catalog.identity
+    ):
+        raise ValueError("Sealed Tournament catalog identity mismatch")
+    target_platform = manifest.get("target_platform")
+    if target_platform != "linux/arm64":
+        raise ValueError("Sealed Tournament target platform is invalid")
+
+    limits = _object(manifest.get("match_limits"), "sealed match_limits")
+    profile_values: dict[str, Any] = {}
+    for field in _RESOURCE_FIELDS:
+        if field in ("startup_timeout_seconds", "shutdown_timeout_seconds"):
+            profile_values[field] = manifest.get(field)
+        else:
+            profile_values[field] = limits.get(field)
+    try:
+        profile = ExecutionProfile(
+            version=_string(
+                manifest.get("execution_profile_version"),
+                "sealed execution_profile_version",
+            ),
+            recommended_match_parallelism=(
+                INITIAL_EXECUTION_PROFILE.recommended_match_parallelism
+            ),
+            **profile_values,
+        )
+    except TypeError as error:
+        raise ValueError("Sealed Tournament execution profile is incomplete") from error
+    if manifest.get("execution_profile_identity") != profile.identity:
+        raise ValueError("Sealed Tournament execution-profile identity mismatch")
+
+    index = verify_artifact_store(artifact_store)
+    integrity = _object(index.get("integrity"), "artifact store integrity")
+    if (
+        manifest.get("artifact_store_index_identity")
+        != integrity.get("index_identity")
+    ):
+        raise ValueError("Sealed Tournament artifact-store index identity mismatch")
+    retained_manifests = load_retained_artifact_manifests(
+        artifact_store, verified_index=index
+    )
+    retained_reports = load_retained_validation_reports(
+        artifact_store, verified_index=index
+    )
+    environment = catalog.environment("python")
+    roster = manifest.get("roster")
+    if not isinstance(roster, list) or not roster:
+        raise ValueError("Sealed Tournament roster is invalid")
+    platforms: dict[str, str] = {}
+    for ordinal, team_value in enumerate(roster):
+        location = f"sealed roster[{ordinal}]"
+        team = _object(team_value, location)
+        canonical = _object(team.get("bot_artifact"), location + ".bot_artifact")
+        digest = _string(canonical.get("artifact_digest"), location + ".digest")
+        platform = _string(canonical.get("platform"), location + ".platform")
+        if platform != target_platform:
+            raise ValueError(location + " platform does not match the sealed target")
+        retained = retained_manifests.get((digest, platform))
+        if retained is None:
+            raise ValueError(location + " is missing from the retained artifact store")
+        if _canonical_artifact_identity(retained) != canonical:
+            raise ValueError(location + " does not match the sealed Bot Artifact")
+        _validate_artifact_manifest(
+            retained,
+            {"source_digest": retained.get("source_digest")},
+            catalog,
+            environment,
+            profile,
+            location,
+        )
+        report = retained_reports.get((digest, platform))
+        if report is None:
+            raise ValueError(location + " is missing its final validation report")
+        _validate_final_report(report, retained, location)
+        platforms[digest] = platform
+    return ValidatedSealedArtifacts(
         platform_by_digest=platforms,
         startup_timeout_seconds=profile.startup_timeout_seconds,
         shutdown_timeout_seconds=profile.shutdown_timeout_seconds,

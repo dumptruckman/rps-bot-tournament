@@ -4005,6 +4005,10 @@ class TournamentStepModeTests(unittest.TestCase):
 
         self.assertEqual(resumed_requests[0].attempt_number, 2)
         self.assertEqual(
+            resumed_requests[0].__dict__ | {"attempt_number": 0},
+            interrupted_requests[0].__dict__ | {"attempt_number": 0},
+        )
+        self.assertEqual(
             [
                 (entry["type"], entry["attempt_number"])
                 for entry in load_operational_telemetry(self.directory)

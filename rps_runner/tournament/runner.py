@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import nullcontext
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import re
 from typing import Any, Optional, Union
@@ -114,6 +115,8 @@ class ContainerTournamentIdentity:
     catalog_identity: str
     artifact_store_index_identity: str
     target_platform: str
+    startup_timeout_seconds: float
+    shutdown_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -1381,6 +1384,12 @@ def _build_manifest_payload(
                     config.container_identity.artifact_store_index_identity
                 ),
                 "target_platform": config.container_identity.target_platform,
+                "startup_timeout_seconds": (
+                    config.container_identity.startup_timeout_seconds
+                ),
+                "shutdown_timeout_seconds": (
+                    config.container_identity.shutdown_timeout_seconds
+                ),
             }
             if config.container_identity is not None
             else {}
@@ -1468,12 +1477,27 @@ def _validate_tournament_config(config: TournamentConfig) -> None:
     if config.container_identity is not None:
         if not isinstance(config.container_identity, ContainerTournamentIdentity):
             raise TypeError("Container Tournament identity is invalid")
-        for field in ContainerTournamentIdentity.__dataclass_fields__:
+        for field in (
+            "execution_profile_identity",
+            "catalog_version",
+            "catalog_identity",
+            "artifact_store_index_identity",
+            "target_platform",
+        ):
             value = getattr(config.container_identity, field)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"Official Tournament requires {field}")
         if config.container_identity.target_platform != "linux/arm64":
             raise ValueError("Official Tournament target platform must be linux/arm64")
+        for field in ("startup_timeout_seconds", "shutdown_timeout_seconds"):
+            value = getattr(config.container_identity, field)
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"Official Tournament requires positive {field}")
 
 
 def _validate_artifact(artifact: BotArtifactManifest) -> None:

@@ -11,7 +11,7 @@ import sys
 from typing import Optional, TextIO
 
 from rps_runner.cli import unsigned_64_bit_integer
-from rps_runner.artifact_store import resolve_artifact
+from rps_runner.artifact_store import ArtifactStoreIntegrityError, resolve_artifact
 from rps_runner.engine import ContainerOperations, InfrastructureError
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import load_catalog
@@ -21,7 +21,10 @@ from rps_runner.tournament.match_executor import (
     MatchExecutionRequest,
     MatchExecutionResult,
 )
-from rps_runner.tournament.plan import validate_tournament_plan
+from rps_runner.tournament.plan import (
+    validate_sealed_tournament_artifacts,
+    validate_tournament_plan,
+)
 from rps_runner.tournament.runner import (
     BotArtifactManifest,
     Team,
@@ -84,7 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan = commands.add_parser(
         "plan", help="create or step an official container-native Tournament"
     )
-    plan.add_argument("--plan", required=True, type=Path)
+    plan.add_argument(
+        "--plan",
+        type=Path,
+        help="required when creating; optional when reopening a sealed Tournament",
+    )
     plan.add_argument("--catalog", required=True, type=Path)
     plan.add_argument("--artifact-store", type=Path)
     plan.add_argument("--directory", required=True, type=Path)
@@ -364,56 +371,94 @@ def _run_plan_command(
     error_output: TextIO,
 ) -> int:
     try:
-        plan_path = options.plan.expanduser().resolve()
-        store = (
-            options.artifact_store.expanduser().resolve()
-            if options.artifact_store is not None
-            else plan_path.parent / "artifact-store"
+        plan_path = (
+            options.plan.expanduser().resolve()
+            if options.plan is not None
+            else None
         )
+        if options.artifact_store is not None:
+            store = options.artifact_store.expanduser().resolve()
+        elif plan_path is not None:
+            store = plan_path.parent / "artifact-store"
+        else:
+            raise ValueError(
+                "Reopening without --plan requires an explicit --artifact-store"
+            )
         catalog = load_catalog(options.catalog.expanduser().resolve())
-        validated = validate_tournament_plan(plan_path, store, catalog)
 
-        def resolve(_team_id: str, artifact_digest: str) -> str:
+        if directory.exists():
+            sealed = load_manifest(directory).manifest
+            platform_by_digest = {
+                str(team["bot_artifact"]["artifact_digest"]): str(
+                    team["bot_artifact"]["platform"]
+                )
+                for team in sealed["roster"]
+            }
+            startup_timeout_seconds = float(sealed["startup_timeout_seconds"])
+            shutdown_timeout_seconds = float(sealed["shutdown_timeout_seconds"])
+        else:
+            if plan_path is None:
+                raise ValueError("Creating a Tournament requires --plan")
+            validated = validate_tournament_plan(plan_path, store, catalog)
+            platform_by_digest = validated.platform_by_digest
+            startup_timeout_seconds = validated.startup_timeout_seconds
+            shutdown_timeout_seconds = validated.shutdown_timeout_seconds
+
+        def resolve(team_id: str, artifact_digest: str) -> str:
             try:
-                platform = validated.platform_by_digest[artifact_digest]
+                platform = platform_by_digest[artifact_digest]
             except KeyError as error:
-                raise ValueError(
-                    "Bot Artifact is not selected by the Tournament plan"
+                raise InfrastructureError(
+                    "Bot Artifact is not selected by the sealed Tournament"
                 ) from error
-            return resolve_artifact(store, artifact_digest, platform)
+            try:
+                return resolve_artifact(store, artifact_digest, platform)
+            except ArtifactStoreIntegrityError as error:
+                failure = InfrastructureError(
+                    f"Bot Artifact archive resolution failed for {team_id}: {error}"
+                )
+                failure.retain_diagnostic(
+                    "artifact_resolution",
+                    {
+                        "team_id": team_id,
+                        "artifact_digest": artifact_digest,
+                        "platform": platform,
+                        "condition": str(error),
+                    },
+                )
+                raise failure from error
 
         if container_match_executor is None:
             executor = ContainerMatchExecutor(
                 resolve,
                 operations=ContainerOperations(
-                    startup_timeout_seconds=(
-                        validated.startup_timeout_seconds
-                    ),
-                    shutdown_timeout_seconds=(
-                        validated.shutdown_timeout_seconds
-                    ),
+                    startup_timeout_seconds=startup_timeout_seconds,
+                    shutdown_timeout_seconds=shutdown_timeout_seconds,
                 ),
             ).execute
         else:
             executor = container_match_executor
-        for team in validated.roster:
-            resolve(team.team_id, team.bot_artifact.artifact_digest)
 
         if directory.exists():
+            def verify_sealed_manifest(manifest: dict[str, object]) -> None:
+                if manifest.get("tournament_id") != options.tournament_id:
+                    raise ValueError(
+                        "Existing Tournament ID does not match --tournament-id"
+                    )
+                validate_sealed_tournament_artifacts(manifest, store, catalog)
+
             runner = TournamentRunner.open(
                 directory,
                 match_executor=executor,
                 artifact_digest_verifier=lambda team_id, digest: bool(
                     resolve(team_id, digest)
                 ),
-                sealed_manifest_verifier=lambda manifest: _verify_plan_manifest(
-                    manifest,
-                    options.tournament_id,
-                    validated,
-                ),
+                sealed_manifest_verifier=verify_sealed_manifest,
             )
             disposition = "resumed"
         else:
+            for team in validated.roster:
+                resolve(team.team_id, team.bot_artifact.artifact_digest)
             runner = TournamentRunner.create(
                 directory,
                 tournament_id=options.tournament_id,
@@ -446,25 +491,6 @@ def _run_plan_command(
     except (OSError, RuntimeError, StorageError, TypeError, ValueError) as error:
         print(f"rps-tournament: {error}", file=error_output)
         return ERROR_EXIT_CODE
-
-
-def _verify_plan_manifest(
-    manifest: dict[str, object],
-    tournament_id: str,
-    validated: object,
-) -> None:
-    incompatible = tournament_manifest_incompatibilities(
-        manifest,
-        tournament_id=tournament_id,
-        tournament_seed=validated.tournament_seed,
-        roster=validated.roster,
-        config=validated.config,
-    )
-    if incompatible:
-        raise ValueError(
-            "Existing Tournament is incompatible with the selected plan: "
-            + ", ".join(incompatible)
-        )
 
 
 def _demo_roster(

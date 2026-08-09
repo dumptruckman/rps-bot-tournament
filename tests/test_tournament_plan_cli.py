@@ -16,11 +16,13 @@ from rps_runner.tournament.match_executor import (
     MatchExecutionRequest,
     MatchExecutionResult,
 )
+from rps_runner.tournament.immutable import thaw_json
 from rps_runner.tournament.storage import (
     load_competition_records,
     load_manifest,
     load_operational_telemetry,
     load_scoreboard_projection,
+    seal_manifest,
 )
 from rps_runner.tournament_cli import main
 
@@ -333,6 +335,124 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(self.executor.requests, [])
         self.assertEqual(load_competition_records(self.directory), [])
         self.assertIsNotNone(load_scoreboard_projection(self.directory))
+
+    def test_resume_uses_sealed_manifest_when_draft_plan_is_unavailable(self) -> None:
+        code = self.run_plan("--create-only")
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        self.plan_path.unlink()
+        self.stdout = StringIO()
+        self.stderr = StringIO()
+        manifests = {
+            team["bot_artifact_manifest"]["artifact_digest"]: team[
+                "bot_artifact_manifest"
+            ]
+            for team in self.plan["teams"]
+        }
+        reports = {
+            (digest, "linux/arm64"): self._report(manifest)
+            for digest, manifest in manifests.items()
+        }
+
+        with (
+            patch(
+                "rps_runner.tournament.plan.verify_artifact_store",
+                return_value=self.index,
+            ),
+            patch(
+                "rps_runner.tournament.plan.load_retained_artifact_manifests",
+                return_value={
+                    (digest, "linux/arm64"): manifest
+                    for digest, manifest in manifests.items()
+                },
+            ),
+            patch(
+                "rps_runner.tournament.plan.load_retained_validation_reports",
+                return_value=reports,
+            ),
+            patch(
+                "rps_runner.tournament_cli.resolve_artifact",
+                return_value=self.digest("e"),
+            ) as resolve,
+        ):
+            code = main(
+                [
+                    "plan",
+                    "--catalog",
+                    str(CATALOG_PATH),
+                    "--artifact-store",
+                    str(self.store),
+                    "--directory",
+                    str(self.directory),
+                    "--tournament-id",
+                    "summer-cup-2026",
+                ],
+                container_match_executor=self.executor.execute,
+                stdout=self.stdout,
+                stderr=self.stderr,
+            )
+
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        self.assertEqual(len(self.executor.requests), 1)
+        self.assertEqual(resolve.call_count, 4)
+        self.assertIn("Tournament: resumed", self.stdout.getvalue())
+
+    def test_resume_rejects_an_artifact_store_with_another_index_identity(self) -> None:
+        self.assertEqual(self.run_plan("--create-only"), 0)
+        self.index["integrity"]["index_identity"] = (
+            "artifact-set-index-v1@" + self.digest("9")
+        )
+        self.stderr = StringIO()
+
+        code = self.run_plan()
+
+        self.assertEqual(code, 2)
+        self.assertIn("artifact-store index identity mismatch", self.stderr.getvalue())
+        self.assertEqual(self.executor.requests, [])
+
+    def test_resume_rejects_a_stale_catalog_identity(self) -> None:
+        self.assertEqual(self.run_plan("--create-only"), 0)
+        manifest = thaw_json(load_manifest(self.directory).manifest)
+        (self.directory / "manifest.json").unlink()
+        seal_manifest(
+            self.directory,
+            manifest
+            | {"catalog_identity": self.identity("catalog-v1", "9")},
+        )
+        self.stderr = StringIO()
+
+        code = self.run_plan()
+
+        self.assertEqual(code, 2)
+        self.assertIn("catalog", self.stderr.getvalue())
+        self.assertEqual(self.executor.requests, [])
+
+    def test_resume_rejects_a_stale_execution_profile_identity(self) -> None:
+        self.assertEqual(self.run_plan("--create-only"), 0)
+        manifest = thaw_json(load_manifest(self.directory).manifest)
+        (self.directory / "manifest.json").unlink()
+        seal_manifest(
+            self.directory,
+            manifest | {"startup_timeout_seconds": 99.0},
+        )
+        self.stderr = StringIO()
+
+        code = self.run_plan()
+
+        self.assertEqual(code, 2)
+        self.assertIn("execution-profile", self.stderr.getvalue())
+        self.assertEqual(self.executor.requests, [])
+
+    def test_resume_rejects_a_changed_final_validation_identity(self) -> None:
+        self.assertEqual(self.run_plan("--create-only"), 0)
+        self.stderr = StringIO()
+
+        code = self.run_plan(
+            report_override={"validation_identity": self.identity("validation-v1", "9")}
+        )
+
+        self.assertEqual(code, 2)
+        self.assertIn("final validation identity mismatch", self.stderr.getvalue())
+        self.assertEqual(self.executor.requests, [])
 
     def test_one_step_preserves_a_continuous_plan_as_the_current_mode(self) -> None:
         self.plan["execution"]["mode"] = "continuous"

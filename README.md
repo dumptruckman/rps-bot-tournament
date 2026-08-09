@@ -516,10 +516,15 @@ The adjacent `artifact-store` is used by default; pass `--artifact-store` when
 it is retained elsewhere. Before sealing, the command verifies the complete
 plan, catalog, profile/resources, validation identities, retained bytes, image
 digests, and native ARM64 platform. It loads missing selected images only from
-the verified archive. `--create-only` seals without stepping. Repeating the
-command verifies the same sealed inputs and advances the next canonical Match.
-Container diagnostics remain Operational Telemetry and never enter Competition
-Records or the Scoreboard Projection.
+the verified archive. `--create-only` seals without stepping.
+
+After creation, the sealed Tournament Manifest replaces the draft plan as the
+authority. Repeating the command may omit `--plan` when `--artifact-store` is
+explicit. Opening verifies the sealed catalog, profile, platform, validation,
+and artifact-store identities, restores missing images only from the verified
+archive, and advances the next canonical Match. Container and artifact-loading
+diagnostics remain Operational Telemetry and never enter Competition Records or
+the Scoreboard Projection.
 
 ### Ratify a native platform and the execution profile
 
