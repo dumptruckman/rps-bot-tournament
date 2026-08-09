@@ -17,6 +17,7 @@ from rps_runner.artifact_builder import (
 )
 from rps_runner.engine import ContainerOperations
 from rps_runner.engine.container_session import CONTAINER_ISOLATION_PROFILE_VERSION
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import (
     LanguageEnvironmentCatalog,
     SourceValidationError,
@@ -297,6 +298,7 @@ def _conformance_match_request(
     *,
     team_b_id: str = "candidate-b",
 ) -> MatchExecutionRequest:
+    profile = INITIAL_EXECUTION_PROFILE
     return MatchExecutionRequest(
         tournament_id="artifact-conformance",
         fixture_id="smoke-fixture",
@@ -312,17 +314,17 @@ def _conformance_match_request(
         bot_visible_seed_b=seed,
         protocol_version=1,
         scheduled_turns=300,
-        first_move_timeout_ms=250,
-        move_timeout_ms=50,
-        total_timeout_ms=2_000,
-        stderr_limit_bytes=65_536,
-        stdout_limit_bytes=4_096,
-        cpu_limit_ms=2_000,
-        cpu_quota_millis_per_second=1_000,
-        memory_limit_bytes=268_435_456,
-        process_limit=64,
-        open_file_limit=64,
-        filesystem_write_limit_bytes=16_777_216,
+        first_move_timeout_ms=profile.first_move_timeout_ms,
+        move_timeout_ms=profile.move_timeout_ms,
+        total_timeout_ms=profile.total_timeout_ms,
+        stderr_limit_bytes=profile.stderr_limit_bytes,
+        stdout_limit_bytes=profile.stdout_limit_bytes,
+        cpu_limit_ms=profile.cpu_limit_ms,
+        cpu_quota_millis_per_second=profile.cpu_quota_millis_per_second,
+        memory_limit_bytes=profile.memory_limit_bytes,
+        process_limit=profile.process_limit,
+        open_file_limit=profile.open_file_limit,
+        filesystem_write_limit_bytes=profile.filesystem_write_limit_bytes,
         network_access_allowed=False,
     )
 
@@ -479,7 +481,9 @@ def _execute_conforming_match(
     if outcome is None:
         raise CertificationFailure(description + " produced no outcome")
     faults = outcome.get("faults")
-    if faults:
+    if isinstance(faults, dict) and any(
+        fault is not None for fault in faults.values()
+    ):
         raise CertificationFailure(
             description
             + " protocol/timing/stream/resource conformance failed: "
@@ -521,9 +525,9 @@ def _run_diagnostic_artifacts(
     }
     expected_faults = {
         "import-time": {"unexpected_exit"},
-        "protocol-fault": {"invalid_move"},
+        "protocol-fault": {"invalid_response"},
         "slow-response": {"timeout"},
-        "memory": {"resource_exhaustion", "unexpected_exit"},
+        "memory": {"resource_oom", "unexpected_exit"},
         "premature-output": {"unexpected_output"},
     }
     attempt = 20
@@ -742,7 +746,7 @@ def certify_artifact_candidate(
         "catalog": candidate_identities["catalog"],
         "suite": SUITE_VERSION + "@" + str(candidate_identities["suite_candidate"]).split("@", 1)[1],
         "platform": candidate_identities["platform"],
-        "profile": CONTAINER_ISOLATION_PROFILE_VERSION + "@sha256:" + hashlib.sha256(CONTAINER_ISOLATION_PROFILE_VERSION.encode()).hexdigest(),
+        "profile": INITIAL_EXECUTION_PROFILE.identity,
         "core_tool": _core_tool_identity(),
         "builder_core_tool": candidate_identities["core_tool"],
     }

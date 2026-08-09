@@ -11,6 +11,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from rps_runner.certification_cli import main
+from rps_runner.artifact_certification import _execute_conforming_match
+from rps_runner.tournament.match_executor import MatchExecutionResult
 from rps_runner.language_environment import load_catalog
 from rps_runner.language_environment import SourceValidationError
 
@@ -120,6 +122,21 @@ class ArtifactCertificationCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertIn("organizer-final requires platform 'linux/arm64'", completed.stderr)
         self.assertFalse((self.directory / "certified").exists())
+
+    def test_successful_match_fault_slots_do_not_fail_certification(self) -> None:
+        executor = mock.Mock()
+        executor.execute.return_value = MatchExecutionResult(
+            infrastructure_failure=False,
+            competitive_outcome={
+                "status": "completed",
+                "faults": {"candidate-a": None, "candidate-b": None},
+            },
+            operational_telemetry={},
+        )
+
+        outcome = _execute_conforming_match(executor, mock.sentinel.request, "smoke")
+
+        self.assertEqual(outcome["status"], "completed")
 
     def test_advisory_report_records_practice_artifacts_without_gating_on_winner(self) -> None:
         candidate = self.catalog_candidate()

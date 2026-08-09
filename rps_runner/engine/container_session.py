@@ -17,13 +17,14 @@ from typing import BinaryIO, ClassVar, Optional, Sequence, cast
 
 from rps_runner.engine.bot_session import BotArtifactDisconnected
 from rps_runner.engine.models import InfrastructureError, MatchConfig
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 
 
 DEFAULT_READINESS_MARKER = b"RPS_READY_V1"
 IMPORT_STDERR_ESCAPE = b"RPS_STDERR_ESCAPE_V1:"
 SECURITY_EVIDENCE_PREFIX = "RPS_SECURITY_EVIDENCE_V1:"
 RESOURCE_EVIDENCE_PREFIX = "RPS_RESOURCE_EVIDENCE_V1:"
-CONTAINER_ISOLATION_PROFILE_VERSION = "docker-execution-v1"
+CONTAINER_ISOLATION_PROFILE_VERSION = INITIAL_EXECUTION_PROFILE.version
 RUNNER_OWNER_LABEL = "rps.runner.owner"
 MATCH_ATTEMPT_LABEL = "rps.match-attempt"
 BOT_POSITION_LABEL = "rps.bot-position"
@@ -147,9 +148,9 @@ class ContainerOperations:
     """Operational Docker settings kept outside competitive response budgets."""
 
     docker_command: tuple[str, ...] = ("docker",)
-    startup_timeout_seconds: float = 10.0
+    startup_timeout_seconds: float = INITIAL_EXECUTION_PROFILE.startup_timeout_seconds
     command_timeout_seconds: float = 10.0
-    shutdown_timeout_seconds: float = 3.0
+    shutdown_timeout_seconds: float = INITIAL_EXECUTION_PROFILE.shutdown_timeout_seconds
 
     def __post_init__(self) -> None:
         if not self.docker_command or any(not part for part in self.docker_command):

@@ -8,6 +8,7 @@ import sys
 from typing import Optional
 
 from rps_runner.engine import InfrastructureError, MatchConfig, run_match
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.tournament.match_executor import (
     ContainerMatchExecutor,
     MatchExecutionRequest,
@@ -42,6 +43,7 @@ def nonnegative_integer(value: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    profile = INITIAL_EXECUTION_PROFILE
     parser = argparse.ArgumentParser(
         prog="rps-run", description="Run a local Rock-Paper-Scissors bot match"
     )
@@ -58,27 +60,51 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bot-b-seed", type=unsigned_64_bit_integer)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
-        "--first-move-timeout-ms", type=positive_integer, default=250
-    )
-    parser.add_argument("--move-timeout-ms", type=positive_integer, default=50)
-    parser.add_argument("--total-timeout-ms", type=positive_integer, default=2000)
-    parser.add_argument(
-        "--stderr-limit-bytes", type=nonnegative_integer, default=65_536
-    )
-    parser.add_argument("--stdout-limit-bytes", type=positive_integer, default=4_096)
-    parser.add_argument("--cpu-limit-ms", type=positive_integer, default=2_000)
-    parser.add_argument(
-        "--cpu-quota-millis-per-second", type=positive_integer, default=1_000
+        "--first-move-timeout-ms",
+        type=positive_integer,
+        default=profile.first_move_timeout_ms,
     )
     parser.add_argument(
-        "--memory-limit-bytes", type=positive_integer, default=268_435_456
+        "--move-timeout-ms", type=positive_integer, default=profile.move_timeout_ms
     )
-    parser.add_argument("--process-limit", type=positive_integer, default=64)
-    parser.add_argument("--open-file-limit", type=positive_integer, default=64)
+    parser.add_argument(
+        "--total-timeout-ms",
+        type=positive_integer,
+        default=profile.total_timeout_ms,
+    )
+    parser.add_argument(
+        "--stderr-limit-bytes",
+        type=nonnegative_integer,
+        default=profile.stderr_limit_bytes,
+    )
+    parser.add_argument(
+        "--stdout-limit-bytes",
+        type=positive_integer,
+        default=profile.stdout_limit_bytes,
+    )
+    parser.add_argument(
+        "--cpu-limit-ms", type=positive_integer, default=profile.cpu_limit_ms
+    )
+    parser.add_argument(
+        "--cpu-quota-millis-per-second",
+        type=positive_integer,
+        default=profile.cpu_quota_millis_per_second,
+    )
+    parser.add_argument(
+        "--memory-limit-bytes",
+        type=positive_integer,
+        default=profile.memory_limit_bytes,
+    )
+    parser.add_argument(
+        "--process-limit", type=positive_integer, default=profile.process_limit
+    )
+    parser.add_argument(
+        "--open-file-limit", type=positive_integer, default=profile.open_file_limit
+    )
     parser.add_argument(
         "--filesystem-write-limit-bytes",
         type=positive_integer,
-        default=16_777_216,
+        default=profile.filesystem_write_limit_bytes,
     )
     return parser
 

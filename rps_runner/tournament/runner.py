@@ -11,6 +11,7 @@ import re
 from typing import Any, Optional, Union
 
 from rps_runner.engine import CONTAINER_ISOLATION_PROFILE_VERSION
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 
 from .competition import (
     MatchOutcome,
@@ -71,10 +72,10 @@ PROTOCOL_VERSION = 1
 RECORD_SCHEMA_VERSION = 5
 SCOREBOARD_VERSION = 1
 SCHEDULED_TURNS_PER_MATCH = 300
-FIRST_MOVE_TIMEOUT_MS = 250
-MOVE_TIMEOUT_MS = 50
-TOTAL_TIMEOUT_MS = 2000
-STDERR_LIMIT_BYTES = 65_536
+FIRST_MOVE_TIMEOUT_MS = INITIAL_EXECUTION_PROFILE.first_move_timeout_ms
+MOVE_TIMEOUT_MS = INITIAL_EXECUTION_PROFILE.move_timeout_ms
+TOTAL_TIMEOUT_MS = INITIAL_EXECUTION_PROFILE.total_timeout_ms
+STDERR_LIMIT_BYTES = INITIAL_EXECUTION_PROFILE.stderr_limit_bytes
 _MAX_U64 = (1 << 64) - 1
 _TEAM_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,62}\Z")
 _LANGUAGE_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
@@ -87,13 +88,17 @@ class MatchLimits:
     move_timeout_ms: int = MOVE_TIMEOUT_MS
     total_timeout_ms: int = TOTAL_TIMEOUT_MS
     stderr_limit_bytes: int = STDERR_LIMIT_BYTES
-    stdout_limit_bytes: int = 4_096
-    cpu_limit_ms: int = 2_000
-    cpu_quota_millis_per_second: int = 1_000
-    memory_limit_bytes: int = 268_435_456
-    process_limit: int = 64
-    open_file_limit: int = 64
-    filesystem_write_limit_bytes: int = 16_777_216
+    stdout_limit_bytes: int = INITIAL_EXECUTION_PROFILE.stdout_limit_bytes
+    cpu_limit_ms: int = INITIAL_EXECUTION_PROFILE.cpu_limit_ms
+    cpu_quota_millis_per_second: int = (
+        INITIAL_EXECUTION_PROFILE.cpu_quota_millis_per_second
+    )
+    memory_limit_bytes: int = INITIAL_EXECUTION_PROFILE.memory_limit_bytes
+    process_limit: int = INITIAL_EXECUTION_PROFILE.process_limit
+    open_file_limit: int = INITIAL_EXECUTION_PROFILE.open_file_limit
+    filesystem_write_limit_bytes: int = (
+        INITIAL_EXECUTION_PROFILE.filesystem_write_limit_bytes
+    )
     network_access_allowed: bool = False
 
 

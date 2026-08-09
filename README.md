@@ -459,6 +459,23 @@ source, image, runtime, wrapper, recipe, entrypoint, catalog, suite, platform,
 profile, and core-tool identity. A host-process development check is useful but
 is always reported as insufficient evidence for official validation.
 
+### Ratify a native platform and the execution profile
+
+Run the complete build, certification, and measured Python profile probe on a
+native organizer host:
+
+```text
+scripts/ratify-native-platform.sh linux/arm64 path/to/evidence
+```
+
+The command refuses a Docker server whose native architecture does not match the
+requested platform; emulation is not accepted. GitHub runs the same lane as
+`github-advisory` on native Linux/AMD64, while the organizer runs
+`organizer-final` on native Linux/ARM64. See
+[`docs/EXECUTION_PROFILE.md`](docs/EXECUTION_PROFILE.md) for the published
+ceilings, evidence, platform-specific runtime identities, and four-Match initial
+parallelism.
+
 ---
 
 # Submission Format

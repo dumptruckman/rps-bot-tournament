@@ -46,6 +46,9 @@ not competitive inputs.
 
 ## Initial global ceilings
 
+The normative values and calibration evidence are published in
+[`EXECUTION_PROFILE.md`](EXECUTION_PROFILE.md).
+
 | Ceiling | Initial value |
 | --- | ---: |
 | Concurrent CPU | 1,000 ms per second (one CPU) |
@@ -54,6 +57,11 @@ not competitive inputs.
 | PIDs/threads | 64 |
 | Open files | 64 |
 | Writable `/tmp` | 16,777,216 bytes |
+| Runtime/readiness startup | 10 seconds |
+| Graceful shutdown | 3 seconds |
+| First response | 250 ms |
+| Later response | 50 ms |
+| Total competitive response time | 2,000 ms |
 | stdout per response | 4,096 bytes |
 | stderr per Match | 65,536 bytes |
 

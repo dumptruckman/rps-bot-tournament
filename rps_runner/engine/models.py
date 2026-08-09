@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
+
 
 class InfrastructureError(RuntimeError):
     """The runner could not create or operate the match infrastructure."""
@@ -21,13 +23,13 @@ class MatchConfig:
     bot_b: str
     rounds: int
     seed: int
-    first_move_timeout_ms: int = 250
-    move_timeout_ms: int = 50
-    total_timeout_ms: int = 2000
-    stderr_limit_bytes: int = 65_536
+    first_move_timeout_ms: int = INITIAL_EXECUTION_PROFILE.first_move_timeout_ms
+    move_timeout_ms: int = INITIAL_EXECUTION_PROFILE.move_timeout_ms
+    total_timeout_ms: int = INITIAL_EXECUTION_PROFILE.total_timeout_ms
+    stderr_limit_bytes: int = INITIAL_EXECUTION_PROFILE.stderr_limit_bytes
     bot_a_seed: Optional[int] = None
     bot_b_seed: Optional[int] = None
-    stdout_limit_bytes: int = 4_096
+    stdout_limit_bytes: int = INITIAL_EXECUTION_PROFILE.stdout_limit_bytes
 
     def __post_init__(self) -> None:
         maximum_seed = 2**64 - 1
