@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import Callable, Optional, cast
 
 from rps_runner.engine import (
+    CONTAINER_ISOLATION_PROFILE_VERSION,
     ContainerBotSession,
+    ContainerIsolationProfile,
     ContainerOperations,
     DEFAULT_READINESS_MARKER,
     InfrastructureError,
@@ -58,6 +60,9 @@ class MatchExecutionRequest:
     process_limit: int
     filesystem_write_limit_bytes: int
     network_access_allowed: bool
+    open_file_limit: int = 64
+    cpu_quota_millis_per_second: int = 1_000
+    execution_profile_version: str = CONTAINER_ISOLATION_PROFILE_VERSION
 
     def __post_init__(self) -> None:
         if self.protocol_version != 1:
@@ -73,21 +78,29 @@ class MatchExecutionRequest:
             "cpu_limit_ms",
             "memory_limit_bytes",
             "process_limit",
+            "open_file_limit",
+            "cpu_quota_millis_per_second",
         )
         for field_name in positive_limit_fields:
             value = getattr(self, field_name)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{field_name} must be a positive integer")
+        if self.cpu_limit_ms % 1000 != 0:
+            raise ValueError("cpu_limit_ms must be a whole number of seconds")
         if (
             not isinstance(self.filesystem_write_limit_bytes, int)
             or isinstance(self.filesystem_write_limit_bytes, bool)
-            or self.filesystem_write_limit_bytes < 0
+            or self.filesystem_write_limit_bytes <= 0
         ):
             raise ValueError(
-                "filesystem_write_limit_bytes must be a non-negative integer"
+                "filesystem_write_limit_bytes must be a positive integer"
             )
         if not isinstance(self.network_access_allowed, bool):
             raise ValueError("network_access_allowed must be a boolean")
+        if self.network_access_allowed:
+            raise ValueError("Official Match containers cannot allow network access")
+        if self.execution_profile_version != CONTAINER_ISOLATION_PROFILE_VERSION:
+            raise ValueError("Unsupported execution_profile_version")
 
 
 @dataclass(frozen=True)
@@ -204,6 +217,16 @@ class ContainerMatchExecutor:
         self.readiness_marker = readiness_marker
 
     def execute(self, request: MatchExecutionRequest) -> MatchExecutionResult:
+        profile = ContainerIsolationProfile(
+            version=request.execution_profile_version,
+            cpu_millis_per_second=request.cpu_limit_ms,
+            memory_limit_bytes=request.memory_limit_bytes,
+            process_limit=request.process_limit,
+            open_file_limit=request.open_file_limit,
+            writable_filesystem_limit_bytes=request.filesystem_write_limit_bytes,
+            cpu_quota_millis_per_second=request.cpu_quota_millis_per_second,
+        )
+
         def create_session(
             bot_position: str,
             artifact_reference: str,
@@ -213,6 +236,7 @@ class ContainerMatchExecutor:
                 bot_position,
                 artifact_reference,
                 session_config,
+                profile,
                 operations=self.operations,
                 readiness_marker=self.readiness_marker,
             )
@@ -637,6 +661,9 @@ def _resource_limits(request: MatchExecutionRequest) -> dict[str, object]:
         "cpu_limit_ms": request.cpu_limit_ms,
         "memory_limit_bytes": request.memory_limit_bytes,
         "process_limit": request.process_limit,
+        "open_file_limit": request.open_file_limit,
+        "cpu_quota_millis_per_second": request.cpu_quota_millis_per_second,
         "filesystem_write_limit_bytes": request.filesystem_write_limit_bytes,
         "network_access_allowed": request.network_access_allowed,
+        "execution_profile_version": request.execution_profile_version,
     }

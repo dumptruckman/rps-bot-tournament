@@ -155,7 +155,10 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(manifest["tournament_seed"], "123456789")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["seed_derivation_version"], 1)
-        self.assertEqual(manifest["record_schema_version"], 4)
+        self.assertEqual(manifest["record_schema_version"], 5)
+        self.assertEqual(
+            manifest["execution_profile_version"], "docker-execution-v1"
+        )
         self.assertEqual(manifest["scoreboard_version"], 1)
         self.assertEqual(manifest["scheduled_turns_per_match"], 300)
         self.assertEqual(manifest["execution_mode"], "step")
@@ -308,9 +311,11 @@ class TournamentCreationTests(unittest.TestCase):
                 "stderr_limit_bytes": 65536,
                 "stdout_limit_bytes": 4096,
                 "cpu_limit_ms": 2000,
+                "cpu_quota_millis_per_second": 1000,
                 "memory_limit_bytes": 268435456,
-                "process_limit": 1,
-                "filesystem_write_limit_bytes": 0,
+                "process_limit": 64,
+                "open_file_limit": 64,
+                "filesystem_write_limit_bytes": 16777216,
                 "network_access_allowed": False,
             },
         )
@@ -492,9 +497,11 @@ class TournamentCreationTests(unittest.TestCase):
             total_timeout_ms=103,
             stderr_limit_bytes=104,
             stdout_limit_bytes=105,
-            cpu_limit_ms=106,
+            cpu_limit_ms=3_000,
+            cpu_quota_millis_per_second=110,
             memory_limit_bytes=107,
             process_limit=2,
+            open_file_limit=109,
             filesystem_write_limit_bytes=108,
             network_access_allowed=False,
         )
@@ -502,6 +509,7 @@ class TournamentCreationTests(unittest.TestCase):
             execution_mode="step",
             match_limits=limits,
             continuous_parallelism=3,
+            execution_profile_version="docker-execution-v1",
         )
         requests: list[MatchExecutionRequest] = []
 
@@ -539,17 +547,22 @@ class TournamentCreationTests(unittest.TestCase):
                     "total_timeout_ms": 103,
                     "stderr_limit_bytes": 104,
                     "stdout_limit_bytes": 105,
-                    "cpu_limit_ms": 106,
+                    "cpu_limit_ms": 3000,
+                    "cpu_quota_millis_per_second": 110,
                     "memory_limit_bytes": 107,
                     "process_limit": 2,
+                    "open_file_limit": 109,
                     "filesystem_write_limit_bytes": 108,
                     "network_access_allowed": False,
                 },
             )
             self.assertEqual(manifest["protocol_version"], 1)
-            self.assertEqual(manifest["record_schema_version"], 4)
+            self.assertEqual(manifest["record_schema_version"], 5)
             self.assertEqual(manifest["seed_derivation_version"], 1)
             self.assertEqual(manifest["scoreboard_version"], 1)
+            self.assertEqual(
+                manifest["execution_profile_version"], "docker-execution-v1"
+            )
             self.assertEqual(
                 (self.directory / "manifest.json").read_bytes(),
                 (other_directory / "manifest.json").read_bytes(),
@@ -563,9 +576,14 @@ class TournamentCreationTests(unittest.TestCase):
         self.assertEqual(requests[0].total_timeout_ms, 103)
         self.assertEqual(requests[0].stderr_limit_bytes, 104)
         self.assertEqual(requests[0].stdout_limit_bytes, 105)
-        self.assertEqual(requests[0].cpu_limit_ms, 106)
+        self.assertEqual(requests[0].cpu_limit_ms, 3000)
+        self.assertEqual(requests[0].cpu_quota_millis_per_second, 110)
         self.assertEqual(requests[0].memory_limit_bytes, 107)
         self.assertEqual(requests[0].process_limit, 2)
+        self.assertEqual(requests[0].open_file_limit, 109)
+        self.assertEqual(
+            requests[0].execution_profile_version, "docker-execution-v1"
+        )
         self.assertEqual(requests[0].filesystem_write_limit_bytes, 108)
         self.assertFalse(requests[0].network_access_allowed)
         with self.assertRaises(FrozenInstanceError):
@@ -2979,9 +2997,11 @@ class TournamentStepModeTests(unittest.TestCase):
                 stderr_limit_bytes=65536,
                 stdout_limit_bytes=4096,
                 cpu_limit_ms=2000,
+                cpu_quota_millis_per_second=1000,
                 memory_limit_bytes=268435456,
-                process_limit=1,
-                filesystem_write_limit_bytes=0,
+                process_limit=64,
+                open_file_limit=64,
+                filesystem_write_limit_bytes=16777216,
                 network_access_allowed=False,
             ),
         )
@@ -4106,7 +4126,7 @@ class TournamentResumeTests(unittest.TestCase):
             )
 
         self.assertEqual(caught.exception.field, "record_schema_version")
-        self.assertEqual(caught.exception.expected, 4)
+        self.assertEqual(caught.exception.expected, 5)
         self.assertEqual(caught.exception.actual, 3)
 
     def test_open_rejects_changed_nested_manifest_rule(self) -> None:

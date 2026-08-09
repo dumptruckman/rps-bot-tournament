@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import redirect_stderr
+import io
 import os
 from pathlib import Path
 import shlex
@@ -9,8 +11,10 @@ import sys
 import tempfile
 from typing import Any, get_type_hints, Optional
 import unittest
+from unittest.mock import patch
 
 from rps_runner.cli import main
+from rps_runner.tournament.match_executor import MatchExecutionResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +33,64 @@ def test_bot(name: str, *arguments: object) -> str:
 
 
 class MatchEngineCliTests(unittest.TestCase):
+    def test_public_container_match_uses_the_hardened_executor(self) -> None:
+        output = self.directory / "container-result.json"
+        execution_result = MatchExecutionResult(
+            infrastructure_failure=False,
+            competitive_outcome={"status": "completed", "winner_team_id": "bot-a"},
+            operational_telemetry={"profile": "docker-execution-v1"},
+        )
+        with patch("rps_runner.cli.ContainerMatchExecutor") as executor_type:
+            executor_type.return_value.execute.return_value = execution_result
+
+            exit_code = main(
+                [
+                    "--container",
+                    "--bot-a",
+                    "sha256:" + "a" * 64,
+                    "--bot-b",
+                    "sha256:" + "b" * 64,
+                    "--rounds",
+                    "300",
+                    "--seed",
+                    "12345",
+                    "--bot-a-seed",
+                    "111",
+                    "--bot-b-seed",
+                    "222",
+                    "--output",
+                    str(output),
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        request = executor_type.return_value.execute.call_args.args[0]
+        self.assertEqual(request.bot_visible_seed_a, 111)
+        self.assertEqual(request.bot_visible_seed_b, 222)
+        self.assertEqual(request.execution_profile_version, "docker-execution-v1")
+        self.assertEqual(request.cpu_quota_millis_per_second, 1000)
+        result = json.loads(output.read_text())
+        self.assertEqual(result["competitive_outcome"]["winner_team_id"], "bot-a")
+
+    def test_public_container_match_rejects_mutable_image_tags(self) -> None:
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                main(
+                    [
+                        "--container",
+                        "--bot-a",
+                        "candidate:latest",
+                        "--bot-b",
+                        "sha256:" + "b" * 64,
+                        "--rounds",
+                        "300",
+                        "--seed",
+                        "1",
+                        "--output",
+                        str(self.directory / "result.json"),
+                    ]
+                )
+
     def test_cli_type_hints_resolve_on_supported_python_versions(self) -> None:
         hints = get_type_hints(main)
 

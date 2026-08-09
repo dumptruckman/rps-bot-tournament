@@ -26,7 +26,7 @@ def log(command: str, **details: object) -> None:
 
 def create(arguments: list[str]) -> int:
     image = arguments[-1]
-    log("create", image=image)
+    log("create", image=image, arguments=arguments)
     if image == "create-failure":
         print("simulated create failure", file=sys.stderr)
         return 19

@@ -4,7 +4,9 @@ from rps_runner.engine.bot_session import (
     BotSessionFactory,
 )
 from rps_runner.engine.container_session import (
+    CONTAINER_ISOLATION_PROFILE_VERSION,
     ContainerBotSession,
+    ContainerIsolationProfile,
     ContainerOperations,
     DEFAULT_READINESS_MARKER,
 )
@@ -16,7 +18,9 @@ __all__ = [
     "BotArtifactDisconnected",
     "BotSession",
     "BotSessionFactory",
+    "CONTAINER_ISOLATION_PROFILE_VERSION",
     "ContainerBotSession",
+    "ContainerIsolationProfile",
     "ContainerOperations",
     "DEFAULT_READINESS_MARKER",
     "InfrastructureError",

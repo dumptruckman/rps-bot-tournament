@@ -53,7 +53,8 @@ def request(**overrides: object) -> MatchExecutionRequest:
         "total_timeout_ms": 903,
         "stderr_limit_bytes": 904,
         "stdout_limit_bytes": 905,
-        "cpu_limit_ms": 906,
+        "cpu_limit_ms": 3_000,
+        "cpu_quota_millis_per_second": 909,
         "memory_limit_bytes": 907,
         "process_limit": 2,
         "filesystem_write_limit_bytes": 908,
@@ -157,9 +158,11 @@ class TournamentMatchExecutorTests(unittest.TestCase):
         cases = (
             ("stdout_limit_bytes", 0),
             ("cpu_limit_ms", 0),
+            ("cpu_limit_ms", 1_001),
+            ("cpu_quota_millis_per_second", 0),
             ("memory_limit_bytes", 0),
             ("process_limit", 0),
-            ("filesystem_write_limit_bytes", -1),
+            ("filesystem_write_limit_bytes", 0),
             ("network_access_allowed", "no"),
         )
 
@@ -297,11 +300,14 @@ class TournamentMatchExecutorTests(unittest.TestCase):
                 "total_timeout_ms": 903,
                 "stderr_limit_bytes": 904,
                 "stdout_limit_bytes": 905,
-                "cpu_limit_ms": 906,
+                "cpu_limit_ms": 3000,
+                "cpu_quota_millis_per_second": 909,
                 "memory_limit_bytes": 907,
                 "process_limit": 2,
+                "open_file_limit": 64,
                 "filesystem_write_limit_bytes": 908,
                 "network_access_allowed": False,
+                "execution_profile_version": "docker-execution-v1",
             },
         )
 
@@ -332,7 +338,7 @@ class TournamentMatchExecutorTests(unittest.TestCase):
         )
         self.assertEqual(
             result.operational_telemetry["resource_limits"]["cpu_limit_ms"],
-            906,
+            3000,
         )
 
     def test_wrong_engine_turn_count_becomes_an_infrastructure_failure(self) -> None:
@@ -518,11 +524,14 @@ class TournamentMatchExecutorTests(unittest.TestCase):
                     "total_timeout_ms": 903,
                     "stderr_limit_bytes": 904,
                     "stdout_limit_bytes": 905,
-                    "cpu_limit_ms": 906,
+                    "cpu_limit_ms": 3000,
+                    "cpu_quota_millis_per_second": 909,
                     "memory_limit_bytes": 907,
                     "process_limit": 2,
+                    "open_file_limit": 64,
                     "filesystem_write_limit_bytes": 908,
                     "network_access_allowed": False,
+                    "execution_profile_version": "docker-execution-v1",
                 },
                 "commands": {
                     "red-team": "/red-team/sha256:red",

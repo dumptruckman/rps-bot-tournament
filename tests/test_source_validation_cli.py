@@ -106,7 +106,7 @@ class SourceValidationCliTests(unittest.TestCase):
                 "recipe": "python-build-recipe-v1",
                 "source_schema": "python-source-schema-v1",
                 "workflow": "source-validation-workflow-v1",
-                "wrapper": "python-wrapper-v1",
+                "wrapper": "python-wrapper-v2",
             }
         self.assertEqual(set(first["versions"]), set(expected_versions))
         for identity_name, version in expected_versions.items():

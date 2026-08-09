@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
+import hashlib
 import math
 import os
+from pathlib import Path
 import subprocess
 import threading
 import time
-from typing import BinaryIO, Optional, Sequence, cast
+from typing import BinaryIO, ClassVar, Optional, Sequence, cast
 import uuid
 
 from rps_runner.engine.bot_session import BotArtifactDisconnected
@@ -15,6 +18,119 @@ from rps_runner.engine.models import InfrastructureError, MatchConfig
 
 DEFAULT_READINESS_MARKER = b"RPS_READY_V1"
 IMPORT_STDERR_ESCAPE = b"RPS_STDERR_ESCAPE_V1:"
+CONTAINER_ISOLATION_PROFILE_VERSION = "docker-execution-v1"
+_SECCOMP_POLICY_PATH = Path(__file__).with_name(
+    "seccomp-docker-execution-v1.json"
+)
+_SECCOMP_POLICY_SHA256 = (
+    "8887966730a34413633a566ddf320097b5b526525c4b16a1f8587dea26986400"
+)
+
+
+@dataclass(frozen=True)
+class ContainerIsolationProfile:
+    """One immutable prevention-first contract for every Bot Position."""
+
+    version: str
+    cpu_millis_per_second: int
+    memory_limit_bytes: int
+    process_limit: int
+    open_file_limit: int
+    writable_filesystem_limit_bytes: int
+    cpu_quota_millis_per_second: int = 1_000
+    NUMERIC_USER: ClassVar[str] = "65532:65532"
+    HOSTNAME: ClassVar[str] = "rps-bot"
+    INFRASTRUCTURE_ENVIRONMENT: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("LANG", "C.UTF-8"),
+        ("LC_ALL", "C.UTF-8"),
+        ("TZ", "UTC"),
+        ("HOME", "/tmp"),
+        ("TMPDIR", "/tmp"),
+    )
+    SECCOMP_POLICY_SHA256: ClassVar[str] = _SECCOMP_POLICY_SHA256
+
+    def __post_init__(self) -> None:
+        if self.version != CONTAINER_ISOLATION_PROFILE_VERSION:
+            raise ValueError(
+                "Unsupported container isolation profile version: "
+                f"{self.version!r}"
+            )
+        for field_name in (
+            "cpu_millis_per_second",
+            "memory_limit_bytes",
+            "process_limit",
+            "open_file_limit",
+            "writable_filesystem_limit_bytes",
+            "cpu_quota_millis_per_second",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{field_name} must be a positive integer")
+        if self.cpu_millis_per_second % 1000 != 0:
+            raise ValueError("cpu_millis_per_second must use whole CPU seconds")
+
+    def create_arguments(self, protocol_environment: tuple[str, ...]) -> list[str]:
+        """Translate the versioned contract into Docker create arguments."""
+
+        seccomp_path = self._verified_seccomp_policy_path()
+        cpu_count = str(
+            Decimal(self.cpu_quota_millis_per_second) / Decimal(1000)
+        )
+        total_cpu_seconds = self.cpu_millis_per_second // 1000
+        arguments = [
+            "--network",
+            "none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,nodev,"
+            f"size={self.writable_filesystem_limit_bytes},"
+            "mode=700,uid=65532,gid=65532",
+            "--tmpfs",
+            "/dev/shm:ro,noexec,nosuid,nodev,size=4096,mode=000",
+            "--user",
+            self.NUMERIC_USER,
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges=true",
+            "--security-opt",
+            f"seccomp={seccomp_path}",
+            "--pids-limit",
+            str(self.process_limit),
+            "--ulimit",
+            f"nofile={self.open_file_limit}:{self.open_file_limit}",
+            "--ulimit",
+            f"cpu={total_cpu_seconds}:{total_cpu_seconds}",
+            "--memory",
+            str(self.memory_limit_bytes),
+            "--memory-swap",
+            str(self.memory_limit_bytes),
+            "--cpus",
+            cpu_count,
+            "--hostname",
+            self.HOSTNAME,
+            "--ipc",
+            "private",
+            "--cgroupns",
+            "private",
+        ]
+        for name, value in self.INFRASTRUCTURE_ENVIRONMENT:
+            arguments.extend(("--env", f"{name}={value}"))
+        for value in protocol_environment:
+            arguments.extend(("--env", value))
+        return arguments
+
+    def _verified_seccomp_policy_path(self) -> Path:
+        try:
+            content = _SECCOMP_POLICY_PATH.read_bytes()
+        except OSError as error:
+            raise InfrastructureError(
+                f"Could not read pinned syscall policy: {error}"
+            ) from error
+        actual = hashlib.sha256(content).hexdigest()
+        if actual != self.SECCOMP_POLICY_SHA256:
+            raise InfrastructureError("Pinned syscall policy digest does not match")
+        return _SECCOMP_POLICY_PATH
 
 
 @dataclass(frozen=True)
@@ -115,6 +231,7 @@ class ContainerBotSession:
     bot_position: str
     artifact_reference: str
     config: MatchConfig
+    isolation_profile: ContainerIsolationProfile
     operations: ContainerOperations = field(default_factory=ContainerOperations)
     readiness_marker: bytes = DEFAULT_READINESS_MARKER
     container_id: Optional[str] = None
@@ -138,13 +255,16 @@ class ContainerBotSession:
                 "--name",
                 self.container_id,
                 "--interactive",
-                "--env",
-                "RPS_PROTOCOL_VERSION=1",
-                "--env",
-                f"RPS_ROUNDS={self.config.rounds}",
-                "--env",
-                "RPS_SEED="
-                + str(self.config.seed_for_bot_position(self.bot_position)),
+                *self.isolation_profile.create_arguments(
+                    (
+                        "RPS_PROTOCOL_VERSION=1",
+                        f"RPS_ROUNDS={self.config.rounds}",
+                        "RPS_SEED="
+                        + str(
+                            self.config.seed_for_bot_position(self.bot_position)
+                        ),
+                    )
+                ),
                 self.artifact_reference,
             ],
             "create",

@@ -61,9 +61,11 @@ class CapacityWorkloadTests(unittest.TestCase):
             stderr_limit_bytes=65_536,
             stdout_limit_bytes=4_096,
             cpu_limit_ms=2_000,
+            cpu_quota_millis_per_second=1_000,
             memory_limit_bytes=268_435_456,
-            process_limit=1,
-            filesystem_write_limit_bytes=0,
+            process_limit=64,
+            open_file_limit=64,
+            filesystem_write_limit_bytes=16_777_216,
             network_access_allowed=False,
         )
 

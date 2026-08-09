@@ -3,13 +3,21 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Optional
 
 from rps_runner.engine import InfrastructureError, MatchConfig, run_match
+from rps_runner.tournament.match_executor import (
+    ContainerMatchExecutor,
+    MatchExecutionRequest,
+)
 
 
 INFRASTRUCTURE_ERROR_EXIT_CODE = 2
+_IMMUTABLE_IMAGE_REFERENCE = re.compile(
+    r"(?:sha256:[0-9a-f]{64}|[^@\s]+@sha256:[0-9a-f]{64})\Z"
+)
 
 
 def positive_integer(value: str) -> int:
@@ -39,8 +47,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--bot-a", required=True, help="command used to start bot A")
     parser.add_argument("--bot-b", required=True, help="command used to start bot B")
+    parser.add_argument(
+        "--container",
+        action="store_true",
+        help="treat --bot-a and --bot-b as immutable container image references",
+    )
     parser.add_argument("--rounds", required=True, type=positive_integer)
     parser.add_argument("--seed", required=True, type=unsigned_64_bit_integer)
+    parser.add_argument("--bot-a-seed", type=unsigned_64_bit_integer)
+    parser.add_argument("--bot-b-seed", type=unsigned_64_bit_integer)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
         "--first-move-timeout-ms", type=positive_integer, default=250
@@ -49,6 +64,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--total-timeout-ms", type=positive_integer, default=2000)
     parser.add_argument(
         "--stderr-limit-bytes", type=nonnegative_integer, default=65_536
+    )
+    parser.add_argument("--stdout-limit-bytes", type=positive_integer, default=4_096)
+    parser.add_argument("--cpu-limit-ms", type=positive_integer, default=2_000)
+    parser.add_argument(
+        "--cpu-quota-millis-per-second", type=positive_integer, default=1_000
+    )
+    parser.add_argument(
+        "--memory-limit-bytes", type=positive_integer, default=268_435_456
+    )
+    parser.add_argument("--process-limit", type=positive_integer, default=64)
+    parser.add_argument("--open-file-limit", type=positive_integer, default=64)
+    parser.add_argument(
+        "--filesystem-write-limit-bytes",
+        type=positive_integer,
+        default=16_777_216,
     )
     return parser
 
@@ -59,7 +89,20 @@ def _write_result(path: Path, result: dict[str, object]) -> None:
 
 
 def main(arguments: Optional[list[str]] = None) -> int:
-    options = build_parser().parse_args(arguments)
+    parser = build_parser()
+    options = parser.parse_args(arguments)
+    if options.container:
+        if options.rounds != 300:
+            parser.error("official container Matches require exactly 300 rounds")
+        for option_name in ("bot_a", "bot_b"):
+            value = getattr(options, option_name)
+            if _IMMUTABLE_IMAGE_REFERENCE.fullmatch(value) is None:
+                parser.error(
+                    "container image references must use an immutable sha256 digest"
+                )
+        if options.cpu_limit_ms % 1000 != 0:
+            parser.error("--cpu-limit-ms must be a whole number of seconds")
+        return _run_container_match(options)
     config = MatchConfig(
         bot_a=options.bot_a,
         bot_b=options.bot_b,
@@ -96,6 +139,60 @@ def main(arguments: Optional[list[str]] = None) -> int:
         _write_result(options.output, result)
     except OSError as error:
         print(f"rps-run: could not write result: {error}", file=sys.stderr)
+        return INFRASTRUCTURE_ERROR_EXIT_CODE
+    return 0
+
+
+def _run_container_match(options: argparse.Namespace) -> int:
+    images = {"bot-a": options.bot_a, "bot-b": options.bot_b}
+    request = MatchExecutionRequest(
+        tournament_id="single-match",
+        fixture_id="single-match-fixture",
+        series_id="single-match-series",
+        match_id="single-match-1",
+        attempt_number=1,
+        team_a_id="bot-a",
+        team_b_id="bot-b",
+        artifact_digest_a=options.bot_a,
+        artifact_digest_b=options.bot_b,
+        match_seed=options.seed,
+        bot_visible_seed_a=(
+            options.seed if options.bot_a_seed is None else options.bot_a_seed
+        ),
+        bot_visible_seed_b=(
+            options.seed if options.bot_b_seed is None else options.bot_b_seed
+        ),
+        protocol_version=1,
+        scheduled_turns=options.rounds,
+        first_move_timeout_ms=options.first_move_timeout_ms,
+        move_timeout_ms=options.move_timeout_ms,
+        total_timeout_ms=options.total_timeout_ms,
+        stderr_limit_bytes=options.stderr_limit_bytes,
+        stdout_limit_bytes=options.stdout_limit_bytes,
+        cpu_limit_ms=options.cpu_limit_ms,
+        cpu_quota_millis_per_second=options.cpu_quota_millis_per_second,
+        memory_limit_bytes=options.memory_limit_bytes,
+        process_limit=options.process_limit,
+        open_file_limit=options.open_file_limit,
+        filesystem_write_limit_bytes=options.filesystem_write_limit_bytes,
+        network_access_allowed=False,
+    )
+    result = ContainerMatchExecutor(
+        lambda team_id, digest: images[team_id]
+    ).execute(request)
+    output = {
+        "infrastructure_failure": result.infrastructure_failure,
+        "competitive_outcome": result.competitive_outcome,
+        "operational_telemetry": result.operational_telemetry,
+    }
+    try:
+        _write_result(options.output, output)
+    except OSError as error:
+        print(f"rps-run: could not write result: {error}", file=sys.stderr)
+        return INFRASTRUCTURE_ERROR_EXIT_CODE
+    if result.infrastructure_failure:
+        message = result.operational_telemetry["infrastructure_failure"]["message"]
+        print(f"rps-run: {message}", file=sys.stderr)
         return INFRASTRUCTURE_ERROR_EXIT_CODE
     return 0
 

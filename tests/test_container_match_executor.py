@@ -20,6 +20,10 @@ from tests.test_tournament_match_executor import checking_bot, request
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FAKE_DOCKER = PROJECT_ROOT / "tests" / "fixtures" / "fake_docker.py"
 CATALOG = PROJECT_ROOT / "language_environments" / "catalog-v1" / "catalog.json"
+ISOLATION_STRATEGY = PROJECT_ROOT / "tests" / "fixtures" / "isolation_strategy.py"
+CPU_EXHAUSTION_STRATEGY = (
+    PROJECT_ROOT / "tests" / "fixtures" / "cpu_exhaustion_strategy.py"
+)
 
 
 class ContainerMatchExecutorTests(unittest.TestCase):
@@ -71,6 +75,91 @@ class ContainerMatchExecutorTests(unittest.TestCase):
         self.assertLess(abs(starts[0]["time_ns"] - starts[1]["time_ns"]), 100_000_000)
         self.assertEqual(
             sorted(call["command"] for call in self.calls()).count("rm"), 2
+        )
+
+    def test_public_match_applies_the_same_isolation_profile_to_both_positions(
+        self,
+    ) -> None:
+        result = self.executor(
+            {"red-team": "fixed-r", "blue-team": "fixed-s"}
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        creates = [call for call in self.calls() if call["command"] == "create"]
+        self.assertEqual(len(creates), 2)
+        normalized: list[list[str]] = []
+        for call in creates:
+            arguments = list(call["arguments"])
+            arguments[arguments.index("--name") + 1] = "<container>"
+            for index, argument in enumerate(arguments):
+                if argument == "--env" and arguments[index + 1].startswith(
+                    "RPS_SEED="
+                ):
+                    arguments[index + 1] = "RPS_SEED=<bot-visible>"
+            arguments[-1] = "<artifact>"
+            normalized.append(arguments)
+
+        self.assertEqual(normalized[0], normalized[1])
+        arguments = normalized[0]
+        for prohibited in (
+            "--cap-add",
+            "--env-file",
+            "--mount",
+            "--privileged",
+            "--use-api-socket",
+            "--volume",
+        ):
+            self.assertNotIn(prohibited, arguments)
+        for expected in (
+            ("--network", "none"),
+            ("--read-only",),
+            ("--user", "65532:65532"),
+            ("--cap-drop", "ALL"),
+            ("--security-opt", "no-new-privileges=true"),
+            ("--pids-limit", "2"),
+            ("--ulimit", "nofile=64:64"),
+            ("--memory", "907"),
+            ("--memory-swap", "907"),
+            ("--cpus", "0.909"),
+            ("--hostname", "rps-bot"),
+            ("--ipc", "private"),
+            ("--cgroupns", "private"),
+        ):
+            start = arguments.index(expected[0])
+            self.assertEqual(arguments[start : start + len(expected)], list(expected))
+        self.assertTrue(
+            any(
+                arguments[index] == "--security-opt"
+                and arguments[index + 1].startswith("seccomp=")
+                for index in range(len(arguments) - 1)
+            )
+        )
+        self.assertIn("cpu=3:3", arguments)
+        tmpfs = arguments[arguments.index("--tmpfs") + 1]
+        self.assertEqual(
+            tmpfs,
+            "/tmp:rw,noexec,nosuid,nodev,size=908,mode=700,uid=65532,gid=65532",
+        )
+        self.assertIn(
+            "/dev/shm:ro,noexec,nosuid,nodev,size=4096,mode=000", arguments
+        )
+        environments = [
+            arguments[index + 1]
+            for index, argument in enumerate(arguments)
+            if argument == "--env"
+        ]
+        self.assertEqual(
+            environments,
+            [
+                "LANG=C.UTF-8",
+                "LC_ALL=C.UTF-8",
+                "TZ=UTC",
+                "HOME=/tmp",
+                "TMPDIR=/tmp",
+                "RPS_PROTOCOL_VERSION=1",
+                "RPS_ROUNDS=300",
+                "RPS_SEED=<bot-visible>",
+            ],
         )
 
     def test_split_readiness_is_removed_from_bounded_artifact_stderr(self) -> None:
@@ -203,14 +292,23 @@ class ContainerMatchExecutorTests(unittest.TestCase):
 )
 class ContainerMatchDockerIntegrationTests(unittest.TestCase):
     def build_candidate(
-        self, directory: Path, name: str, move: str, platform: str
+        self,
+        directory: Path,
+        name: str,
+        move: str,
+        platform: str,
+        *,
+        strategy_source: bytes | None = None,
     ) -> dict[str, Any]:
         source = directory / (name + "-source")
         source.mkdir()
-        (source / "strategy.py").write_text(
-            "def choose_move(turn, my_history, opponent_history, rng):\n"
-            f"    return {move!r}\n"
-        )
+        if strategy_source is None:
+            (source / "strategy.py").write_text(
+                "def choose_move(turn, my_history, opponent_history, rng):\n"
+                f"    return {move!r}\n"
+            )
+        else:
+            (source / "strategy.py").write_bytes(strategy_source)
         bundle = directory / (name + "-bundle")
         validation = subprocess.run(
             [
@@ -269,6 +367,12 @@ class ContainerMatchDockerIntegrationTests(unittest.TestCase):
             match_request = request(
                 artifact_digest_a=candidates["red-team"]["artifact_digest"],
                 artifact_digest_b=candidates["blue-team"]["artifact_digest"],
+                cpu_limit_ms=2_000,
+                cpu_quota_millis_per_second=1_000,
+                memory_limit_bytes=268_435_456,
+                process_limit=64,
+                open_file_limit=64,
+                filesystem_write_limit_bytes=16_777_216,
             )
             try:
                 container = ContainerMatchExecutor(
@@ -286,6 +390,125 @@ class ContainerMatchDockerIntegrationTests(unittest.TestCase):
                 self.assertFalse(container.infrastructure_failure)
                 self.assertEqual(
                     container.competitive_outcome, host.competitive_outcome
+                )
+            finally:
+                for candidate in candidates.values():
+                    subprocess.run(
+                        [
+                            "docker",
+                            "image",
+                            "rm",
+                            candidate["retention"]["local_image_reference"],
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+
+    def test_bot_artifact_cannot_escape_the_isolation_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            platform = os.environ.get("RPS_DOCKER_PLATFORM", "linux/amd64")
+            candidates = {
+                "red-team": self.build_candidate(
+                    Path(temporary_name),
+                    "isolation-probe",
+                    "R",
+                    platform,
+                    strategy_source=ISOLATION_STRATEGY.read_bytes(),
+                ),
+                "blue-team": self.build_candidate(
+                    Path(temporary_name), "opponent", "S", platform
+                ),
+                "cpu-team": self.build_candidate(
+                    Path(temporary_name),
+                    "cpu-exhaustion",
+                    "R",
+                    platform,
+                    strategy_source=CPU_EXHAUSTION_STRATEGY.read_bytes(),
+                ),
+            }
+            try:
+                output = Path(temporary_name) / "isolation-match.json"
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "rps_runner.cli",
+                        "--container",
+                        "--bot-a",
+                        candidates["red-team"]["retention"]["local_image_id"],
+                        "--bot-b",
+                        candidates["blue-team"]["retention"]["local_image_id"],
+                        "--rounds",
+                        "300",
+                        "--seed",
+                        "333",
+                        "--bot-a-seed",
+                        "111",
+                        "--bot-b-seed",
+                        "222",
+                        "--output",
+                        str(output),
+                    ],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                result = json.loads(output.read_text())
+                self.assertFalse(
+                    result["infrastructure_failure"],
+                    result["operational_telemetry"],
+                )
+                self.assertEqual(
+                    result["competitive_outcome"]["winner_team_id"],
+                    "bot-a",
+                    result["operational_telemetry"],
+                )
+                self.assertEqual(
+                    result["operational_telemetry"]["bots"]["bot-a"]["stderr"],
+                    "",
+                )
+
+                cpu_output = Path(temporary_name) / "cpu-exhaustion-match.json"
+                cpu_completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "rps_runner.cli",
+                        "--container",
+                        "--bot-a",
+                        candidates["cpu-team"]["retention"]["local_image_id"],
+                        "--bot-b",
+                        candidates["blue-team"]["retention"]["local_image_id"],
+                        "--rounds",
+                        "300",
+                        "--seed",
+                        "333",
+                        "--first-move-timeout-ms",
+                        "5000",
+                        "--total-timeout-ms",
+                        "5000",
+                        "--output",
+                        str(cpu_output),
+                    ],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(cpu_completed.returncode, 0, cpu_completed.stderr)
+                cpu_result = json.loads(cpu_output.read_text())
+                self.assertEqual(
+                    cpu_result["competitive_outcome"]["winner_team_id"], "bot-b"
+                )
+                self.assertEqual(
+                    cpu_result["competitive_outcome"]["status"], "forfeit"
+                )
+                self.assertIn(
+                    cpu_result["competitive_outcome"]["faults"]["bot-a"]["kind"],
+                    {"timeout", "unexpected_exit"},
                 )
             finally:
                 for candidate in candidates.values():

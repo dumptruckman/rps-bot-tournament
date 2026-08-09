@@ -5,11 +5,48 @@ import random
 import sys
 import tempfile
 
-sys.path.insert(0, "/opt/rps/team")
-
-
 READY_MARKER = "RPS_READY_V1"
 IMPORT_STDERR_ESCAPE = b"RPS_STDERR_ESCAPE_V1:"
+INFRASTRUCTURE_ENVIRONMENT = {
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "TZ": "UTC",
+    "HOME": "/tmp",
+    "TMPDIR": "/tmp",
+}
+PROTOCOL_ENVIRONMENT = (
+    "RPS_PROTOCOL_VERSION",
+    "RPS_ROUNDS",
+    "RPS_SEED",
+)
+
+
+def sanitize_environment() -> str:
+    """Re-exec with only the profile's bot-visible environment."""
+
+    if len(sys.argv) == 3 and sys.argv[1] == "--environment-sanitized":
+        visible_environment = dict(INFRASTRUCTURE_ENVIRONMENT)
+        for name in PROTOCOL_ENVIRONMENT:
+            visible_environment[name] = os.environ[name]
+        os.environ.clear()
+        os.environ.update(visible_environment)
+        return sys.argv[2]
+    team_directory = os.getcwd()
+    environment = dict(INFRASTRUCTURE_ENVIRONMENT)
+    for name in PROTOCOL_ENVIRONMENT:
+        environment[name] = os.environ[name]
+    os.execve(
+        sys.executable,
+        [
+            sys.executable,
+            "-I",
+            os.path.abspath(__file__),
+            "--environment-sanitized",
+            team_directory,
+        ],
+        environment,
+    )
+    raise AssertionError("os.execve returned")
 
 
 def read_history(line: str) -> str:
@@ -79,6 +116,7 @@ def replay_import_stderr(diagnostics) -> None:
 
 
 def main() -> None:
+    sys.path.insert(0, sanitize_environment())
     choose_move, import_diagnostics = load_strategy()
     rng = random.Random(int(os.environ["RPS_SEED"]))
     try:

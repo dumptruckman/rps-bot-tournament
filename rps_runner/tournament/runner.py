@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 from typing import Any, Optional, Union
 
+from rps_runner.engine import CONTAINER_ISOLATION_PROFILE_VERSION
+
 from .competition import (
     MatchOutcome,
     MatchResult,
@@ -66,7 +68,7 @@ from .storage import (
 
 
 PROTOCOL_VERSION = 1
-RECORD_SCHEMA_VERSION = 4
+RECORD_SCHEMA_VERSION = 5
 SCOREBOARD_VERSION = 1
 SCHEDULED_TURNS_PER_MATCH = 300
 FIRST_MOVE_TIMEOUT_MS = 250
@@ -87,9 +89,11 @@ class MatchLimits:
     stderr_limit_bytes: int = STDERR_LIMIT_BYTES
     stdout_limit_bytes: int = 4_096
     cpu_limit_ms: int = 2_000
+    cpu_quota_millis_per_second: int = 1_000
     memory_limit_bytes: int = 268_435_456
-    process_limit: int = 1
-    filesystem_write_limit_bytes: int = 0
+    process_limit: int = 64
+    open_file_limit: int = 64
+    filesystem_write_limit_bytes: int = 16_777_216
     network_access_allowed: bool = False
 
 
@@ -98,6 +102,7 @@ class TournamentConfig:
     execution_mode: str = "step"
     match_limits: MatchLimits = MatchLimits()
     continuous_parallelism: int = 1
+    execution_profile_version: str = CONTAINER_ISOLATION_PROFILE_VERSION
 
 
 @dataclass(frozen=True)
@@ -1316,6 +1321,7 @@ def _build_manifest_payload(
         "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
         "execution_mode": config.execution_mode,
         "continuous_parallelism": config.continuous_parallelism,
+        "execution_profile_version": config.execution_profile_version,
         "match_limits": _serialize_match_limits(config.match_limits),
         "series_format": "best_of_three",
         "rules": manifest_rules(),
@@ -1380,21 +1386,27 @@ def _validate_tournament_config(config: TournamentConfig) -> None:
         "cpu_limit_ms",
         "memory_limit_bytes",
         "process_limit",
+        "open_file_limit",
+        "cpu_quota_millis_per_second",
     )
     for field in positive_fields:
         value = getattr(limits, field)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{field} must be a positive integer")
+    if limits.cpu_limit_ms % 1000 != 0:
+        raise ValueError("cpu_limit_ms must be a whole number of seconds")
     if (
         not isinstance(limits.filesystem_write_limit_bytes, int)
         or isinstance(limits.filesystem_write_limit_bytes, bool)
-        or limits.filesystem_write_limit_bytes < 0
+        or limits.filesystem_write_limit_bytes <= 0
     ):
         raise ValueError(
-            "filesystem_write_limit_bytes must be a non-negative integer"
+            "filesystem_write_limit_bytes must be a positive integer"
         )
-    if not isinstance(limits.network_access_allowed, bool):
-        raise ValueError("network_access_allowed must be a boolean")
+    if limits.network_access_allowed is not False:
+        raise ValueError("network_access_allowed must be false")
+    if config.execution_profile_version != CONTAINER_ISOLATION_PROFILE_VERSION:
+        raise ValueError("Unsupported execution_profile_version")
 
 
 def _validate_artifact(artifact: BotArtifactManifest) -> None:
@@ -1426,6 +1438,7 @@ def _verify_compatibility(manifest: dict[str, Any]) -> None:
         "record_schema_version": RECORD_SCHEMA_VERSION,
         "scoreboard_version": SCOREBOARD_VERSION,
         "scheduled_turns_per_match": SCHEDULED_TURNS_PER_MATCH,
+        "execution_profile_version": CONTAINER_ISOLATION_PROFILE_VERSION,
         "series_format": "best_of_three",
         "rules": manifest_rules(),
     }
@@ -1480,6 +1493,8 @@ def _serialize_match_limits(limits: MatchLimits) -> dict[str, Any]:
         "cpu_limit_ms": limits.cpu_limit_ms,
         "memory_limit_bytes": limits.memory_limit_bytes,
         "process_limit": limits.process_limit,
+        "open_file_limit": limits.open_file_limit,
+        "cpu_quota_millis_per_second": limits.cpu_quota_millis_per_second,
         "filesystem_write_limit_bytes": limits.filesystem_write_limit_bytes,
         "network_access_allowed": limits.network_access_allowed,
     }
@@ -1692,8 +1707,11 @@ def _build_match_request(
         cpu_limit_ms=limits["cpu_limit_ms"],
         memory_limit_bytes=limits["memory_limit_bytes"],
         process_limit=limits["process_limit"],
+        open_file_limit=limits["open_file_limit"],
+        cpu_quota_millis_per_second=limits["cpu_quota_millis_per_second"],
         filesystem_write_limit_bytes=limits["filesystem_write_limit_bytes"],
         network_access_allowed=limits["network_access_allowed"],
+        execution_profile_version=manifest["execution_profile_version"],
     )
 
 
