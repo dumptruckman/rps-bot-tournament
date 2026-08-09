@@ -459,6 +459,48 @@ source, image, runtime, wrapper, recipe, entrypoint, catalog, suite, platform,
 profile, and core-tool identity. A host-process development check is useful but
 is always reported as insufficient evidence for official validation.
 
+### Batch official sources into a Tournament plan
+
+Create an explicit local JSON mapping for four through thirty-two Teams. Each
+entry has the following shape; source acquisition and cutoff selection happen
+before this command:
+
+```json
+{
+  "team_id": "red-rockets",
+  "display_name": "Red Rockets",
+  "source_directory": "/local/selected/red-rockets"
+}
+```
+
+Then build, organizer-final validate, and preserve the selected ARM64 Bot
+Artifacts with an explicit operational concurrency limit:
+
+```text
+rps-batch-plan \
+  --teams path/to/team-sources.json \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --output path/to/new-batch-output \
+  --tournament-seed 8675309 \
+  --execution-mode continuous \
+  --jobs 4
+```
+
+The new output contains immutable per-Team frozen inputs, one shared
+`artifact-store`, an independent `batch-report.json`, and—only when every Team
+succeeds—a draft `tournament-plan.json`. Team processing runs concurrently up
+to `--jobs`, while reports and the plan remain ordered by Team ID. Continuous
+Mode defaults to four-Match planned parallelism; `--parallelism` changes that
+editable pre-sealing value.
+
+For a supervised compatibility-only repair, add a `repair` object containing a
+replacement `source_directory` and organizer `explanation`. The output retains
+the original frozen source, replacement source, complete deterministic diff,
+both source digests, explanation, and successful final validation identity.
+Remote fetching, GitHub authentication, branches, cutoff enforcement, and
+mutable Docker references are deliberately outside this command and the
+canonical plan.
+
 ### Ratify a native platform and the execution profile
 
 Run the complete build, certification, and measured Python profile probe on a
