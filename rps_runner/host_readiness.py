@@ -166,7 +166,7 @@ def _machine_report() -> dict[str, Any]:
     }
 
 
-def _runtime_references(catalog: object, target_platform: str) -> list[str]:
+def runtime_references(catalog: object, target_platform: str) -> list[str]:
     references: list[str] = []
     environments = getattr(catalog, "environments")
     for environment in environments.values():
@@ -455,15 +455,15 @@ def diagnose_host_readiness(request: HostReadinessRequest) -> Mapping[str, Any]:
         )
 
     catalog_report: dict[str, Any] = {"status": "failed", "path": str(request.catalog)}
-    runtime_references: list[str] = []
+    required_runtime_references: list[str] = []
     try:
         catalog = load_catalog(request.catalog)
-        runtime_references = _runtime_references(catalog, request.platform)
+        required_runtime_references = runtime_references(catalog, request.platform)
         catalog_report.update(
             {
                 "status": "passed",
                 "identity": catalog.identity,
-                "runtime_references": runtime_references,
+                "runtime_references": required_runtime_references,
             }
         )
         _check(checks, "passed", "catalog_integrity", "Frozen Language Environment catalog and organizer-owned assets are intact.")
@@ -479,7 +479,7 @@ def diagnose_host_readiness(request: HostReadinessRequest) -> Mapping[str, Any]:
 
     image_report: dict[str, Any] = {
         "base_runtime": {
-            "required": runtime_references,
+            "required": required_runtime_references,
             "present": [],
             "problems": [],
         },
@@ -499,7 +499,7 @@ def diagnose_host_readiness(request: HostReadinessRequest) -> Mapping[str, Any]:
     }
     if docker_available:
         groups = (
-            ("base_runtime", runtime_references, "base_images_present", "missing_pinned_images"),
+            ("base_runtime", required_runtime_references, "base_images_present", "missing_pinned_images"),
             ("organizer", request.organizer_images, "organizer_images_present", "missing_organizer_images"),
             ("practice", tuple(reference for _, reference in request.practice_artifacts), "practice_artifacts_present", "missing_practice_artifacts"),
         )

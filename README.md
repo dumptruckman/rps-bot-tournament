@@ -571,6 +571,31 @@ The command is read-only and accepts OrbStack without requiring Docker Desktop.
 See [`docs/HOST_READINESS.md`](docs/HOST_READINESS.md) for its immutable-image
 inputs, stable JSON report, and complete Docker command allowlist.
 
+### Prepare an organizer machine for offline operation
+
+Run the explicit fast preparation workflow before the Tournament, while registry
+access is still available if a pinned runtime is not already cached:
+
+```text
+rps-prepare \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --platform linux/arm64 \
+  --profile docker-execution-v1 \
+  --artifact-store path/to/prepared-artifact-store \
+  --report path/to/preparation-report.json \
+  --parallelism 4 \
+  --expected-context orbstack \
+  --allow-pull
+```
+
+Preparation performs a networkless representative rebuild, retains practice
+Bot Artifacts, exercises readiness and the published isolation profile, creates
+and restores a verified local archive, and runs doctor against those exact
+inputs. It does not install Docker, change engine settings, prune caches, or
+replace either output. Omit `--allow-pull` to require every pinned runtime to be
+present already. See [`docs/OFFLINE_PREPARATION.md`](docs/OFFLINE_PREPARATION.md)
+for report fields, failure dispositions, and the separate full rehearsal.
+
 ---
 
 # Submission Format

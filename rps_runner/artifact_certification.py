@@ -621,7 +621,11 @@ def _execute_fixture_match(
 
 
 def _run_smoke_matches(
-    manifest: Mapping[str, Any], catalog: LanguageEnvironmentCatalog, platform: str
+    manifest: Mapping[str, Any],
+    catalog: LanguageEnvironmentCatalog,
+    platform: str,
+    *,
+    retain_practice_images: bool = False,
 ) -> Mapping[str, Any]:
     digest = str(manifest["artifact_digest"])
     reference = str(_mapping(manifest["retention"], "retention")["local_image_id"])
@@ -688,6 +692,17 @@ def _run_smoke_matches(
                 practices[name] = {
                     "status": "passed",
                     "artifact_digest": practice_digest,
+                    **(
+                        {
+                            "cached_image_id": str(
+                                _mapping(practice["retention"], "retention")[
+                                    "local_image_id"
+                                ]
+                            )
+                        }
+                        if retain_practice_images
+                        else {}
+                    ),
                     "outcome_observed_not_gated": outcome,
                 }
             diagnostic_reports = _run_diagnostic_artifacts(
@@ -704,10 +719,10 @@ def _run_smoke_matches(
                 "diagnostic_fixtures": diagnostic_reports,
             }
         finally:
-            for practice in (
-                *practice_candidates.values(),
-                *diagnostic_candidates.values(),
-            ):
+            removable = list(diagnostic_candidates.values())
+            if not retain_practice_images:
+                removable.extend(practice_candidates.values())
+            for practice in removable:
                 reference_to_remove = _mapping(
                     practice["retention"], "retention"
                 ).get("local_image_reference")
@@ -725,6 +740,8 @@ def certify_artifact_candidate(
     destination: Path,
     catalog: LanguageEnvironmentCatalog,
     inputs: CertificationInputs,
+    *,
+    retain_practice_images: bool = False,
 ) -> Mapping[str, Any]:
     inputs.validate()
     if destination.exists() or destination.is_symlink():
@@ -733,7 +750,12 @@ def certify_artifact_candidate(
     _verify_candidate_identities(candidate_manifest, catalog, inputs)
     _verify_frozen_source(candidate, candidate_manifest, catalog)
     _verify_image(candidate_manifest, inputs)
-    smoke = _run_smoke_matches(candidate_manifest, catalog, inputs.platform)
+    smoke = _run_smoke_matches(
+        candidate_manifest,
+        catalog,
+        inputs.platform,
+        retain_practice_images=retain_practice_images,
+    )
     diagnostic_fixtures = smoke["diagnostic_fixtures"]
     candidate_identities = _mapping(candidate_manifest["identities"], "identities")
     identities = {
