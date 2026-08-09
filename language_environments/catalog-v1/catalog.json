@@ -57,7 +57,7 @@
         "readiness": {"path": "python/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
         "recipe": {"path": "python/Dockerfile", "sha256": "sha256:9c8e64f91dbbe89ed36d94787936cde16775f4f92c2eb3146a8bdb9eceafd8cc", "version": "python-build-recipe-v1"},
         "workflow": {"path": "python/workflow.yml", "sha256": "sha256:48cb1e0053b4b370882ffb65ba56f587add00c79c6e685e4f1159ed2039bddef", "version": "source-validation-workflow-v1"},
-        "wrapper": {"path": "python/wrapper.py", "sha256": "sha256:c3a0bbbbc731116ff15ca86a480d786b618329be9cfe685b59d2e66fe23baac9", "version": "python-wrapper-v1"}
+        "wrapper": {"path": "python/wrapper.py", "sha256": "sha256:acdb29c8be17bab231e2bfc1943313cf43414b22a8880b3666bf254873239167", "version": "python-wrapper-v1"}
       },
       "contract_only": false,
       "descriptor_version": "python-language-environment-v1",

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import selectors
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from rps_runner.engine.bot_process import HostProcessBotSession
 from rps_runner.engine.bot_session import (
@@ -50,38 +51,47 @@ def _bot_result(session: BotSession) -> dict[str, object]:
 def _start_sessions(
     config: MatchConfig, session_factory: BotSessionFactory
 ) -> list[BotSession]:
-    sessions: list[BotSession] = []
     artifact_references = {"a": config.bot_a, "b": config.bot_b}
+    sessions = [
+        session_factory(bot_position, artifact_references[bot_position], config)
+        for bot_position in ("a", "b")
+    ]
     try:
-        for bot_position in ("a", "b"):
-            session = session_factory(
-                bot_position, artifact_references[bot_position], config
-            )
-            sessions.append(session)
-            session.start()
+        _run_session_phase(sessions, lambda session: session.start())
     except InfrastructureError:
         _stop_sessions(sessions)
         raise
     return sessions
 
 
+def _run_session_phase(
+    sessions: list[BotSession], operation: Callable[[BotSession], None]
+) -> None:
+    first_error: Optional[InfrastructureError] = None
+    with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
+        futures = [
+            executor.submit(operation, session) for session in sessions
+        ]
+        for future in futures:
+            try:
+                future.result()
+            except InfrastructureError as error:
+                if first_error is None:
+                    first_error = error
+    if first_error is not None:
+        raise first_error
+
+
 def _stop_sessions(sessions: list[BotSession]) -> None:
     cleanup_error: Optional[InfrastructureError] = None
-    for session in sessions:
+    operations: tuple[Callable[[BotSession], None], ...] = (
+        lambda session: session.stop(),
+        lambda session: session.force_stop(),
+        lambda session: session.finish_stop(),
+    )
+    for operation in operations:
         try:
-            session.stop()
-        except InfrastructureError as error:
-            if cleanup_error is None:
-                cleanup_error = error
-    for session in sessions:
-        try:
-            session.force_stop()
-        except InfrastructureError as error:
-            if cleanup_error is None:
-                cleanup_error = error
-    for session in sessions:
-        try:
-            session.finish_stop()
+            _run_session_phase(sessions, operation)
         except InfrastructureError as error:
             if cleanup_error is None:
                 cleanup_error = error

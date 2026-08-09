@@ -3,6 +3,11 @@ from rps_runner.engine.bot_session import (
     BotSession,
     BotSessionFactory,
 )
+from rps_runner.engine.container_session import (
+    ContainerBotSession,
+    ContainerOperations,
+    DEFAULT_READINESS_MARKER,
+)
 from rps_runner.engine.match import run_match
 from rps_runner.engine.models import InfrastructureError, MatchConfig
 
@@ -11,6 +16,9 @@ __all__ = [
     "BotArtifactDisconnected",
     "BotSession",
     "BotSessionFactory",
+    "ContainerBotSession",
+    "ContainerOperations",
+    "DEFAULT_READINESS_MARKER",
     "InfrastructureError",
     "MatchConfig",
     "run_match",

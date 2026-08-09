@@ -5,11 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional, cast
 
-from rps_runner.engine import InfrastructureError, MatchConfig, run_match
+from rps_runner.engine import (
+    ContainerBotSession,
+    ContainerOperations,
+    DEFAULT_READINESS_MARKER,
+    InfrastructureError,
+    MatchConfig,
+    run_match,
+)
 from rps_runner.tournament.immutable import FrozenJsonDict, freeze_json
 
 
-ArtifactCommandResolver = Callable[[str, str], str]
+ArtifactReferenceResolver = Callable[[str, str], str]
 MatchRunner = Callable[[MatchConfig], dict[str, object]]
 
 
@@ -168,26 +175,77 @@ class LocalMatchExecutor:
 
     def __init__(
         self,
-        artifact_command_resolver: ArtifactCommandResolver,
+        artifact_command_resolver: ArtifactReferenceResolver,
         match_runner: MatchRunner = run_match,
     ) -> None:
         self.artifact_command_resolver = artifact_command_resolver
         self.match_runner = match_runner
 
     def execute(self, request: MatchExecutionRequest) -> MatchExecutionResult:
-        commands: dict[str, str] = {}
-        try:
-            bot_a_command = self.artifact_command_resolver(
-                request.team_a_id, request.artifact_digest_a
+        return _execute_match_request(
+            request,
+            self.artifact_command_resolver,
+            self.match_runner,
+        )
+
+
+class ContainerMatchExecutor:
+    """Execute immutable image references in fresh Docker containers."""
+
+    def __init__(
+        self,
+        artifact_image_resolver: ArtifactReferenceResolver,
+        *,
+        operations: ContainerOperations = ContainerOperations(),
+        readiness_marker: bytes = DEFAULT_READINESS_MARKER,
+    ) -> None:
+        self.artifact_image_resolver = artifact_image_resolver
+        self.operations = operations
+        self.readiness_marker = readiness_marker
+
+    def execute(self, request: MatchExecutionRequest) -> MatchExecutionResult:
+        def create_session(
+            bot_position: str,
+            artifact_reference: str,
+            session_config: MatchConfig,
+        ) -> ContainerBotSession:
+            return ContainerBotSession(
+                bot_position,
+                artifact_reference,
+                session_config,
+                operations=self.operations,
+                readiness_marker=self.readiness_marker,
             )
-            commands[request.team_a_id] = bot_a_command
-            bot_b_command = self.artifact_command_resolver(
-                request.team_b_id, request.artifact_digest_b
-            )
-            commands[request.team_b_id] = bot_b_command
-            config = MatchConfig(
-                bot_a=bot_a_command,
-                bot_b=bot_b_command,
+
+        def run_container_match(config: MatchConfig) -> dict[str, object]:
+            return run_match(config, session_factory=create_session)
+
+        return _execute_match_request(
+            request,
+            self.artifact_image_resolver,
+            run_container_match,
+        )
+
+
+def _execute_match_request(
+    request: MatchExecutionRequest,
+    artifact_reference_resolver: ArtifactReferenceResolver,
+    match_runner: MatchRunner,
+) -> MatchExecutionResult:
+    artifact_references: dict[str, str] = {}
+    try:
+        reference_a = artifact_reference_resolver(
+            request.team_a_id, request.artifact_digest_a
+        )
+        artifact_references[request.team_a_id] = reference_a
+        reference_b = artifact_reference_resolver(
+            request.team_b_id, request.artifact_digest_b
+        )
+        artifact_references[request.team_b_id] = reference_b
+        raw_result = match_runner(
+            MatchConfig(
+                bot_a=reference_a,
+                bot_b=reference_b,
                 rounds=request.scheduled_turns,
                 seed=request.match_seed,
                 first_move_timeout_ms=request.first_move_timeout_ms,
@@ -198,15 +256,15 @@ class LocalMatchExecutor:
                 bot_a_seed=request.bot_visible_seed_a,
                 bot_b_seed=request.bot_visible_seed_b,
             )
-            raw_result = self.match_runner(config)
-            _validate_match_result(request, raw_result)
-        except InfrastructureError as error:
-            return _failed_match_attempt(request, commands, error)
-        return MatchExecutionResult(
-            infrastructure_failure=False,
-            competitive_outcome=_competitive_outcome(request, raw_result),
-            operational_telemetry=_operational_telemetry(request, raw_result),
         )
+        _validate_match_result(request, raw_result)
+    except InfrastructureError as error:
+        return _failed_match_attempt(request, artifact_references, error)
+    return MatchExecutionResult(
+        infrastructure_failure=False,
+        competitive_outcome=_competitive_outcome(request, raw_result),
+        operational_telemetry=_operational_telemetry(request, raw_result),
+    )
 
 
 def _validate_match_result(
