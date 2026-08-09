@@ -116,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_integer,
         help="maximum concurrently active Team build/validation workflows",
     )
+    parser.add_argument(
+        "--retain-practice-images",
+        action="store_true",
+        help="retain conformance practice images for organizer readiness evidence",
+    )
     return parser
 
 
@@ -273,6 +278,7 @@ def _process_team(
     catalog: object,
     environment: object,
     operations: BatchOperations,
+    retain_practice_images: bool = False,
 ) -> TeamResult:
     try:
         original_bundle = team_root / (
@@ -303,7 +309,7 @@ def _process_team(
         candidate = team_root / "candidate"
         operations.build(selected_bundle, candidate, catalog, "linux/arm64")
         certification = team_root / "certification"
-        operations.certify(
+        certification_arguments = (
             candidate,
             certification,
             catalog,
@@ -311,6 +317,13 @@ def _process_team(
                 "organizer-final", "linux/arm64", INITIAL_EXECUTION_PROFILE.version
             ),
         )
+        if retain_practice_images:
+            operations.certify(
+                *certification_arguments,
+                retain_practice_images=True,
+            )
+        else:
+            operations.certify(*certification_arguments)
         artifact_manifest = _artifact_manifest(certification)
         if repair_record is not None:
             repair_record = {
@@ -446,7 +459,13 @@ def main(
                 root = team_directory / team.team_id
                 root.mkdir()
                 future = executor.submit(
-                    _process_team, team, root, catalog, environment, operations
+                    _process_team,
+                    team,
+                    root,
+                    catalog,
+                    environment,
+                    operations,
+                    options.retain_practice_images,
                 )
                 futures[future] = team.team_id
             completed = [future.result() for future in as_completed(futures)]

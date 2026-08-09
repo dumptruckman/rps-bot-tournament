@@ -1,0 +1,280 @@
+{
+  "archive_restore": {
+    "archive_loads": 1,
+    "restored_images": 16,
+    "selected_images": 16,
+    "status": "passed"
+  },
+  "artifacts": {
+    "artifact_identities": [
+      "sha256:fa2c1199c54e651e1bdc7afc78f47e2d47c8c962674f1de16b8a7accf6d98a61",
+      "sha256:94134457ec9840c295b8f791711dffed3b4389e4ee921485d051d75e3d4e3bdf",
+      "sha256:b5dba73399c17d97d507f4a1fe0a9b3831a7dcd44e4b14fdc512c0b7d3fae598",
+      "sha256:bdb97124661baab5e7c485a226350d35a789e2150949d83f469917530d1ffa47",
+      "sha256:4c14ac0cfe6148d538aff9b92739aa6a77d283a2729eacaf4dd4413517ff2742",
+      "sha256:5f738865b58f8d5b3d43d9fc755e210a911acc3edce9019c2ee4cd8a3e00be2d",
+      "sha256:19a4db0d12dc0755096cdab4cba8b8d74cd2689d7bbba5fa4b521ff3a438f373",
+      "sha256:48643b8c6987243a8fd0a85a70e3185e4940555214c8b21330391680fa5f95cf",
+      "sha256:a30c3bdcadf4da3e3db36ffa8c2bd0ea88f8b182b399b074797484d840c27f5e",
+      "sha256:e9369b60990cbe614941d1c6985c5ceb4de6864adfe9c364c4b5db6a43af2dff",
+      "sha256:50e85a83e7d2556b09c4212d6d2b38eb2596e2d5f1fd8087b6c63f25d84a4101",
+      "sha256:9a91bdd9127f10e6ebecdd56fc331fe7931bb5edbd6c95b5792dc67b9190e33e",
+      "sha256:e683f4ae32007023c004503b31a92ee69dfd88c5d76846fbc67c532afdf7947a",
+      "sha256:f2b195cc18ad375de224693d855005397ccc12d5d502f663c24dce7699b6d043",
+      "sha256:9910a07f984d92a33799dbb3b9126d4674950dc464cbc2e43785333761b1ab17",
+      "sha256:883ee206ef06c9c11b6254816aeee38dc21a0d4fb1cc68bbbef9aa4a9a4a7a07"
+    ],
+    "execution_mode": "continuous",
+    "execution_profile": {
+      "identity": "docker-execution-v1@sha256:54b69b7eae0b15191a13b2b14fcc75c4537358b971b8f84a65731589b8ad3bb1",
+      "version": "docker-execution-v1"
+    },
+    "parallelism": 4,
+    "resource_values": {
+      "cpu_limit_ms": 2000,
+      "cpu_quota_millis_per_second": 1000,
+      "filesystem_write_limit_bytes": 16777216,
+      "first_move_timeout_ms": 250,
+      "memory_limit_bytes": 268435456,
+      "move_timeout_ms": 50,
+      "open_file_limit": 64,
+      "process_limit": 64,
+      "shutdown_timeout_seconds": 3.0,
+      "startup_timeout_seconds": 10.0,
+      "stderr_limit_bytes": 65536,
+      "stdout_limit_bytes": 4096,
+      "total_timeout_ms": 2000
+    },
+    "runtime_identities": [
+      "sha256:8c5de2243cba89f49a93e05cacb78e27058bcaa69c148baac127005da03af39e"
+    ],
+    "team_count": 16,
+    "teams": [
+      {
+        "artifact_identity": "sha256:fa2c1199c54e651e1bdc7afc78f47e2d47c8c962674f1de16b8a7accf6d98a61",
+        "display_name": "Rehearsal Team 01",
+        "source_identity": "sha256:10ecad7a6e3258d85bfa36906c61e494d4cb9bb701bd615bff2090ea27745eb2",
+        "team_id": "team-01"
+      },
+      {
+        "artifact_identity": "sha256:94134457ec9840c295b8f791711dffed3b4389e4ee921485d051d75e3d4e3bdf",
+        "display_name": "Rehearsal Team 02",
+        "source_identity": "sha256:ae9c99a8c53796b23dd925e4cb80b04fb93d3a0bc4764388c9b0ce1c2e85d5ec",
+        "team_id": "team-02"
+      },
+      {
+        "artifact_identity": "sha256:b5dba73399c17d97d507f4a1fe0a9b3831a7dcd44e4b14fdc512c0b7d3fae598",
+        "display_name": "Rehearsal Team 03",
+        "source_identity": "sha256:551d1798d3073221ab1ebaa5e8697ab2490df2d8fa5594b9ec47d84cf58a3a5a",
+        "team_id": "team-03"
+      },
+      {
+        "artifact_identity": "sha256:bdb97124661baab5e7c485a226350d35a789e2150949d83f469917530d1ffa47",
+        "display_name": "Rehearsal Team 04",
+        "source_identity": "sha256:3f17c85d3e90f52377d622121a065c26f31738ee67656da766bba2e4336550bf",
+        "team_id": "team-04"
+      },
+      {
+        "artifact_identity": "sha256:4c14ac0cfe6148d538aff9b92739aa6a77d283a2729eacaf4dd4413517ff2742",
+        "display_name": "Rehearsal Team 05",
+        "source_identity": "sha256:90acb2900ebd096ebdd5e1fee51586e5ff45ed88e22ca18eb3640dd2ebd5a36e",
+        "team_id": "team-05"
+      },
+      {
+        "artifact_identity": "sha256:5f738865b58f8d5b3d43d9fc755e210a911acc3edce9019c2ee4cd8a3e00be2d",
+        "display_name": "Rehearsal Team 06",
+        "source_identity": "sha256:38ed5e0e5a95e301407b99ee8afa23dfbaac1ccd43c74c8140eacf37c8c09bdc",
+        "team_id": "team-06"
+      },
+      {
+        "artifact_identity": "sha256:19a4db0d12dc0755096cdab4cba8b8d74cd2689d7bbba5fa4b521ff3a438f373",
+        "display_name": "Rehearsal Team 07",
+        "source_identity": "sha256:2ecadd10737f7f19dc7e5dcdf4fd00d5782b69515f11fc3b6a0541d8b775bac6",
+        "team_id": "team-07"
+      },
+      {
+        "artifact_identity": "sha256:48643b8c6987243a8fd0a85a70e3185e4940555214c8b21330391680fa5f95cf",
+        "display_name": "Rehearsal Team 08",
+        "source_identity": "sha256:f87467ac1cba098805b20260057c1d6cd29c9a4b70ea1b48915c20d429f3ab71",
+        "team_id": "team-08"
+      },
+      {
+        "artifact_identity": "sha256:a30c3bdcadf4da3e3db36ffa8c2bd0ea88f8b182b399b074797484d840c27f5e",
+        "display_name": "Rehearsal Team 09",
+        "source_identity": "sha256:20bd60c6713feb86b580681cf00c8e195a3941d7ccc67467f4f3bed425a70cb9",
+        "team_id": "team-09"
+      },
+      {
+        "artifact_identity": "sha256:e9369b60990cbe614941d1c6985c5ceb4de6864adfe9c364c4b5db6a43af2dff",
+        "display_name": "Rehearsal Team 10",
+        "source_identity": "sha256:acfd32e7f5f93d61ba764c15ac44fe670057919c66b0c0f099e4d2cdac83dc62",
+        "team_id": "team-10"
+      },
+      {
+        "artifact_identity": "sha256:50e85a83e7d2556b09c4212d6d2b38eb2596e2d5f1fd8087b6c63f25d84a4101",
+        "display_name": "Rehearsal Team 11",
+        "source_identity": "sha256:9aab355a59d4669d06f3ffe244d6ddc730ec821424c2174a7f4f65557443411d",
+        "team_id": "team-11"
+      },
+      {
+        "artifact_identity": "sha256:9a91bdd9127f10e6ebecdd56fc331fe7931bb5edbd6c95b5792dc67b9190e33e",
+        "display_name": "Rehearsal Team 12",
+        "source_identity": "sha256:edd55301fae61fc4d7d596990c27be9978a7ee9b8acafb71368ab447c9d1cd6d",
+        "team_id": "team-12"
+      },
+      {
+        "artifact_identity": "sha256:e683f4ae32007023c004503b31a92ee69dfd88c5d76846fbc67c532afdf7947a",
+        "display_name": "Rehearsal Team 13",
+        "source_identity": "sha256:dc958cdcb10ca045836734b6d1c19a87df6e6b781c73f67ca0e254af20e462fd",
+        "team_id": "team-13"
+      },
+      {
+        "artifact_identity": "sha256:f2b195cc18ad375de224693d855005397ccc12d5d502f663c24dce7699b6d043",
+        "display_name": "Rehearsal Team 14",
+        "source_identity": "sha256:145418eabcc6e378ea49b507db8ed0184d03f81a6c5a9b9995add149ab94bd74",
+        "team_id": "team-14"
+      },
+      {
+        "artifact_identity": "sha256:9910a07f984d92a33799dbb3b9126d4674950dc464cbc2e43785333761b1ab17",
+        "display_name": "Rehearsal Team 15",
+        "source_identity": "sha256:f2a61766ba2ac09acb2b24f465a51530da1ff6eb8b3e7a852338e377f8f4ca77",
+        "team_id": "team-15"
+      },
+      {
+        "artifact_identity": "sha256:883ee206ef06c9c11b6254816aeee38dc21a0d4fb1cc68bbbef9aa4a9a4a7a07",
+        "display_name": "Rehearsal Team 16",
+        "source_identity": "sha256:f343325b9d352216b330062d53c19de0c7940f1afaeb7870adb7e343753ec5d0",
+        "team_id": "team-16"
+      }
+    ],
+    "tournament_seed": 8675309,
+    "validation_identities": [
+      "validation-report-v1@sha256:f4a80f348f0b8b4d0ba3cbc159c2d5e8cb5d20e00a89b2e7408ba57bb34eb286",
+      "validation-report-v1@sha256:5ac4bd254774c9cde1b3320ea7d2f8c74146038aeb386085eb1b3a2c091e43ec",
+      "validation-report-v1@sha256:e5bd12a35348697d362bbc818fea1e1cea860d154ed1849c138a6e69c5b47a3c",
+      "validation-report-v1@sha256:2cfb78e993b2f9a602c64e0dc44a9e4be1262f55b4ac0caf261c6e3f0442b3da",
+      "validation-report-v1@sha256:4b49832c4cdfce0aec15d136191a73d852ab5f8e3a4d215edf962021e319c4ca",
+      "validation-report-v1@sha256:4b79bda293aba367c47bfe11b15f4355d6b2d5a6f44b642afd450c4ec86e7172",
+      "validation-report-v1@sha256:1040dae7272d7e9bae97e857bdad385a0b980bfaf1e145576036f7f39a1fee96",
+      "validation-report-v1@sha256:eef7c0e37c0836c2de2566e10ae5d4f6251c710eabaf3bb472727477c4cc8094",
+      "validation-report-v1@sha256:7debe4e629799de6fc1867a14be12ee7de35415326110d8cfd89f9523f30096d",
+      "validation-report-v1@sha256:cd3294ae8bb57bbfc529ef135d809222d253547e809d639a7ec4debe85792c73",
+      "validation-report-v1@sha256:7eaa95935449abf13c1cfe1556c43e13012b234b84e1304a8a85e71954cb4f1b",
+      "validation-report-v1@sha256:2fb63ae8a751557b0a1f56f18393a9511cb0f89ce47a0916a3bf29f449c68f60",
+      "validation-report-v1@sha256:372b0bd925f1303aee13f6b3a627130b20a58c976ed7938ce6ca862a8a0c20dc",
+      "validation-report-v1@sha256:288738cf3f57c49ff97cf5bbad1e26f59095582de56d1e79252ba41f687adc3b",
+      "validation-report-v1@sha256:9e0727be3db19c3fcc8c6573a6061be4bcb3dce0ba3393e16b56737d6faa295f",
+      "validation-report-v1@sha256:2d53c76c162d1fdd5ccd923bc4e8f555c027e1be6547069aecc16b0cac1586c1"
+    ]
+  },
+  "build_jobs": 4,
+  "capacity_contract": {
+    "maximum_teams": 32
+  },
+  "catalog": {
+    "identity": "rps-language-environment-catalog-v1@sha256:b4592ef03f1645eac2a8918cbbddc44a90c697b63fce4c4026b9cbbd17ef7f49",
+    "version": "rps-language-environment-catalog-v1"
+  },
+  "catalog_identity": "rps-language-environment-catalog-v1@sha256:b4592ef03f1645eac2a8918cbbddc44a90c697b63fce4c4026b9cbbd17ef7f49",
+  "docker_context": "orbstack",
+  "docker_version": "29.4.0",
+  "engine": {
+    "api_version": "1.54",
+    "context": "orbstack",
+    "engine_id": "0a8abacb-f2c1-49bf-b56e-5787da8e8c74",
+    "engine_identity": "docker-engine-v1@sha256:4744c6a870f3f65922ed31f7921c85ef378d98cba62f0b91c98c25e7d00bb25d",
+    "features": {
+      "cpu_limit": true,
+      "linux_containers": true,
+      "memory_limit": true,
+      "pid_limit": true,
+      "private_cgroup_namespace": true,
+      "seccomp": true
+    },
+    "minimum_api_version": "1.40",
+    "server_architecture": "arm64",
+    "server_name": "Docker Engine - Community",
+    "server_os": "linux",
+    "server_platform": "linux/arm64",
+    "server_version": "29.4.0",
+    "status": "connected"
+  },
+  "engine_identity": "docker-engine-v1@sha256:4744c6a870f3f65922ed31f7921c85ef378d98cba62f0b91c98c25e7d00bb25d",
+  "machine": {
+    "architecture": "arm64",
+    "hostname": "Mac.localdomain",
+    "identity": "container-host-machine-v1@sha256:e289ef677fd332fb1442a11d6e9c5346607f5fb8a09b047dc36918ee9930905d",
+    "logical_cpus": 16,
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "machine_identity": "container-host-machine-v1@sha256:e289ef677fd332fb1442a11d6e9c5346607f5fb8a09b047dc36918ee9930905d",
+  "objective_result": "met",
+  "objective_seconds": 2400,
+  "parallelism": 4,
+  "phase_timings_seconds": {
+    "archive_restore": 9.962979,
+    "build_validation_preservation": 410.365928,
+    "configuration": 0.761474,
+    "input_validation": 0.001645,
+    "plan_review": 0.052566,
+    "public_verification": 0.851022,
+    "tournament_execution": 407.72492
+  },
+  "plan_approval_seconds_excluded": 29.577441,
+  "plan_review": {
+    "status": "approved"
+  },
+  "platform": "linux/arm64",
+  "profile": {
+    "identity": "docker-execution-v1@sha256:54b69b7eae0b15191a13b2b14fcc75c4537358b971b8f84a65731589b8ad3bb1",
+    "version": "docker-execution-v1"
+  },
+  "profile_identity": "docker-execution-v1@sha256:54b69b7eae0b15191a13b2b14fcc75c4537358b971b8f84a65731589b8ad3bb1",
+  "rehearsal_report_format_version": "rps-rehearsal-report-v1",
+  "resource_values": {
+    "cpu_limit_ms": 2000,
+    "cpu_quota_millis_per_second": 1000,
+    "filesystem_write_limit_bytes": 16777216,
+    "first_move_timeout_ms": 250,
+    "memory_limit_bytes": 268435456,
+    "move_timeout_ms": 50,
+    "open_file_limit": 64,
+    "process_limit": 64,
+    "recommended_match_parallelism": 4,
+    "shutdown_timeout_seconds": 3.0,
+    "startup_timeout_seconds": 10.0,
+    "stderr_limit_bytes": 65536,
+    "stdout_limit_bytes": 4096,
+    "total_timeout_ms": 2000,
+    "version": "docker-execution-v1"
+  },
+  "source_mapping": "/private/tmp/rps-ticket16-input/teams.json",
+  "status": "passed",
+  "target_machine": {
+    "architecture": "arm64",
+    "logical_cpus": 16,
+    "memory_bytes": 137438953472,
+    "model": "Mac16,6",
+    "processor": "Apple M4 Max",
+    "system": "Darwin"
+  },
+  "team_count": 16,
+  "total_elapsed_seconds": 829.721665,
+  "tournament": {
+    "all_series_used_three_matches": true,
+    "canonical_no_champion": false,
+    "competition_records_verified": true,
+    "competition_state_identity": "sha256:9a70eff871c7531ff3339afa40754918e14e95963aad4bb46525c52b1f2c00d1",
+    "fixture_count": 123,
+    "match_count": 369,
+    "operational_telemetry_verified": true,
+    "scheduled_turns_per_match": 300,
+    "scoreboard_projection_verified": true,
+    "state_reconstruction_verified": true,
+    "status": "complete",
+    "timing_isolation_verified": true,
+    "tournament_champion": "team-15"
+  },
+  "tournament_seed": 8675309
+}

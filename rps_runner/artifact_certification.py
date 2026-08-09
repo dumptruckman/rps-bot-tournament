@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from typing import Any, Mapping
 
 from rps_runner.artifact_builder import (
@@ -29,6 +30,9 @@ from rps_runner.tournament.match_executor import (
     ContainerMatchExecutor,
     MatchExecutionRequest,
 )
+
+
+_CONFORMANCE_EXECUTION_LOCK = threading.RLock()
 
 
 CERTIFICATION_FORMAT_VERSION = "bot-artifact-certification-v1"
@@ -296,11 +300,12 @@ def _conformance_match_request(
     seed: int,
     attempt: int,
     *,
+    namespace: str,
     team_b_id: str = "candidate-b",
 ) -> MatchExecutionRequest:
     profile = INITIAL_EXECUTION_PROFILE
     return MatchExecutionRequest(
-        tournament_id="artifact-conformance",
+        tournament_id="artifact-conformance-" + namespace,
         fixture_id="smoke-fixture",
         series_id="smoke-series",
         match_id="smoke-match-" + str(attempt),
@@ -515,6 +520,24 @@ def _run_diagnostic_artifacts(
     executor: ContainerMatchExecutor,
     fixtures: Mapping[str, Mapping[str, Any]],
     fixed_move: Mapping[str, Any],
+    *,
+    namespace: str,
+) -> Mapping[str, Mapping[str, str]]:
+    with _CONFORMANCE_EXECUTION_LOCK:
+        return _run_diagnostic_artifacts_exclusively(
+            executor,
+            fixtures,
+            fixed_move,
+            namespace=namespace,
+        )
+
+
+def _run_diagnostic_artifacts_exclusively(
+    executor: ContainerMatchExecutor,
+    fixtures: Mapping[str, Mapping[str, Any]],
+    fixed_move: Mapping[str, Any],
+    *,
+    namespace: str,
 ) -> Mapping[str, Mapping[str, str]]:
     fixed_digest = str(fixed_move["artifact_digest"])
     reports: dict[str, Mapping[str, str]] = {
@@ -536,7 +559,11 @@ def _run_diagnostic_artifacts(
         outcome = _execute_fixture_match(
             executor,
             _conformance_match_request(
-                fixture_digest, fixed_digest, 9000 + attempt, attempt
+                fixture_digest,
+                fixed_digest,
+                9000 + attempt,
+                attempt,
+                namespace=namespace,
             ),
             name,
         )
@@ -557,7 +584,11 @@ def _run_diagnostic_artifacts(
         outcome = _execute_fixture_match(
             executor,
             _conformance_match_request(
-                fixture_digest, fixed_digest, 9000 + attempt, attempt
+                fixture_digest,
+                fixed_digest,
+                9000 + attempt,
+                attempt,
+                namespace=namespace,
             ),
             name,
         )
@@ -585,6 +616,7 @@ def _run_diagnostic_artifacts(
                 fixed_digest,
                 424242,
                 attempt + offset,
+                namespace=namespace,
             ),
             "nondeterministic",
         )
@@ -627,10 +659,27 @@ def _run_smoke_matches(
     *,
     retain_practice_images: bool = False,
 ) -> Mapping[str, Any]:
+    with _CONFORMANCE_EXECUTION_LOCK:
+        return _run_smoke_matches_exclusively(
+            manifest,
+            catalog,
+            platform,
+            retain_practice_images=retain_practice_images,
+        )
+
+
+def _run_smoke_matches_exclusively(
+    manifest: Mapping[str, Any],
+    catalog: LanguageEnvironmentCatalog,
+    platform: str,
+    *,
+    retain_practice_images: bool = False,
+) -> Mapping[str, Any]:
     digest = str(manifest["artifact_digest"])
     reference = str(_mapping(manifest["retention"], "retention")["local_image_id"])
     with tempfile.TemporaryDirectory(prefix="rps-conformance-") as work_name:
         work = Path(work_name)
+        namespace = work.name
         practice_candidates: Mapping[str, Mapping[str, Any]] = {}
         diagnostic_candidates: Mapping[str, Mapping[str, Any]] = {}
         try:
@@ -662,7 +711,13 @@ def _run_smoke_matches(
             outcomes = [
                 _execute_conforming_match(
                     executor,
-                    _conformance_match_request(digest, digest, 8675309, attempt),
+                    _conformance_match_request(
+                        digest,
+                        digest,
+                        8675309,
+                        attempt,
+                        namespace=namespace,
+                    ),
                     "same-seed smoke Match",
                 )
                 for attempt in (1, 2)
@@ -685,6 +740,7 @@ def _run_smoke_matches(
                         practice_digest,
                         8675309 + index,
                         index,
+                        namespace=namespace,
                         team_b_id="practice-" + name,
                     ),
                     name + " practice Match",
@@ -709,6 +765,7 @@ def _run_smoke_matches(
                 executor,
                 diagnostic_candidates,
                 practice_candidates["fixed-move"],
+                namespace=namespace,
             )
             return {
                 "attempts": 2,

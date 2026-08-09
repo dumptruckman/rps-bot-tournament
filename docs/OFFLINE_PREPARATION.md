@@ -60,13 +60,21 @@ No preparation failure is attributed to a Team or changes a competitive result.
 ## Full Tournament rehearsal
 
 Fast preparation deliberately does not run the sixteen-Team worst-case
-Tournament benchmark. Run that separate, opt-in operation explicitly:
+Tournament rehearsal. Run that separate, opt-in operation explicitly:
 
 ```text
-rps-tournament-capacity continuous --parallelism 4 \
-  --directory path/to/full-rehearsal
+rps-rehearse \
+  --teams path/to/sixteen-teams.json \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --output path/to/full-rehearsal \
+  --tournament-seed 8675309 \
+  --profile docker-execution-v1 \
+  --parallelism 4 \
+  --jobs 4 \
+  --expected-context orbstack
 ```
 
 Use `--rehearsal-evidence` with `rps-doctor` when comparable rehearsal evidence
 has been produced for the exact machine, engine, context, catalog, profile,
-platform, and parallelism.
+platform, and parallelism. See [REHEARSAL.md](REHEARSAL.md) for the source
+mapping, worst-case strategy requirement, retained evidence, and exit codes.

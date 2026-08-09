@@ -3,7 +3,9 @@
 Use these opt-in commands to verify a host before a Tournament or to compare
 capacity after a runner or storage change. They use `TournamentRunner` with a
 controllable conforming Match executor; no Bot Artifact subprocesses are
-started.
+started. These commands preserve the correctness contract through 32 Teams but
+are not the real sixteen-Team release rehearsal; see
+[REHEARSAL.md](REHEARSAL.md) for that operation.
 
 ## Prerequisites
 

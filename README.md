@@ -366,6 +366,12 @@ the non-binding Continuous and Step Mode objectives. See
 [docs/CAPACITY_BENCHMARKS.md](docs/CAPACITY_BENCHMARKS.md) for prerequisites,
 exact commands, workloads, preserved artifacts, and result interpretation.
 
+The release gate is the separate real-path `rps-rehearse` command. It builds and
+authoritatively validates sixteen local ARM64 Bot Artifacts, proves their shared
+archive restore, executes the 369-Match worst-case Tournament with four
+concurrent Matches, and verifies reconstructed state and the Scoreboard
+Projection. See [docs/REHEARSAL.md](docs/REHEARSAL.md).
+
 ## Python starter bot
 
 The starter bot keeps participant code focused on one strategy function:

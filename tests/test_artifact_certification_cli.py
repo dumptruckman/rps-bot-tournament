@@ -6,12 +6,20 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from rps_runner.certification_cli import main
-from rps_runner.artifact_certification import _execute_conforming_match
+from rps_runner.artifact_certification import (
+    _conformance_match_request,
+    _execute_conforming_match,
+    _run_diagnostic_artifacts,
+    _run_smoke_matches,
+)
 from rps_runner.tournament.match_executor import MatchExecutionResult
 from rps_runner.language_environment import load_catalog
 from rps_runner.language_environment import SourceValidationError
@@ -137,6 +145,127 @@ class ArtifactCertificationCliTests(unittest.TestCase):
         outcome = _execute_conforming_match(executor, mock.sentinel.request, "smoke")
 
         self.assertEqual(outcome["status"], "completed")
+
+    def test_parallel_certifications_have_distinct_match_ownership(self) -> None:
+        first = _conformance_match_request(
+            "sha256:" + "1" * 64,
+            "sha256:" + "2" * 64,
+            8675309,
+            1,
+            namespace="certification-a",
+        )
+        second = _conformance_match_request(
+            "sha256:" + "1" * 64,
+            "sha256:" + "2" * 64,
+            8675309,
+            1,
+            namespace="certification-b",
+        )
+
+        self.assertNotEqual(first.tournament_id, second.tournament_id)
+        self.assertEqual(first.match_id, second.match_id)
+
+    def test_parallel_certifications_serialize_resource_diagnostics(self) -> None:
+        fixtures = {
+            name: {"artifact_digest": "sha256:" + character * 64}
+            for name, character in zip(
+                (
+                    "import-time",
+                    "protocol-fault",
+                    "slow-response",
+                    "memory",
+                    "premature-output",
+                    "process",
+                    "filesystem",
+                    "nondeterministic",
+                ),
+                "12345678",
+            )
+        }
+        fixed = {"artifact_digest": "sha256:" + "9" * 64}
+        active = 0
+        maximum_active = 0
+        nondeterministic_call = 0
+        guard = threading.Lock()
+        start = threading.Barrier(2)
+        fault_kinds = {
+            "import-time": "unexpected_exit",
+            "protocol-fault": "invalid_response",
+            "slow-response": "timeout",
+            "memory": "resource_oom",
+            "premature-output": "unexpected_output",
+        }
+
+        def execute(_executor: object, _request: object, name: str) -> dict[str, object]:
+            nonlocal active, maximum_active, nondeterministic_call
+            if name in {"memory", "process", "filesystem"}:
+                with guard:
+                    active += 1
+                    maximum_active = max(maximum_active, active)
+                time.sleep(0.03)
+                with guard:
+                    active -= 1
+            if name == "nondeterministic":
+                with guard:
+                    nondeterministic_call += 1
+                    move = str(nondeterministic_call)
+                return {"moves": {"candidate-a": move}, "faults": {}}
+            kind = fault_kinds.get(name)
+            fault = {"kind": kind, "turn": 0} if kind is not None else None
+            return {"faults": {"candidate-a": fault}}
+
+        def run(namespace: str) -> object:
+            start.wait()
+            return _run_diagnostic_artifacts(
+                mock.sentinel.executor,
+                fixtures,
+                fixed,
+                namespace=namespace,
+            )
+
+        with (
+            mock.patch(
+                "rps_runner.artifact_certification._execute_fixture_match",
+                side_effect=execute,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            list(executor.map(run, ("certification-a", "certification-b")))
+
+        self.assertEqual(maximum_active, 1)
+
+    def test_parallel_certifications_serialize_live_conformance_suites(self) -> None:
+        active = 0
+        maximum_active = 0
+        guard = threading.Lock()
+        start = threading.Barrier(2)
+
+        def execute(*_args: object, **_kwargs: object) -> dict[str, object]:
+            nonlocal active, maximum_active
+            with guard:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            time.sleep(0.03)
+            with guard:
+                active -= 1
+            return {}
+
+        def run(_ordinal: int) -> object:
+            start.wait()
+            return _run_smoke_matches(
+                {}, mock.sentinel.catalog, "linux/arm64"
+            )
+
+        with (
+            mock.patch(
+                "rps_runner.artifact_certification._run_smoke_matches_exclusively",
+                side_effect=execute,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            list(executor.map(run, (1, 2)))
+
+        self.assertEqual(maximum_active, 1)
 
     def test_advisory_report_records_practice_artifacts_without_gating_on_winner(self) -> None:
         candidate = self.catalog_candidate()

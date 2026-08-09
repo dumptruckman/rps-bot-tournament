@@ -470,8 +470,7 @@ def _finalize_preparation(
         "elapsed_seconds": elapsed,
         "full_rehearsal": {
             "status": "not_run",
-            "operation": "rps-tournament-capacity continuous --parallelism "
-            + str(options.parallelism),
+            "operation": "rps-rehearse --parallelism " + str(options.parallelism),
         },
         "mutation_policy": {
             "host_or_engine_settings_changed": False,
