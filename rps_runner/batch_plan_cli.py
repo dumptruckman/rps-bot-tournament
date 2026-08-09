@@ -34,7 +34,7 @@ _TEAM_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,62}\Z")
 
 @dataclass(frozen=True)
 class BatchOperations:
-    """Source-to-artifact operations used by the public batch boundary."""
+    """Source-to-Bot-Artifact operations used by the public batch boundary."""
 
     freeze: Callable[..., Mapping[str, Any]]
     build: Callable[..., Mapping[str, Any]]
@@ -51,23 +51,31 @@ DEFAULT_OPERATIONS = BatchOperations(
 
 
 @dataclass(frozen=True)
+class CompatibilityRepair:
+    source_directory: Path
+    explanation: str
+
+
+@dataclass(frozen=True)
 class TeamSource:
     team_id: str
     display_name: str
     source_directory: Path
-    repair_source_directory: Optional[Path] = None
-    repair_explanation: Optional[str] = None
+    repair: Optional[CompatibilityRepair] = None
 
 
 @dataclass(frozen=True)
 class TeamResult:
     team: TeamSource
-    status: str
     candidate: Optional[Path] = None
     certification: Optional[Path] = None
     selected_source: Optional[Mapping[str, Any]] = None
     artifact_manifest: Optional[Mapping[str, Any]] = None
     error: Optional[str] = None
+
+    @property
+    def status(self) -> str:
+        return "failed" if self.error is not None else "validated"
 
 
 def _positive_integer(value: str) -> int:
@@ -154,26 +162,27 @@ def _load_teams(path: Path) -> tuple[TeamSource, ...]:
         display_name = _required_string(value, "display_name", location)
         source_directory = Path(
             _required_string(value, "source_directory", location)
-        ).expanduser().resolve()
+        ).expanduser().absolute()
         repair = value.get("repair")
-        repair_source: Optional[Path] = None
-        repair_explanation: Optional[str] = None
+        compatibility_repair: Optional[CompatibilityRepair] = None
         if repair is not None:
             if not isinstance(repair, dict):
                 raise ValueError(location + ".repair must be an object")
             repair_source = Path(
                 _required_string(repair, "source_directory", location + ".repair")
-            ).expanduser().resolve()
+            ).expanduser().absolute()
             repair_explanation = _required_string(
                 repair, "explanation", location + ".repair"
             ).strip()
+            compatibility_repair = CompatibilityRepair(
+                repair_source, repair_explanation
+            )
         teams.append(
             TeamSource(
                 team_id,
                 display_name.strip(),
                 source_directory,
-                repair_source,
-                repair_explanation,
+                compatibility_repair,
             )
         )
     return tuple(teams)
@@ -247,17 +256,17 @@ def _process_team(
 ) -> TeamResult:
     try:
         original_bundle = team_root / (
-            "original-source" if team.repair_source_directory else "selected-source"
+            "original-source" if team.repair else "selected-source"
         )
         original_manifest = operations.freeze(
             team.source_directory, original_bundle, catalog, environment
         )
         selected_bundle = original_bundle
         repair_record: Optional[Mapping[str, Any]] = None
-        if team.repair_source_directory is not None:
+        if team.repair is not None:
             selected_bundle = team_root / "selected-source"
             replacement_manifest = operations.freeze(
-                team.repair_source_directory,
+                team.repair.source_directory,
                 selected_bundle,
                 catalog,
                 environment,
@@ -268,7 +277,7 @@ def _process_team(
                 "replacement_source_digest": replacement_manifest["source_digest"],
                 "diff": diff,
                 "diff_digest": _digest_text(diff),
-                "explanation": team.repair_explanation,
+                "explanation": team.repair.explanation,
             }
         selected_manifest = _bundle_manifest(selected_bundle)
         candidate = team_root / "candidate"
@@ -295,14 +304,13 @@ def _process_team(
             selected_source["repair"] = repair_record
         return TeamResult(
             team,
-            "validated",
-            candidate,
-            certification,
-            selected_source,
-            artifact_manifest,
+            candidate=candidate,
+            certification=certification,
+            selected_source=selected_source,
+            artifact_manifest=artifact_manifest,
         )
     except Exception as error:
-        return TeamResult(team, "failed", error=str(error))
+        return TeamResult(team, error=str(error))
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -329,10 +337,10 @@ def _batch_report(results: Sequence[TeamResult], jobs: int) -> Mapping[str, Any]
     }
 
 
-def _canonical_artifact_manifest(
+def _canonical_artifact_identity(
     manifest: Mapping[str, Any]
 ) -> Mapping[str, Any]:
-    """Project a validated manifest without operational Docker-cache references."""
+    """Project Bot Artifact identity without operational Docker-cache references."""
     canonical = json.loads(json.dumps(manifest))
     canonical.pop("retention", None)
     image = canonical.get("image")
@@ -363,7 +371,8 @@ def _plan(
                 "display_name": result.team.display_name,
                 "roster_ready": True,
                 "selected_source": result.selected_source,
-                "bot_artifact_manifest": _canonical_artifact_manifest(
+                "bot_artifact_manifest": result.artifact_manifest,
+                "canonical_artifact_identity": _canonical_artifact_identity(
                     result.artifact_manifest
                 ),
                 "artifact_store_reference": {

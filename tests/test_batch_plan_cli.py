@@ -36,6 +36,8 @@ class FakeBatchPipeline:
         _catalog: object,
         _environment: object,
     ) -> dict[str, object]:
+        if source.is_symlink():
+            raise ValueError("selected source directory must not be a symbolic link")
         bundle.mkdir(parents=True)
         target = bundle / "source"
         target.mkdir()
@@ -219,9 +221,17 @@ class BatchPlanCliTests(unittest.TestCase):
         serialized = json.dumps(plan)
         self.assertNotIn(str(self.directory), serialized)
         self.assertNotIn("github", serialized.lower())
-        self.assertNotIn("mutable", serialized.lower())
-        self.assertNotIn("local_image_id", serialized)
-        self.assertNotIn("active-docker-context", serialized)
+        artifact = plan["teams"][0]
+        self.assertEqual(
+            artifact["bot_artifact_manifest"]["retention"][
+                "local_image_reference"
+            ],
+            "team:mutable",
+        )
+        canonical = json.dumps(artifact["canonical_artifact_identity"])
+        self.assertNotIn("mutable", canonical)
+        self.assertNotIn("local_image_id", canonical)
+        self.assertNotIn("active-docker-context", canonical)
         report = json.loads((output / "batch-report.json").read_text())
         self.assertEqual(report["operational_limit"], 2)
         self.assertEqual(
@@ -250,6 +260,39 @@ class BatchPlanCliTests(unittest.TestCase):
         self.assertEqual(by_team["team-c"]["status"], "failed")
         self.assertIn("synthetic build failure", by_team["team-c"]["error"])
         self.assertEqual(by_team["team-a"]["status"], "validated")
+
+    def test_rejects_a_symbolic_link_as_the_selected_source_root(self) -> None:
+        actual = self.source("actual-team-a", "A")
+        linked = self.directory / "team-a-link"
+        linked.symlink_to(actual, target_is_directory=True)
+        teams = [
+            {
+                "team_id": "team-a",
+                "display_name": "team-a",
+                "source_directory": str(linked),
+            },
+            *[
+                {
+                    "team_id": team_id,
+                    "display_name": team_id,
+                    "source_directory": str(
+                        self.source(team_id, team_id[-1].upper())
+                    ),
+                }
+                for team_id in ("team-b", "team-c", "team-d")
+            ],
+        ]
+
+        code, output = self.run_batch(
+            self.mapping(teams), FakeBatchPipeline()
+        )
+
+        self.assertEqual(code, 2)
+        report = json.loads((output / "batch-report.json").read_text())
+        by_team = {item["team_id"]: item for item in report["teams"]}
+        self.assertEqual(by_team["team-a"]["status"], "failed")
+        self.assertIn("symbolic link", by_team["team-a"]["error"])
+        self.assertFalse((output / "tournament-plan.json").exists())
 
     def test_repair_retains_original_diff_and_final_identities(self) -> None:
         original = self.source("team-a-original", "A")

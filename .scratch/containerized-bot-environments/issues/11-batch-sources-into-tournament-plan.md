@@ -31,13 +31,14 @@ than GitHub automation.
 ## Answer
 
 Added `rps-batch-plan`, which consumes an explicit local Team source mapping and
-runs each source-to-organizer-final-artifact workflow concurrently under the
+runs each source-to-organizer-final Bot Artifact workflow concurrently under the
 required `--jobs` limit. It writes stable Team-ordered results, reports failures
-independently, preserves successful artifacts in one shared local store, and
+independently, preserves successful Bot Artifacts in one shared local store, and
 only emits a draft roster-ready Tournament plan when every Team succeeds.
 
-The plan includes immutable source, artifact, store-index, validation, catalog,
-profile, resource, seed, mode, and parallelism values without Docker cache or
-mutable source references. Supervised repairs retain both frozen source bundles,
-a complete deterministic diff (including complete binary content), organizer
+The plan includes immutable source, Bot Artifact, store-index, validation,
+catalog, profile, resource, seed, mode, and parallelism values. It structurally
+separates the exact validated Bot Artifact Manifest from the cache-free canonical
+identity projection. Supervised repairs retain both frozen source bundles, a
+complete deterministic diff (including complete binary content), organizer
 explanation, replacement digest, and final validation identity.
