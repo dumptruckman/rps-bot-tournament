@@ -209,7 +209,9 @@ class ArtifactStoreTests(unittest.TestCase):
             if command[:3] == ["docker", "image", "inspect"]:
                 inspect_count += 1
                 if inspect_count == 1:
-                    return mock.Mock(returncode=1, stdout=b"", stderr=b"No such image")
+                    return mock.Mock(
+                        returncode=1, stdout=b"", stderr=b"No such image"
+                    )
                 return self.inspect(str(artifact["image_id"]))
             if command[:3] == ["docker", "image", "load"]:
                 return mock.Mock(returncode=0, stdout=b"Loaded image", stderr=b"")
@@ -274,7 +276,9 @@ class ArtifactStoreTests(unittest.TestCase):
             if command[:3] == ["docker", "image", "inspect"]:
                 inspect_count += 1
                 if inspect_count == 1:
-                    return mock.Mock(returncode=1, stdout=b"", stderr=b"missing")
+                    return mock.Mock(
+                        returncode=1, stdout=b"", stderr=b"No such image"
+                    )
                 result = self.inspect(str(artifact["image_id"]))
                 value = json.loads(result.stdout)
                 value[0]["Architecture"] = "amd64"
@@ -320,7 +324,9 @@ class ArtifactStoreTests(unittest.TestCase):
         def docker(command: list[str], **_: object) -> mock.Mock:
             calls.append(command)
             if command[:3] == ["docker", "image", "inspect"]:
-                return mock.Mock(returncode=1, stdout=b"", stderr=b"missing")
+                return mock.Mock(
+                    returncode=1, stdout=b"", stderr=b"No such image"
+                )
             if command[:3] == ["docker", "image", "load"]:
                 return mock.Mock(
                     returncode=0, stdout=b"loaded another image", stderr=b""
@@ -343,6 +349,67 @@ class ArtifactStoreTests(unittest.TestCase):
         self.assertFalse(
             any("build" in command or "tag" in command for command in calls)
         )
+
+    def test_daemon_failure_is_not_treated_as_an_absent_image(self) -> None:
+        store, artifact = self.preserve()
+
+        with (
+            mock.patch(
+                "rps_runner.artifact_store.subprocess.run",
+                return_value=mock.Mock(
+                    returncode=1,
+                    stdout=b"",
+                    stderr=b"Cannot connect to the Docker daemon",
+                ),
+            ) as run,
+            self.assertRaisesRegex(
+                ArtifactStoreIntegrityError, "Cannot connect to the Docker daemon"
+            ),
+        ):
+            resolve_artifact(
+                store,
+                str(artifact["artifact_digest"]),
+                str(artifact["platform"]),
+            )
+
+        self.assertEqual(len(run.call_args_list), 1)
+        self.assertEqual(run.call_args.args[0][:3], ["docker", "image", "inspect"])
+
+    def test_post_load_check_rebinds_image_to_authoritative_digest(self) -> None:
+        store, artifact = self.preserve()
+        inspect_count = 0
+
+        def docker(command: list[str], **_: object) -> mock.Mock:
+            nonlocal inspect_count
+            if command[:3] == ["docker", "image", "inspect"]:
+                inspect_count += 1
+                if inspect_count == 1:
+                    return mock.Mock(
+                        returncode=1, stdout=b"", stderr=b"No such image"
+                    )
+                return self.inspect(str(artifact["image_id"]))
+            if command[:3] == ["docker", "image", "load"]:
+                manifest_path = (
+                    store
+                    / str(artifact["path"])
+                    / "bot-artifact-manifest.json"
+                )
+                manifest_path.chmod(0o644)
+                manifest = json.loads(manifest_path.read_text())
+                manifest["artifact_digest"] = digest("f")
+                manifest_path.write_text(json.dumps(manifest))
+                return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+            self.fail("unexpected Docker command: " + repr(command))
+
+        with (
+            mock.patch("rps_runner.artifact_store.subprocess.run", side_effect=docker),
+            self.assertRaisesRegex(ArtifactStoreIntegrityError, "digest mismatch"),
+        ):
+            resolve_artifact(
+                store,
+                str(artifact["artifact_digest"]),
+                str(artifact["platform"]),
+            )
 
 
 if __name__ == "__main__":

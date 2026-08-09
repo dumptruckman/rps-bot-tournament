@@ -28,6 +28,15 @@ class ArtifactSelection:
     certification: Path
 
 
+@dataclass(frozen=True)
+class ArtifactIdentity:
+    artifact_digest: str
+    source_digest: str
+    platform: str
+    validation_identity: str
+    image_id: str
+
+
 def _read_object(path: Path, description: str) -> Mapping[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise ArtifactStoreIntegrityError(
@@ -80,7 +89,7 @@ def _file_digest(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _identity(value: Mapping[str, Any]) -> str:
+def _artifact_set_index_identity(value: Mapping[str, Any]) -> str:
     content = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return ARTIFACT_SET_INDEX_FORMAT_VERSION + "@sha256:" + hashlib.sha256(
         content
@@ -102,10 +111,14 @@ def _inspect_image(
         )
     diagnostics = completed.stderr.decode("utf-8", errors="replace").strip()
     if completed.returncode != 0:
-        if allow_missing:
+        missing = (
+            "no such image" in diagnostics.lower()
+            or "no such object" in diagnostics.lower()
+        )
+        if allow_missing and missing:
             return False
         raise ArtifactStoreIntegrityError(
-            "selected image is missing from the active Docker context: "
+            "could not verify selected image in the active Docker context: "
             + image_id
             + (": " + diagnostics if diagnostics else "")
         )
@@ -149,7 +162,60 @@ def _inspect_image(
     return True
 
 
-def _validated_selection(selection: ArtifactSelection) -> Mapping[str, Any]:
+def _artifact_identity_from_documents(
+    source_bundle: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+    report: Mapping[str, Any],
+) -> ArtifactIdentity:
+    if (
+        artifact.get("bot_artifact_manifest_format_version")
+        != "bot-artifact-manifest-v1"
+    ):
+        raise ArtifactStoreIntegrityError("Bot Artifact Manifest format is unsupported")
+    if report.get("validation_report_format_version") != "validation-report-v1":
+        raise ArtifactStoreIntegrityError("validation report format is unsupported")
+    if artifact.get("status") != "validated" or report.get("status") != "passed":
+        raise ArtifactStoreIntegrityError("Bot Artifact validation has not passed")
+    artifact_digest = _require_digest(
+        artifact.get("artifact_digest"), "artifact_digest"
+    )
+    source_digest = _require_digest(artifact.get("source_digest"), "source_digest")
+    platform = _require_platform(artifact.get("platform"), "platform")
+    validation_identity = artifact.get("validation_identity")
+    if not isinstance(validation_identity, str) or not validation_identity:
+        raise ArtifactStoreIntegrityError("validation identity is missing")
+    image = _mapping(artifact.get("image"), "image")
+    retention = _mapping(artifact.get("retention"), "retention")
+    image_id = _require_digest(image.get("local_image_id"), "image.local_image_id")
+    comparisons = (
+        (source_bundle.get("source_digest"), source_digest, "frozen source digest"),
+        (report.get("platform"), platform, "validation report platform"),
+        (
+            report.get("validation_identity"),
+            validation_identity,
+            "validation report identity",
+        ),
+        (image.get("manifest_digest"), artifact_digest, "image manifest digest"),
+        (retention.get("authority"), artifact_digest, "retention authority"),
+        (retention.get("local_image_id"), image_id, "retention image ID"),
+    )
+    for observed, expected, description in comparisons:
+        if observed != expected:
+            raise ArtifactStoreIntegrityError(description + " mismatch")
+    return ArtifactIdentity(
+        artifact_digest,
+        source_digest,
+        platform,
+        validation_identity,
+        image_id,
+    )
+
+
+def _validated_selection(selection: ArtifactSelection) -> ArtifactIdentity:
+    if selection.candidate.is_symlink() or not selection.candidate.is_dir():
+        raise ArtifactStoreIntegrityError("artifact candidate directory is missing")
+    if selection.certification.is_symlink() or not selection.certification.is_dir():
+        raise ArtifactStoreIntegrityError("artifact certification directory is missing")
     candidate = _read_object(
         selection.candidate / "artifact-candidate.json", "artifact candidate manifest"
     )
@@ -166,62 +232,30 @@ def _validated_selection(selection: ArtifactSelection) -> Mapping[str, Any]:
         raise ArtifactStoreIntegrityError(
             "artifact candidate manifest format is unsupported"
         )
-    if (
-        artifact.get("bot_artifact_manifest_format_version")
-        != "bot-artifact-manifest-v1"
-    ):
-        raise ArtifactStoreIntegrityError("Bot Artifact Manifest format is unsupported")
-    if report.get("validation_report_format_version") != "validation-report-v1":
-        raise ArtifactStoreIntegrityError("validation report format is unsupported")
-    if artifact.get("status") != "validated" or report.get("status") != "passed":
-        raise ArtifactStoreIntegrityError("Bot Artifact validation has not passed")
-
-    artifact_digest = _require_digest(
-        artifact.get("artifact_digest"), "artifact_digest"
-    )
-    source_digest = _require_digest(artifact.get("source_digest"), "source_digest")
-    platform = _require_platform(artifact.get("platform"), "platform")
-    validation_identity = artifact.get("validation_identity")
-    if not isinstance(validation_identity, str) or not validation_identity:
-        raise ArtifactStoreIntegrityError("validation identity is missing")
-    image = _mapping(artifact.get("image"), "image")
-    retention = _mapping(artifact.get("retention"), "retention")
-    image_id = _require_digest(image.get("local_image_id"), "image.local_image_id")
+    identity = _artifact_identity_from_documents(source_bundle, artifact, report)
     comparisons = (
         (
             candidate.get("artifact_digest"),
-            artifact_digest,
+            identity.artifact_digest,
             "candidate artifact digest",
         ),
-        (candidate.get("source_digest"), source_digest, "candidate source digest"),
-        (candidate.get("platform"), platform, "candidate platform"),
-        (source_bundle.get("source_digest"), source_digest, "frozen source digest"),
-        (report.get("platform"), platform, "validation report platform"),
         (
-            report.get("validation_identity"),
-            validation_identity,
-            "validation report identity",
+            candidate.get("source_digest"),
+            identity.source_digest,
+            "candidate source digest",
         ),
-        (image.get("manifest_digest"), artifact_digest, "image manifest digest"),
-        (retention.get("authority"), artifact_digest, "retention authority"),
-        (retention.get("local_image_id"), image_id, "retention image ID"),
+        (candidate.get("platform"), identity.platform, "candidate platform"),
     )
     for observed, expected, description in comparisons:
         if observed != expected:
             raise ArtifactStoreIntegrityError(description + " mismatch")
     candidate_image = _mapping(candidate.get("image"), "candidate image")
     if (
-        candidate_image.get("manifest_digest") != artifact_digest
-        or candidate_image.get("local_image_id") != image_id
+        candidate_image.get("manifest_digest") != identity.artifact_digest
+        or candidate_image.get("local_image_id") != identity.image_id
     ):
         raise ArtifactStoreIntegrityError("candidate image digest mismatch")
-    return {
-        "artifact_digest": artifact_digest,
-        "source_digest": source_digest,
-        "platform": platform,
-        "validation_identity": validation_identity,
-        "image_id": image_id,
-    }
+    return identity
 
 
 def _copy_source(candidate: Path, destination: Path) -> Mapping[str, str]:
@@ -251,9 +285,9 @@ def _copy_source(candidate: Path, destination: Path) -> Mapping[str, str]:
 
 
 def _write_artifact(
-    staging: Path, selection: ArtifactSelection, details: Mapping[str, Any]
+    staging: Path, selection: ArtifactSelection, identity: ArtifactIdentity
 ) -> Mapping[str, Any]:
-    artifact_key = str(details["artifact_digest"]).split(":", 1)[1]
+    artifact_key = identity.artifact_digest.split(":", 1)[1]
     relative_root = PurePosixPath("artifacts") / artifact_key
     output = staging / relative_root
     output.mkdir(parents=True)
@@ -269,11 +303,11 @@ def _write_artifact(
         target.write_bytes(source.read_bytes())
         files[name] = _file_digest(target)
     return {
-        "artifact_digest": details["artifact_digest"],
-        "source_digest": details["source_digest"],
-        "platform": details["platform"],
-        "validation_identity": details["validation_identity"],
-        "image_id": details["image_id"],
+        "artifact_digest": identity.artifact_digest,
+        "source_digest": identity.source_digest,
+        "platform": identity.platform,
+        "validation_identity": identity.validation_identity,
+        "image_id": identity.image_id,
         "path": relative_root.as_posix(),
         "files": dict(sorted(files.items())),
     }
@@ -326,13 +360,13 @@ def preserve_artifact_set(
             "at least one selected Bot Artifact is required"
         )
     validated = [_validated_selection(selection) for selection in selections]
-    artifact_digests = [str(item["artifact_digest"]) for item in validated]
+    artifact_digests = [item.artifact_digest for item in validated]
     if len(set(artifact_digests)) != len(artifact_digests):
         raise ArtifactStoreIntegrityError(
             "selected Bot Artifact digests must be unique"
         )
     for item in validated:
-        _inspect_image(str(item["image_id"]), str(item["platform"]))
+        _inspect_image(item.image_id, item.platform)
 
     store.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
@@ -343,7 +377,7 @@ def preserve_artifact_set(
             _write_artifact(staging, selection, details)
             for selection, details in sorted(
                 zip(selections, validated),
-                key=lambda pair: str(pair[1]["artifact_digest"]),
+                key=lambda pair: pair[1].artifact_digest,
             )
         ]
         archive = staging / "images.tar"
@@ -361,7 +395,7 @@ def preserve_artifact_set(
             **unsigned_index,
             "integrity": {
                 "algorithm": "sha256",
-                "index_identity": _identity(unsigned_index),
+                "index_identity": _artifact_set_index_identity(unsigned_index),
             },
         }
         (staging / "artifact-set-index.json").write_text(
@@ -387,7 +421,9 @@ def _safe_store_path(store: Path, relative: object, description: str) -> Path:
     return store.joinpath(*path.parts)
 
 
-def _verify_retained_entry(store: Path, entry: Mapping[str, Any]) -> None:
+def _verify_retained_entry(
+    store: Path, entry: Mapping[str, Any]
+) -> ArtifactIdentity:
     artifact_digest = _require_digest(entry.get("artifact_digest"), "artifact_digest")
     source_digest = _require_digest(entry.get("source_digest"), "source_digest")
     platform = _require_platform(entry.get("platform"), "platform")
@@ -452,17 +488,6 @@ def _verify_retained_entry(store: Path, entry: Mapping[str, Any]) -> None:
         root / "bot-artifact-manifest.json", "Bot Artifact Manifest"
     )
     report = _read_object(root / "validation-report.json", "validation report")
-    if (
-        manifest.get("bot_artifact_manifest_format_version")
-        != "bot-artifact-manifest-v1"
-    ):
-        raise ArtifactStoreIntegrityError("Bot Artifact Manifest format is unsupported")
-    if report.get("validation_report_format_version") != "validation-report-v1":
-        raise ArtifactStoreIntegrityError("validation report format is unsupported")
-    if manifest.get("status") != "validated" or report.get("status") != "passed":
-        raise ArtifactStoreIntegrityError(
-            "retained Bot Artifact validation has not passed"
-        )
     declared_source_files = source.get("files")
     indexed_source_files = sorted(
         name.removeprefix("source/")
@@ -476,32 +501,26 @@ def _verify_retained_entry(store: Path, entry: Mapping[str, Any]) -> None:
         raise ArtifactStoreIntegrityError(
             "frozen source manifest files do not match retained source files"
         )
-    manifest_image = _mapping(manifest.get("image"), "retained image")
-    manifest_retention = _mapping(manifest.get("retention"), "retained authority")
+    retained_identity = _artifact_identity_from_documents(source, manifest, report)
     comparisons = (
-        (source.get("source_digest"), source_digest, "frozen source digest"),
-        (manifest.get("artifact_digest"), artifact_digest, "manifest artifact digest"),
-        (manifest.get("source_digest"), source_digest, "manifest source digest"),
-        (manifest.get("platform"), platform, "manifest platform"),
         (
-            manifest.get("validation_identity"),
+            retained_identity.artifact_digest,
+            artifact_digest,
+            "manifest artifact digest",
+        ),
+        (retained_identity.source_digest, source_digest, "manifest source digest"),
+        (retained_identity.platform, platform, "manifest platform"),
+        (
+            retained_identity.validation_identity,
             validation_identity,
             "manifest validation identity",
         ),
-        (report.get("platform"), platform, "validation report platform"),
-        (
-            report.get("validation_identity"),
-            validation_identity,
-            "validation report identity",
-        ),
-        (manifest_image.get("manifest_digest"), artifact_digest, "image digest"),
-        (manifest_image.get("local_image_id"), image_id, "image ID"),
-        (manifest_retention.get("authority"), artifact_digest, "retention authority"),
-        (manifest_retention.get("local_image_id"), image_id, "retention image ID"),
+        (retained_identity.image_id, image_id, "image ID"),
     )
     for observed, expected, description in comparisons:
         if observed != expected:
             raise ArtifactStoreIntegrityError(description + " mismatch")
+    return retained_identity
 
 
 def verify_artifact_store(store: Path) -> Mapping[str, Any]:
@@ -522,7 +541,7 @@ def verify_artifact_store(store: Path) -> Mapping[str, Any]:
             "artifact store index integrity algorithm is unsupported"
         )
     unsigned = {key: value for key, value in index.items() if key != "integrity"}
-    if integrity.get("index_identity") != _identity(unsigned):
+    if integrity.get("index_identity") != _artifact_set_index_identity(unsigned):
         raise ArtifactStoreIntegrityError("artifact store index integrity mismatch")
 
     archive = _mapping(index.get("archive"), "image archive")
@@ -609,6 +628,7 @@ def resolve_artifact(store: Path, artifact_digest: str, platform: str) -> str:
     entry = matches[0]
     image_id = str(entry["image_id"])
     if _inspect_image(image_id, requested_platform, allow_missing=True):
+        _verify_resolved_authority(store, entry, requested_digest)
         return image_id
     _load_archive(store / "images.tar")
     if not _inspect_image(image_id, requested_platform, allow_missing=True):
@@ -619,4 +639,19 @@ def resolve_artifact(store: Path, artifact_digest: str, platform: str) -> str:
             + image_id
             + ")"
         )
+    _verify_resolved_authority(store, entry, requested_digest)
     return image_id
+
+
+def _verify_resolved_authority(
+    store: Path, entry: Mapping[str, Any], requested_digest: str
+) -> None:
+    """Close the archive-to-engine chain back to the authoritative digest."""
+    identity = _verify_retained_entry(store, entry)
+    if identity.artifact_digest != requested_digest:
+        raise ArtifactStoreIntegrityError(
+            "restored image authority digest mismatch: expected "
+            + requested_digest
+            + ", observed "
+            + identity.artifact_digest
+        )
