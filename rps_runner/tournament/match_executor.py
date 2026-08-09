@@ -15,7 +15,7 @@ from rps_runner.engine import (
     DEFAULT_READINESS_MARKER,
     InfrastructureError,
     MatchConfig,
-    cleanup_stale_match_attempt_containers,
+    cleanup_stale_match_containers,
     inspect_docker_engine,
     run_match,
 )
@@ -234,7 +234,7 @@ class ContainerMatchExecutor:
         )
         docker_operations: list[dict[str, object]] = []
         try:
-            cleanup_stale_match_attempt_containers(
+            cleanup_stale_match_containers(
                 identity, self.operations, docker_operations
             )
             engine_details = inspect_docker_engine(

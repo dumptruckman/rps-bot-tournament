@@ -195,7 +195,7 @@ class ContainerMatchAttemptIdentity:
         )
 
 
-def cleanup_stale_match_attempt_containers(
+def cleanup_stale_match_containers(
     identity: ContainerMatchAttemptIdentity,
     operations: ContainerOperations,
     docker_operations: Optional[list[dict[str, object]]] = None,

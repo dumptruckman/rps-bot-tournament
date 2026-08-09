@@ -526,6 +526,25 @@ archive, and advances the next canonical Match. Container and artifact-loading
 diagnostics remain Operational Telemetry and never enter Competition Records or
 the Scoreboard Projection.
 
+For a plan whose sealed execution mode is `continuous`, run every remaining
+canonical Match through Tournament Champion declaration (or the canonical
+no-champion outcome) with the sealed worker limit:
+
+```text
+rps-tournament plan \
+  --plan path/to/new-batch-output/tournament-plan.json \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --directory results/summer-cup-2026 \
+  --tournament-id summer-cup-2026 \
+  --continuous
+```
+
+Use `--start` for an explicit initial start, `--request-pause` from another
+process to pause after the active canonical prefix, and `--resume` after a pause
+or operator intervention. `--switch-mode step|continuous` is accepted only at
+a verified Match boundary. Reopening may omit `--plan` when `--artifact-store`
+names the retained store explicitly.
+
 ### Ratify a native platform and the execution profile
 
 Run the complete build, certification, and measured Python profile probe on a

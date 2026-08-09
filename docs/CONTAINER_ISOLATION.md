@@ -71,10 +71,13 @@ Changing a fixed control requires a new execution-profile version.
 ## Runtime faults and lifecycle
 
 The executor labels every container with `rps.runner.owner=rps-tournament`, the
-canonical `<Tournament ID>/<Match ID>/attempt-<number>` Match Attempt identity,
-and its Bot Position. Before an attempt starts, stale cleanup selects containers
-by both the runner-owner and exact Match Attempt labels, rejects an unsafe result
-set, and removes those containers individually. It never invokes Docker pruning.
+canonical `<Tournament ID>/<Match ID>` Match identity, the absolute
+`<Tournament ID>/<Match ID>/attempt-<number>` Match Attempt identity, and its Bot
+Position. Before an attempt starts, stale cleanup selects containers by both the
+runner-owner and canonical Match labels, rejects unsafe container identities,
+and removes those containers individually. This clears interrupted earlier
+attempt ordinals without inspecting or pruning containers owned by another
+Match or unrelated Docker state.
 
 On Match completion or a terminal fault, the runner closes both input streams,
 starts graceful stops concurrently, force-kills a survivor after the bounded

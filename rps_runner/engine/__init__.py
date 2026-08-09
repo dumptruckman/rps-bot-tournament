@@ -10,7 +10,7 @@ from rps_runner.engine.container_session import (
     ContainerMatchAttemptIdentity,
     ContainerOperations,
     DEFAULT_READINESS_MARKER,
-    cleanup_stale_match_attempt_containers,
+    cleanup_stale_match_containers,
     inspect_docker_engine,
 )
 from rps_runner.engine.match import run_match
@@ -27,7 +27,7 @@ __all__ = [
     "ContainerMatchAttemptIdentity",
     "ContainerOperations",
     "DEFAULT_READINESS_MARKER",
-    "cleanup_stale_match_attempt_containers",
+    "cleanup_stale_match_containers",
     "inspect_docker_engine",
     "InfrastructureError",
     "MatchConfig",

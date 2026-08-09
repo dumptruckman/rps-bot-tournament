@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 from io import StringIO
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 from typing import Any
@@ -11,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from rps_runner.artifact_store import ArtifactStoreIntegrityError
+from rps_runner.engine.container_session import ContainerOperations
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import load_catalog
 from rps_runner.tournament.match_executor import (
@@ -19,8 +22,10 @@ from rps_runner.tournament.match_executor import (
     MatchExecutionResult,
 )
 from rps_runner.tournament.immutable import thaw_json
+from rps_runner.tournament.state import fold_tournament_state
 from rps_runner.tournament.storage import (
     load_competition_records,
+    load_control_state,
     load_manifest,
     load_operational_telemetry,
     load_scoreboard_projection,
@@ -33,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = (
     PROJECT_ROOT / "language_environments" / "catalog-v1" / "catalog.json"
 )
+FAKE_DOCKER = PROJECT_ROOT / "tests" / "fixtures" / "fake_docker.py"
 
 
 class RecordingContainerExecutor(ContainerMatchExecutor):
@@ -505,6 +511,7 @@ class TournamentPlanCliTests(unittest.TestCase):
                 self.active_team_ids: set[str] = set()
                 self.maximum_active_matches = 0
                 self.overlap = threading.Event()
+                self.later_match_completed = threading.Event()
 
             def execute(
                 self, request: MatchExecutionRequest
@@ -527,7 +534,15 @@ class TournamentPlanCliTests(unittest.TestCase):
                         raise AssertionError(
                             "Continuous Mode did not start independent Matches"
                         )
-                    return super().execute(request)
+                    if request.match_id == "qualifying-0001-match-1":
+                        if not self.later_match_completed.wait(5):
+                            raise AssertionError(
+                                "Later canonical Match did not finish first"
+                            )
+                    result = super().execute(request)
+                    if request.match_id == "qualifying-0002-match-1":
+                        self.later_match_completed.set()
+                    return result
                 finally:
                     with self.lock:
                         self.active_team_ids.difference_update(team_ids)
@@ -548,6 +563,39 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(
             load_competition_records(self.directory)[-1].record["type"],
             "tournament_champion_declared",
+        )
+        expected_record_bytes = [
+            path.read_bytes()
+            for path in sorted((self.directory / "records").glob("*.json"))
+        ]
+        expected_projection = load_scoreboard_projection(self.directory)
+        expected_state = fold_tournament_state(
+            load_manifest(self.directory).manifest,
+            load_competition_records(self.directory),
+        )
+
+        self.directory = self.root / "repeated-tournament"
+        self.executor = RecordingContainerExecutor()
+        self.stdout = StringIO()
+        self.stderr = StringIO()
+
+        self.assertEqual(self.run_plan("--continuous"), 0, self.stderr.getvalue())
+        self.assertEqual(
+            [
+                path.read_bytes()
+                for path in sorted((self.directory / "records").glob("*.json"))
+            ],
+            expected_record_bytes,
+        )
+        self.assertEqual(
+            load_scoreboard_projection(self.directory), expected_projection
+        )
+        self.assertEqual(
+            fold_tournament_state(
+                load_manifest(self.directory).manifest,
+                load_competition_records(self.directory),
+            ),
+            expected_state,
         )
 
     def test_plan_controls_pause_switch_and_resume_at_match_boundaries(self) -> None:
@@ -605,6 +653,136 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(
             load_scoreboard_projection(self.directory)["status"], "complete"
         )
+
+    def test_public_continuous_plan_owns_fresh_container_lifecycles(self) -> None:
+        self.plan["execution"]["mode"] = "continuous"
+        self.plan["execution"]["parallelism"] = 2
+        self.plan_path.write_text(json.dumps(self.plan))
+        docker_state = self.root / "fake-docker"
+        docker_state.mkdir()
+        moves = {
+            "team-a": "fixed-r",
+            "team-b": "fixed-s",
+            "team-c": "fixed-p",
+            "team-d": "fixed-r",
+        }
+        self.executor = ContainerMatchExecutor(
+            lambda team_id, digest: moves[team_id],
+            operations=ContainerOperations(
+                docker_command=(sys.executable, str(FAKE_DOCKER)),
+                startup_timeout_seconds=1,
+                command_timeout_seconds=1,
+                shutdown_timeout_seconds=1,
+            ),
+        )
+
+        with patch.dict(os.environ, {"FAKE_DOCKER_STATE": str(docker_state)}):
+            code = self.run_plan("--continuous")
+
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        calls = [
+            json.loads(line)
+            for line in (docker_state / "calls.jsonl").read_text().splitlines()
+        ]
+        creates = [call for call in calls if call["command"] == "create"]
+        removes = [call for call in calls if call["command"] == "rm"]
+        self.assertGreater(len(creates), 0)
+        self.assertEqual(len(removes), len(creates))
+        self.assertEqual(
+            len(
+                {
+                    call["arguments"][call["arguments"].index("--name") + 1]
+                    for call in creates
+                }
+            ),
+            len(creates),
+        )
+        for call in creates:
+            labels = {
+                call["arguments"][index + 1]
+                for index, argument in enumerate(call["arguments"])
+                if argument == "--label"
+            }
+            self.assertIn("rps.runner.owner=rps-tournament", labels)
+            self.assertTrue(any(label.startswith("rps.match=") for label in labels))
+            self.assertTrue(
+                any(label.startswith("rps.match-attempt=") for label in labels)
+            )
+        self.assertEqual(
+            [path.name for path in docker_state.iterdir()], ["calls.jsonl"]
+        )
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"], "complete"
+        )
+
+    def test_continuous_plan_resumes_after_infrastructure_intervention(self) -> None:
+        class FailingContainerExecutor(RecordingContainerExecutor):
+            def execute(
+                self, request: MatchExecutionRequest
+            ) -> MatchExecutionResult:
+                self.requests.append(request)
+                return MatchExecutionResult(
+                    infrastructure_failure=True,
+                    competitive_outcome=None,
+                    operational_telemetry={
+                        "type": "match_attempt_failed",
+                        "diagnostic": "engine unavailable",
+                    },
+                )
+
+        self.plan["execution"]["mode"] = "continuous"
+        self.plan["execution"]["parallelism"] = 1
+        self.plan_path.write_text(json.dumps(self.plan))
+        failing = FailingContainerExecutor()
+        self.executor = failing
+
+        self.assertEqual(self.run_plan("--continuous"), 2)
+        self.assertEqual(
+            [request.attempt_number for request in failing.requests], [1, 2, 3]
+        )
+        self.assertEqual(
+            load_control_state(self.directory)["lifecycle"],
+            "infrastructure_intervention",
+        )
+        self.assertEqual(load_competition_records(self.directory), [])
+
+        self.executor = RecordingContainerExecutor()
+        self.stderr = StringIO()
+        self.assertEqual(self.run_plan("--resume"), 0, self.stderr.getvalue())
+        self.assertEqual(self.executor.requests[0].attempt_number, 4)
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"], "complete"
+        )
+
+    def test_continuous_plan_pauses_for_a_security_ruling(self) -> None:
+        class SuspectingContainerExecutor(RecordingContainerExecutor):
+            def execute(
+                self, request: MatchExecutionRequest
+            ) -> MatchExecutionResult:
+                self.requests.append(request)
+                return MatchExecutionResult(
+                    infrastructure_failure=False,
+                    competitive_outcome=None,
+                    operational_telemetry={"runtime_evidence": "variable"},
+                    suspected_security_violation_team_id=request.team_a_id,
+                    evidence_link="evidence:public-plan-security",
+                )
+
+        self.plan["execution"]["mode"] = "continuous"
+        self.plan["execution"]["parallelism"] = 1
+        self.plan_path.write_text(json.dumps(self.plan))
+        suspecting = SuspectingContainerExecutor()
+        self.executor = suspecting
+
+        self.assertEqual(self.run_plan("--continuous"), 0, self.stderr.getvalue())
+        self.assertEqual(len(suspecting.requests), 1)
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"],
+            "awaiting_security_ruling",
+        )
+        records = load_competition_records(self.directory)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].record["type"], "security_violation_suspected")
 
     def test_rejects_stale_profile_before_sealing(self) -> None:
         self.plan["global_resources"]["memory_limit_bytes"] += 1
