@@ -12,6 +12,7 @@ from typing import Optional, TextIO
 
 from rps_runner.cli import unsigned_64_bit_integer
 from rps_runner.engine import InfrastructureError
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.tournament.match_executor import (
     LocalMatchExecutor,
     MatchExecutionRequest,
@@ -239,7 +240,10 @@ def main(
                 if options.execution_scope in ("continuous", "start")
                 else "step"
             ),
-            continuous_parallelism=options.parallelism or 1,
+            continuous_parallelism=(
+                options.parallelism
+                or INITIAL_EXECUTION_PROFILE.recommended_match_parallelism
+            ),
         )
         if directory.exists():
             runner = TournamentRunner.open(

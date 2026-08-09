@@ -28,8 +28,14 @@ import time
 
 allocation = bytearray(8 * 1024 * 1024)
 with tempfile.NamedTemporaryFile(dir='/tmp') as temporary:
+    before = os.statvfs('/tmp')
     temporary.write(b'x' * (1024 * 1024))
     temporary.flush()
+    os.fsync(temporary.fileno())
+    after = os.statvfs('/tmp')
+    temporary_filesystem_bytes = max(
+        0, (before.f_bavail - after.f_bavail) * before.f_frsize
+    )
     descriptors = [open('/dev/null', 'rb') for _ in range(24)]
     ready = threading.Barrier(9)
     release = threading.Event()
@@ -64,7 +70,7 @@ print(json.dumps({
     'visible_pids': numeric_pids,
     'peak_threads': peak_threads,
     'peak_open_files': peak_open_files,
-    'temporary_filesystem_bytes': 1048576,
+    'temporary_filesystem_bytes': temporary_filesystem_bytes,
 }, sort_keys=True))
 """.strip()
 

@@ -49,8 +49,8 @@ to the requested platform and rejects emulation.
 On 2026-08-09, the native Linux/ARM64 lane passed using Python 3.13.14 and the
 pinned ARM64 runtime digest
 `sha256:8c5de2243cba89f49a93e05cacb78e27058bcaa69c148baac127005da03af39e`.
-The probe observed 441.366 ms container/runtime startup, 29,687,808 bytes peak
-RSS, 53.352 ms fixed-workload CPU time, nine peak threads, 29 peak open files,
+The probe observed 391.531 ms container/runtime startup, 29,745,152 bytes peak
+RSS, 57.211 ms fixed-workload CPU time, nine peak threads, 29 peak open files,
 one visible PID, and 1,048,576 temporary bytes. The same lane then passed the
 real networkless build, image-identity, readiness, protocol, determinism,
 isolation, resource, stream, signal, and lifecycle certification suite.

@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class ExecutionProfile:
-    """Published global ceilings shared by every Bot Position and language."""
+    """Ceilings shared by every Bot Position and Language Environment."""
 
     version: str
     first_move_timeout_ms: int

@@ -143,6 +143,7 @@ class TournamentDemoCliTests(unittest.TestCase):
 
         manifest = load_manifest(self.directory).manifest
         self.assertEqual(len(manifest["roster"]), 4)
+        self.assertEqual(manifest["continuous_parallelism"], 4)
         self.assertEqual(
             {team["team_id"] for team in manifest["roster"]},
             {"copycat-alpha", "copycat-beta", "random-alpha", "random-beta"},
@@ -462,7 +463,9 @@ class TournamentDemoCliTests(unittest.TestCase):
             return winning_result(request)
 
         self.assertEqual(
-            self.run_demo("--start", match_executor=pause_after_match),
+            self.run_demo(
+                "--start", "--parallelism", "1", match_executor=pause_after_match
+            ),
             0,
             self.stderr.getvalue(),
         )
@@ -578,7 +581,9 @@ class TournamentDemoCliTests(unittest.TestCase):
                 evidence_link=f"evidence:cli-continuous/{request.match_id}",
             )
 
-        exit_code = self.run_demo("--continuous", match_executor=suspect)
+        exit_code = self.run_demo(
+            "--continuous", "--parallelism", "1", match_executor=suspect
+        )
 
         self.assertEqual(exit_code, 0, self.stderr.getvalue())
         self.assertEqual(len(requests), 1)
