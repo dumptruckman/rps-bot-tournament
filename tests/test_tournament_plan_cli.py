@@ -252,16 +252,21 @@ class TournamentPlanCliTests(unittest.TestCase):
             first = next(iter(reports.values()))
             first.update(report_override)
         with (
-            patch("rps_runner.tournament.plan.verify_artifact_store", return_value=self.index),
             patch(
-                "rps_runner.tournament.plan.load_retained_artifact_manifests",
+                "rps_runner.tournament.retained_artifacts.verify_artifact_store",
+                return_value=self.index,
+            ),
+            patch(
+                "rps_runner.tournament.retained_artifacts."
+                "load_retained_artifact_manifests",
                 return_value={
                     (digest, "linux/arm64"): manifest
                     for digest, manifest in manifests.items()
                 },
             ),
             patch(
-                "rps_runner.tournament.plan.load_retained_validation_reports",
+                "rps_runner.tournament.retained_artifacts."
+                "load_retained_validation_reports",
                 return_value=reports,
             ),
             patch(
@@ -372,18 +377,20 @@ class TournamentPlanCliTests(unittest.TestCase):
 
         with (
             patch(
-                "rps_runner.tournament.plan.verify_artifact_store",
+                "rps_runner.tournament.retained_artifacts.verify_artifact_store",
                 return_value=self.index,
             ),
             patch(
-                "rps_runner.tournament.plan.load_retained_artifact_manifests",
+                "rps_runner.tournament.retained_artifacts."
+                "load_retained_artifact_manifests",
                 return_value={
                     (digest, "linux/arm64"): manifest
                     for digest, manifest in manifests.items()
                 },
             ),
             patch(
-                "rps_runner.tournament.plan.load_retained_validation_reports",
+                "rps_runner.tournament.retained_artifacts."
+                "load_retained_validation_reports",
                 return_value=reports,
             ),
             patch(
@@ -844,16 +851,21 @@ class TournamentPlanCliTests(unittest.TestCase):
             for digest, manifest in manifests.items()
         }
         with (
-            patch("rps_runner.tournament.plan.verify_artifact_store", return_value=self.index),
             patch(
-                "rps_runner.tournament.plan.load_retained_artifact_manifests",
+                "rps_runner.tournament.retained_artifacts.verify_artifact_store",
+                return_value=self.index,
+            ),
+            patch(
+                "rps_runner.tournament.retained_artifacts."
+                "load_retained_artifact_manifests",
                 return_value={
                     (digest, "linux/arm64"): manifest
                     for digest, manifest in manifests.items()
                 },
             ),
             patch(
-                "rps_runner.tournament.plan.load_retained_validation_reports",
+                "rps_runner.tournament.retained_artifacts."
+                "load_retained_validation_reports",
                 return_value=reports,
             ),
             patch("rps_runner.tournament_cli.resolve_artifact", return_value=self.digest("e")),

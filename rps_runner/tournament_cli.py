@@ -15,6 +15,7 @@ from rps_runner.artifact_store import ArtifactStoreIntegrityError, resolve_artif
 from rps_runner.engine import ContainerOperations, InfrastructureError
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import load_catalog
+from rps_runner.tournament.execution_inputs import TournamentExecutionInputs
 from rps_runner.tournament.match_executor import (
     ContainerMatchExecutor,
     LocalMatchExecutor,
@@ -439,7 +440,7 @@ def _run_plan_command(
             validated = validate_tournament_plan(plan_path, store, catalog)
 
         def resolver(
-            platform_by_digest: Mapping[str, str],
+            execution_inputs: TournamentExecutionInputs,
             *,
             persist_telemetry: bool,
         ) -> Callable[[str, str], ResolvedArtifactReference]:
@@ -447,7 +448,7 @@ def _run_plan_command(
                 team_id: str, artifact_digest: str
             ) -> ResolvedArtifactReference:
                 try:
-                    platform = platform_by_digest[artifact_digest]
+                    platform = execution_inputs.platform_by_digest[artifact_digest]
                 except KeyError as error:
                     raise InfrastructureError(
                         "Bot Artifact is not selected by the sealed Tournament"
@@ -509,16 +510,19 @@ def _run_plan_command(
 
         def executor(
             resolve: Callable[[str, str], ResolvedArtifactReference],
-            startup_timeout_seconds: float,
-            shutdown_timeout_seconds: float,
+            execution_inputs: TournamentExecutionInputs,
         ) -> Callable[[MatchExecutionRequest], MatchExecutionResult]:
             if container_match_executor is not None:
                 return container_match_executor
             return ContainerMatchExecutor(
                 resolve,
                 operations=ContainerOperations(
-                    startup_timeout_seconds=startup_timeout_seconds,
-                    shutdown_timeout_seconds=shutdown_timeout_seconds,
+                    startup_timeout_seconds=(
+                        execution_inputs.startup_timeout_seconds
+                    ),
+                    shutdown_timeout_seconds=(
+                        execution_inputs.shutdown_timeout_seconds
+                    ),
                 ),
             ).execute
 
@@ -536,18 +540,17 @@ def _run_plan_command(
                     manifest, store, catalog
                 )
                 match_resolver = resolver(
-                    archived.platform_by_digest,
+                    archived,
                     persist_telemetry=False,
                 )
                 opening_resolver = resolver(
-                    archived.platform_by_digest,
+                    archived,
                     persist_telemetry=True,
                 )
                 return TournamentExecutionBoundary(
                     executor(
                         match_resolver,
-                        archived.startup_timeout_seconds,
-                        archived.shutdown_timeout_seconds,
+                        archived,
                     ),
                     lambda team_id, digest: bool(
                         opening_resolver(team_id, digest)
@@ -562,7 +565,7 @@ def _run_plan_command(
             disposition = "resumed"
         else:
             creation_resolver = resolver(
-                validated.platform_by_digest,
+                validated.execution_inputs,
                 persist_telemetry=False,
             )
             for team in validated.roster:
@@ -577,8 +580,7 @@ def _run_plan_command(
                 config=validated.config,
                 match_executor=executor(
                     creation_resolver,
-                    validated.startup_timeout_seconds,
-                    validated.shutdown_timeout_seconds,
+                    validated.execution_inputs,
                 ),
             )
             disposition = "created"
