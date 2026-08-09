@@ -11,13 +11,17 @@ import sys
 from typing import Optional, TextIO
 
 from rps_runner.cli import unsigned_64_bit_integer
-from rps_runner.engine import InfrastructureError
+from rps_runner.artifact_store import resolve_artifact
+from rps_runner.engine import ContainerOperations, InfrastructureError
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
+from rps_runner.language_environment import load_catalog
 from rps_runner.tournament.match_executor import (
+    ContainerMatchExecutor,
     LocalMatchExecutor,
     MatchExecutionRequest,
     MatchExecutionResult,
 )
+from rps_runner.tournament.plan import validate_tournament_plan
 from rps_runner.tournament.runner import (
     BotArtifactManifest,
     Team,
@@ -77,6 +81,19 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run organizer-facing Tournament commands",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    plan = commands.add_parser(
+        "plan", help="create or step an official container-native Tournament"
+    )
+    plan.add_argument("--plan", required=True, type=Path)
+    plan.add_argument("--catalog", required=True, type=Path)
+    plan.add_argument("--artifact-store", type=Path)
+    plan.add_argument("--directory", required=True, type=Path)
+    plan.add_argument("--tournament-id", required=True)
+    plan.add_argument(
+        "--create-only",
+        action="store_true",
+        help="seal and publish the initial projection without advancing a Match",
+    )
     demo = commands.add_parser(
         "demo", help="create or resume the bundled four-Team demo Tournament"
     )
@@ -178,6 +195,9 @@ def main(
     match_executor: Optional[
         Callable[[MatchExecutionRequest], MatchExecutionResult]
     ] = None,
+    container_match_executor: Optional[
+        Callable[[MatchExecutionRequest], MatchExecutionResult]
+    ] = None,
     project_root: Path = PROJECT_ROOT,
     python_executable: Optional[Path] = None,
     stdout: Optional[TextIO] = None,
@@ -187,6 +207,14 @@ def main(
     output = stdout or sys.stdout
     error_output = stderr or sys.stderr
     directory = options.directory.expanduser().resolve()
+    if options.command == "plan":
+        return _run_plan_command(
+            options,
+            directory,
+            container_match_executor=container_match_executor,
+            output=output,
+            error_output=error_output,
+        )
     executable = (
         python_executable or Path(sys.executable)
     ).expanduser().absolute()
@@ -323,6 +351,120 @@ def main(
         print(f"rps-tournament: {error}", file=error_output)
         return ERROR_EXIT_CODE
     return 0
+
+
+def _run_plan_command(
+    options: argparse.Namespace,
+    directory: Path,
+    *,
+    container_match_executor: Optional[
+        Callable[[MatchExecutionRequest], MatchExecutionResult]
+    ],
+    output: TextIO,
+    error_output: TextIO,
+) -> int:
+    try:
+        plan_path = options.plan.expanduser().resolve()
+        store = (
+            options.artifact_store.expanduser().resolve()
+            if options.artifact_store is not None
+            else plan_path.parent / "artifact-store"
+        )
+        catalog = load_catalog(options.catalog.expanduser().resolve())
+        validated = validate_tournament_plan(plan_path, store, catalog)
+
+        def resolve(_team_id: str, artifact_digest: str) -> str:
+            try:
+                platform = validated.platform_by_digest[artifact_digest]
+            except KeyError as error:
+                raise ValueError(
+                    "Bot Artifact is not selected by the Tournament plan"
+                ) from error
+            return resolve_artifact(store, artifact_digest, platform)
+
+        if container_match_executor is None:
+            executor = ContainerMatchExecutor(
+                resolve,
+                operations=ContainerOperations(
+                    startup_timeout_seconds=(
+                        validated.startup_timeout_seconds
+                    ),
+                    shutdown_timeout_seconds=(
+                        validated.shutdown_timeout_seconds
+                    ),
+                ),
+            ).execute
+        else:
+            executor = container_match_executor
+        for team in validated.roster:
+            resolve(team.team_id, team.bot_artifact.artifact_digest)
+
+        if directory.exists():
+            runner = TournamentRunner.open(
+                directory,
+                match_executor=executor,
+                artifact_digest_verifier=lambda team_id, digest: bool(
+                    resolve(team_id, digest)
+                ),
+                sealed_manifest_verifier=lambda manifest: _verify_plan_manifest(
+                    manifest,
+                    options.tournament_id,
+                    validated,
+                ),
+            )
+            disposition = "resumed"
+        else:
+            runner = TournamentRunner.create(
+                directory,
+                tournament_id=options.tournament_id,
+                tournament_seed=validated.tournament_seed,
+                roster=validated.roster,
+                config=validated.config,
+                match_executor=executor,
+            )
+            disposition = "created"
+        committed_records: list[StoredCompetitionRecord] = []
+        if not options.create_only:
+            restore_continuous_mode = runner.current_mode == "continuous"
+            if restore_continuous_mode:
+                runner.switch_mode("step")
+            committed = runner.play_next_match()
+            if committed is not None:
+                committed_records.append(committed)
+            if restore_continuous_mode and runner.status not in (
+                "complete",
+                "aborted",
+            ):
+                runner.switch_mode("continuous")
+        _print_summary(
+            directory,
+            disposition=disposition,
+            committed_records=committed_records,
+            output=output,
+        )
+        return 0
+    except (OSError, RuntimeError, StorageError, TypeError, ValueError) as error:
+        print(f"rps-tournament: {error}", file=error_output)
+        return ERROR_EXIT_CODE
+
+
+def _verify_plan_manifest(
+    manifest: dict[str, object],
+    tournament_id: str,
+    validated: object,
+) -> None:
+    incompatible = tournament_manifest_incompatibilities(
+        manifest,
+        tournament_id=tournament_id,
+        tournament_seed=validated.tournament_seed,
+        roster=validated.roster,
+        config=validated.config,
+    )
+    if incompatible:
+        raise ValueError(
+            "Existing Tournament is incompatible with the selected plan: "
+            + ", ".join(incompatible)
+        )
 
 
 def _demo_roster(

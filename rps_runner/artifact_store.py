@@ -575,6 +575,57 @@ def verify_artifact_store(store: Path) -> Mapping[str, Any]:
     return index
 
 
+def load_retained_artifact_manifest(
+    store: Path, artifact_digest: str, platform: str
+) -> Mapping[str, Any]:
+    """Return one integrity-verified retained Bot Artifact Manifest."""
+    requested_digest = _require_digest(artifact_digest, "requested artifact digest")
+    requested_platform = _require_platform(platform, "requested platform")
+    manifests = load_retained_artifact_manifests(store)
+    try:
+        return manifests[(requested_digest, requested_platform)]
+    except KeyError as error:
+        raise ArtifactStoreIntegrityError(
+            "requested Bot Artifact Manifest is missing from the verified store"
+        ) from error
+
+
+def load_retained_artifact_manifests(
+    store: Path,
+    *,
+    verified_index: Mapping[str, Any] | None = None,
+) -> Mapping[tuple[str, str], Mapping[str, Any]]:
+    """Return all retained manifests after one complete store verification."""
+    index = verified_index if verified_index is not None else verify_artifact_store(store)
+    manifests: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for entry in index["artifacts"]:
+        digest = str(entry["artifact_digest"])
+        platform = str(entry["platform"])
+        root = _safe_store_path(store, entry.get("path"), "indexed artifact")
+        manifests[(digest, platform)] = _read_object(
+            root / "bot-artifact-manifest.json", "Bot Artifact Manifest"
+        )
+    return manifests
+
+
+def load_retained_validation_reports(
+    store: Path,
+    *,
+    verified_index: Mapping[str, Any] | None = None,
+) -> Mapping[tuple[str, str], Mapping[str, Any]]:
+    """Return all retained validation reports after complete store verification."""
+    index = verified_index if verified_index is not None else verify_artifact_store(store)
+    reports: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for entry in index["artifacts"]:
+        digest = str(entry["artifact_digest"])
+        platform = str(entry["platform"])
+        root = _safe_store_path(store, entry.get("path"), "indexed artifact")
+        reports[(digest, platform)] = _read_object(
+            root / "validation-report.json", "validation report"
+        )
+    return reports
+
+
 def _load_archive(archive: Path) -> None:
     try:
         completed = subprocess.run(

@@ -10,6 +10,7 @@ from unittest import mock
 from rps_runner.artifact_store import (
     ArtifactSelection,
     ArtifactStoreIntegrityError,
+    load_retained_artifact_manifest,
     preserve_artifact_set,
     resolve_artifact,
     verify_artifact_store,
@@ -237,6 +238,18 @@ class ArtifactStoreTests(unittest.TestCase):
         self.assertFalse(
             any("build" in command or "tag" in command for command in calls)
         )
+
+    def test_loads_the_integrity_verified_retained_manifest(self) -> None:
+        store, artifact = self.preserve()
+
+        manifest = load_retained_artifact_manifest(
+            store,
+            str(artifact["artifact_digest"]),
+            str(artifact["platform"]),
+        )
+
+        self.assertEqual(manifest["artifact_digest"], artifact["artifact_digest"])
+        self.assertEqual(manifest["validation_identity"], artifact["validation_identity"])
 
     def test_corrupt_index_archive_and_retained_report_fail_closed(self) -> None:
         cases = ("index", "archive", "report")

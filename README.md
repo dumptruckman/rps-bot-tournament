@@ -501,6 +501,26 @@ Remote fetching, GitHub authentication, branches, cutoff enforcement, and
 mutable Docker references are deliberately outside this command and the
 canonical plan.
 
+Review the draft, set its execution mode and global resource values, and then
+seal and advance one scheduler-selected Match through the container executor:
+
+```text
+rps-tournament plan \
+  --plan path/to/new-batch-output/tournament-plan.json \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --directory results/summer-cup-2026 \
+  --tournament-id summer-cup-2026
+```
+
+The adjacent `artifact-store` is used by default; pass `--artifact-store` when
+it is retained elsewhere. Before sealing, the command verifies the complete
+plan, catalog, profile/resources, validation identities, retained bytes, image
+digests, and native ARM64 platform. It loads missing selected images only from
+the verified archive. `--create-only` seals without stepping. Repeating the
+command verifies the same sealed inputs and advances the next canonical Match.
+Container diagnostics remain Operational Telemetry and never enter Competition
+Records or the Scoreboard Projection.
+
 ### Ratify a native platform and the execution profile
 
 Run the complete build, certification, and measured Python profile probe on a

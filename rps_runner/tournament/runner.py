@@ -13,6 +13,7 @@ from typing import Any, Optional, Union
 from rps_runner.engine import CONTAINER_ISOLATION_PROFILE_VERSION
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 
+from .immutable import freeze_json
 from .competition import (
     MatchOutcome,
     MatchResult,
@@ -21,7 +22,11 @@ from .competition import (
     Standing,
 )
 from .locking import TournamentRunLock
-from .match_executor import MatchExecutionRequest, MatchExecutionResult
+from .match_executor import (
+    ContainerMatchExecutor,
+    MatchExecutionRequest,
+    MatchExecutionResult,
+)
 from .rules import manifest_rules
 from .schedule import (
     Fixture,
@@ -79,7 +84,7 @@ STDERR_LIMIT_BYTES = INITIAL_EXECUTION_PROFILE.stderr_limit_bytes
 _MAX_U64 = (1 << 64) - 1
 _TEAM_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,62}\Z")
 _LANGUAGE_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
-_DIGEST_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
+_DIGEST_PATTERN = re.compile(r"(?:sha256:)?[0-9a-fA-F]{64}\Z")
 
 
 @dataclass(frozen=True)
@@ -103,11 +108,25 @@ class MatchLimits:
 
 
 @dataclass(frozen=True)
+class ContainerTournamentIdentity:
+    execution_profile_identity: str
+    catalog_version: str
+    catalog_identity: str
+    artifact_store_index_identity: str
+    target_platform: str
+
+
+@dataclass(frozen=True)
 class TournamentConfig:
     execution_mode: str = "step"
     match_limits: MatchLimits = MatchLimits()
     continuous_parallelism: int = 1
     execution_profile_version: str = CONTAINER_ISOLATION_PROFILE_VERSION
+    container_identity: Optional[ContainerTournamentIdentity] = None
+
+    @property
+    def executor_kind(self) -> str:
+        return "container" if self.container_identity is not None else "host-development"
 
 
 @dataclass(frozen=True)
@@ -117,6 +136,7 @@ class BotArtifactManifest:
     wrapper_version: str
     runtime_digest: str
     entrypoint: tuple[str, ...]
+    canonical_identity: Optional[Mapping[str, Any]] = None
 
 
 class InfrastructureInterventionRequiredError(RuntimeError):
@@ -200,6 +220,7 @@ class TournamentRunner:
         config: TournamentConfig = TournamentConfig(),
         match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult],
     ) -> "TournamentRunner":
+        _verify_executor_kind(config.executor_kind, match_executor)
         manifest = _build_manifest_payload(
             tournament_id=tournament_id,
             tournament_seed=tournament_seed,
@@ -234,6 +255,10 @@ class TournamentRunner:
         with TournamentRunLock(directory):
             stored = load_manifest(directory)
             _verify_compatibility(stored.manifest)
+            _verify_executor_kind(
+                str(stored.manifest.get("executor_kind", "host-development")),
+                match_executor,
+            )
             _verify_artifact_digests(
                 stored.manifest, artifact_digest_verifier
             )
@@ -869,6 +894,10 @@ class TournamentRunner:
     def _begin_execution(
         self, *, expected_mode: str, allow_intervention: bool
     ) -> None:
+        _verify_executor_kind(
+            str(self._manifest.get("executor_kind", "host-development")),
+            self.match_executor,
+        )
         state = self._state()
         if state.pending_security_ruling is not None:
             raise SecurityRulingRequiredError(state.pending_security_ruling.match_id)
@@ -1310,7 +1339,7 @@ def _build_manifest_payload(
     """Build the validated JSON payload to seal as a Tournament Manifest."""
 
     teams = tuple(roster)
-    _validate_creation_inputs(tournament_id, tournament_seed, teams)
+    _validate_creation_inputs(tournament_id, tournament_seed, teams, config)
     _validate_tournament_config(config)
     schedule = build_qualifying_schedule(
         (team.team_id for team in teams), tournament_seed
@@ -1327,6 +1356,7 @@ def _build_manifest_payload(
         "execution_mode": config.execution_mode,
         "continuous_parallelism": config.continuous_parallelism,
         "execution_profile_version": config.execution_profile_version,
+        "executor_kind": config.executor_kind,
         "match_limits": _serialize_match_limits(config.match_limits),
         "series_format": "best_of_three",
         "rules": manifest_rules(),
@@ -1340,6 +1370,21 @@ def _build_manifest_payload(
         "qualifying_schedule": [
             _serialize_batch(batch) for batch in schedule
         ],
+        **(
+            {
+                "execution_profile_identity": (
+                    config.container_identity.execution_profile_identity
+                ),
+                "catalog_version": config.container_identity.catalog_version,
+                "catalog_identity": config.container_identity.catalog_identity,
+                "artifact_store_index_identity": (
+                    config.container_identity.artifact_store_index_identity
+                ),
+                "target_platform": config.container_identity.target_platform,
+            }
+            if config.container_identity is not None
+            else {}
+        ),
     }
 
 
@@ -1347,6 +1392,7 @@ def _validate_creation_inputs(
     tournament_id: str,
     tournament_seed: int,
     roster: tuple[Team, ...],
+    config: TournamentConfig,
 ) -> None:
     if not isinstance(tournament_id, str) or not tournament_id.strip():
         raise ValueError("Tournament ID must be a non-empty string")
@@ -1365,6 +1411,13 @@ def _validate_creation_inputs(
         if not isinstance(team.display_name, str) or not team.display_name.strip():
             raise ValueError("Team Display Name must be a non-empty string")
         _validate_artifact(team.bot_artifact)
+        if (
+            config.container_identity is not None
+            and team.bot_artifact.canonical_identity is None
+        ):
+            raise ValueError(
+                "Official Tournament requires canonical Bot Artifact identities"
+            )
 
 
 def _validate_tournament_config(config: TournamentConfig) -> None:
@@ -1412,6 +1465,15 @@ def _validate_tournament_config(config: TournamentConfig) -> None:
         raise ValueError("network_access_allowed must be false")
     if config.execution_profile_version != CONTAINER_ISOLATION_PROFILE_VERSION:
         raise ValueError("Unsupported execution_profile_version")
+    if config.container_identity is not None:
+        if not isinstance(config.container_identity, ContainerTournamentIdentity):
+            raise TypeError("Container Tournament identity is invalid")
+        for field in ContainerTournamentIdentity.__dataclass_fields__:
+            value = getattr(config.container_identity, field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Official Tournament requires {field}")
+        if config.container_identity.target_platform != "linux/arm64":
+            raise ValueError("Official Tournament target platform must be linux/arm64")
 
 
 def _validate_artifact(artifact: BotArtifactManifest) -> None:
@@ -1434,6 +1496,15 @@ def _validate_artifact(artifact: BotArtifactManifest) -> None:
         )
     ):
         raise ValueError("Bot Artifact entrypoint must be an argument array")
+    if artifact.canonical_identity is not None:
+        if not isinstance(artifact.canonical_identity, Mapping):
+            raise ValueError("Canonical Bot Artifact identity must be an object")
+        try:
+            frozen = freeze_json(dict(artifact.canonical_identity))
+        except (TypeError, ValueError) as error:
+            raise ValueError("Canonical Bot Artifact identity is invalid") from error
+        if frozen.get("artifact_digest") != artifact.artifact_digest:
+            raise ValueError("Canonical Bot Artifact digest mismatch")
 
 
 def _verify_compatibility(manifest: dict[str, Any]) -> None:
@@ -1460,6 +1531,11 @@ def _verify_compatibility(manifest: dict[str, Any]) -> None:
         raise TournamentCompatibilityError(
             "continuous_parallelism", "positive integer", parallelism
         )
+    executor_kind = manifest.get("executor_kind", "host-development")
+    if executor_kind not in ("host-development", "container"):
+        raise TournamentCompatibilityError(
+            "executor_kind", "host-development or container", executor_kind
+        )
 
 
 def _verify_artifact_digests(
@@ -1478,14 +1554,31 @@ def _serialize_team(team: Team) -> dict[str, Any]:
     return {
         "team_id": team.team_id,
         "display_name": team.display_name,
-        "bot_artifact": {
-            "artifact_digest": artifact.artifact_digest,
-            "language_id": artifact.language_id,
-            "wrapper_version": artifact.wrapper_version,
-            "runtime_digest": artifact.runtime_digest,
-            "entrypoint": list(artifact.entrypoint),
-        },
+        "bot_artifact": (
+            dict(artifact.canonical_identity)
+            if artifact.canonical_identity is not None
+            else {
+                "artifact_digest": artifact.artifact_digest,
+                "language_id": artifact.language_id,
+                "wrapper_version": artifact.wrapper_version,
+                "runtime_digest": artifact.runtime_digest,
+                "entrypoint": list(artifact.entrypoint),
+            }
+        ),
     }
+
+
+def _verify_executor_kind(
+    executor_kind: str,
+    match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult],
+) -> None:
+    if executor_kind != "container":
+        return
+    owner = getattr(match_executor, "__self__", None)
+    if not isinstance(owner, ContainerMatchExecutor):
+        raise ValueError(
+            "Official container-profile Tournament requires the container executor"
+        )
 
 
 def _serialize_match_limits(limits: MatchLimits) -> dict[str, Any]:
@@ -1721,12 +1814,19 @@ def _build_match_request(
 
 
 def _artifact_from_manifest(value: dict[str, Any]) -> BotArtifactManifest:
+    identities = value.get("identities")
+    wrapper = (
+        identities.get("wrapper")
+        if isinstance(identities, dict)
+        else value.get("wrapper_version")
+    )
     return BotArtifactManifest(
         artifact_digest=value["artifact_digest"],
-        language_id=value["language_id"],
-        wrapper_version=value["wrapper_version"],
+        language_id=value.get("language", value.get("language_id")),
+        wrapper_version=wrapper,
         runtime_digest=value["runtime_digest"],
         entrypoint=tuple(value["entrypoint"]),
+        canonical_identity=(value if "identities" in value else None),
     )
 
 
