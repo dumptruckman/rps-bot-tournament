@@ -11,6 +11,7 @@ from rps_runner.tournament.match_executor import (
     LocalMatchExecutor,
     MatchExecutionRequest,
     MatchExecutionResult,
+    ResolvedArtifactReference,
 )
 from rps_runner.tournament.storage import canonical_json_bytes
 
@@ -560,6 +561,41 @@ class TournamentMatchExecutorTests(unittest.TestCase):
         self.assertEqual(
             result.operational_telemetry["infrastructure_failure"],
             {"kind": "InfrastructureError", "message": "artifact unavailable"},
+        )
+
+    def test_artifact_resolution_diagnostics_are_operational_telemetry(self) -> None:
+        executor = LocalMatchExecutor(
+            artifact_command_resolver=lambda team_id, digest: (
+                ResolvedArtifactReference(
+                    f"/{team_id}/{digest}",
+                    {
+                        "status": "verified",
+                        "archive_restored": team_id == "red-team",
+                    },
+                )
+            ),
+            match_runner=lambda config: engine_result(
+                status="completed",
+                winner="draw",
+                faults={"a": None, "b": None},
+                rounds=[],
+            ),
+        )
+
+        result = executor.execute(request())
+
+        self.assertEqual(
+            result.operational_telemetry["artifact_resolutions"],
+            {
+                "red-team": {
+                    "status": "verified",
+                    "archive_restored": True,
+                },
+                "blue-team": {
+                    "status": "verified",
+                    "archive_restored": False,
+                },
+            },
         )
 
     def test_engine_outcomes_are_normalized_to_team_relative_facts(self) -> None:

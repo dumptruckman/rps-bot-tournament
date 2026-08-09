@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from typing import Callable, Optional, cast
+from typing import Callable, Mapping, Optional, cast
 
 from rps_runner.engine import (
     CONTAINER_ISOLATION_PROFILE_VERSION,
@@ -22,7 +22,15 @@ from rps_runner.engine import (
 from rps_runner.tournament.immutable import FrozenJsonDict, freeze_json
 
 
-ArtifactReferenceResolver = Callable[[str, str], str]
+@dataclass(frozen=True)
+class ResolvedArtifactReference:
+    reference: str
+    operational_telemetry: Mapping[str, object]
+
+
+ArtifactReferenceResolver = Callable[
+    [str, str], str | ResolvedArtifactReference
+]
 MatchRunner = Callable[[MatchConfig], dict[str, object]]
 
 
@@ -363,13 +371,20 @@ def _execute_match_request(
     match_runner: MatchRunner,
 ) -> MatchExecutionResult:
     artifact_references: dict[str, str] = {}
+    resolution_telemetry: dict[str, Mapping[str, object]] = {}
     try:
-        reference_a = artifact_reference_resolver(
+        resolved_a = artifact_reference_resolver(
             request.team_a_id, request.artifact_digest_a
         )
+        reference_a = _artifact_reference(
+            request.team_a_id, resolved_a, resolution_telemetry
+        )
         artifact_references[request.team_a_id] = reference_a
-        reference_b = artifact_reference_resolver(
+        resolved_b = artifact_reference_resolver(
             request.team_b_id, request.artifact_digest_b
+        )
+        reference_b = _artifact_reference(
+            request.team_b_id, resolved_b, resolution_telemetry
         )
         artifact_references[request.team_b_id] = reference_b
         raw_result = match_runner(
@@ -389,12 +404,40 @@ def _execute_match_request(
         )
         _validate_match_result(request, raw_result)
     except InfrastructureError as error:
+        if resolution_telemetry:
+            error.retain_diagnostic(
+                "artifact_resolutions", resolution_telemetry
+            )
         return _failed_match_attempt(request, artifact_references, error)
-    return MatchExecutionResult(
+    result = MatchExecutionResult(
         infrastructure_failure=False,
         competitive_outcome=_competitive_outcome(request, raw_result),
         operational_telemetry=_operational_telemetry(request, raw_result),
     )
+    if not resolution_telemetry:
+        return result
+    telemetry = dict(result.operational_telemetry)
+    telemetry["artifact_resolutions"] = resolution_telemetry
+    return MatchExecutionResult(
+        infrastructure_failure=False,
+        competitive_outcome=result.competitive_outcome,
+        operational_telemetry=telemetry,
+    )
+
+
+def _artifact_reference(
+    team_id: str,
+    resolved: str | ResolvedArtifactReference,
+    telemetry: dict[str, Mapping[str, object]],
+) -> str:
+    if isinstance(resolved, str):
+        return resolved
+    if not isinstance(resolved, ResolvedArtifactReference):
+        raise InfrastructureError("Artifact resolver returned an invalid reference")
+    if not isinstance(resolved.reference, str) or not resolved.reference:
+        raise InfrastructureError("Artifact resolver returned an empty reference")
+    telemetry[team_id] = dict(resolved.operational_telemetry)
+    return resolved.reference
 
 
 def _validate_match_result(

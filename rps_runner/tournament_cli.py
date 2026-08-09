@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import hashlib
 from pathlib import Path
 import shlex
@@ -20,6 +20,7 @@ from rps_runner.tournament.match_executor import (
     LocalMatchExecutor,
     MatchExecutionRequest,
     MatchExecutionResult,
+    ResolvedArtifactReference,
 )
 from rps_runner.tournament.plan import (
     validate_sealed_tournament_artifacts,
@@ -29,6 +30,7 @@ from rps_runner.tournament.runner import (
     BotArtifactManifest,
     Team,
     TournamentConfig,
+    TournamentExecutionBoundary,
     TournamentRunner,
     tournament_manifest_incompatibilities,
 )
@@ -39,6 +41,7 @@ from rps_runner.tournament.state import (
 from rps_runner.tournament.storage import (
     StorageError,
     StoredCompetitionRecord,
+    append_operational_telemetry,
     load_control_state,
     load_manifest,
     load_scoreboard_projection,
@@ -386,58 +389,94 @@ def _run_plan_command(
             )
         catalog = load_catalog(options.catalog.expanduser().resolve())
 
-        if directory.exists():
-            sealed = load_manifest(directory).manifest
-            platform_by_digest = {
-                str(team["bot_artifact"]["artifact_digest"]): str(
-                    team["bot_artifact"]["platform"]
-                )
-                for team in sealed["roster"]
-            }
-            startup_timeout_seconds = float(sealed["startup_timeout_seconds"])
-            shutdown_timeout_seconds = float(sealed["shutdown_timeout_seconds"])
-        else:
+        if not directory.exists():
             if plan_path is None:
                 raise ValueError("Creating a Tournament requires --plan")
             validated = validate_tournament_plan(plan_path, store, catalog)
-            platform_by_digest = validated.platform_by_digest
-            startup_timeout_seconds = validated.startup_timeout_seconds
-            shutdown_timeout_seconds = validated.shutdown_timeout_seconds
 
-        def resolve(team_id: str, artifact_digest: str) -> str:
-            try:
-                platform = platform_by_digest[artifact_digest]
-            except KeyError as error:
-                raise InfrastructureError(
-                    "Bot Artifact is not selected by the sealed Tournament"
-                ) from error
-            try:
-                return resolve_artifact(store, artifact_digest, platform)
-            except ArtifactStoreIntegrityError as error:
-                failure = InfrastructureError(
-                    f"Bot Artifact archive resolution failed for {team_id}: {error}"
-                )
-                failure.retain_diagnostic(
-                    "artifact_resolution",
-                    {
-                        "team_id": team_id,
-                        "artifact_digest": artifact_digest,
-                        "platform": platform,
+        def resolver(
+            platform_by_digest: Mapping[str, str],
+            *,
+            persist_telemetry: bool,
+        ) -> Callable[[str, str], ResolvedArtifactReference]:
+            def resolve(
+                team_id: str, artifact_digest: str
+            ) -> ResolvedArtifactReference:
+                try:
+                    platform = platform_by_digest[artifact_digest]
+                except KeyError as error:
+                    raise InfrastructureError(
+                        "Bot Artifact is not selected by the sealed Tournament"
+                    ) from error
+                diagnostics: dict[str, object] = {}
+                identity = {
+                    "team_id": team_id,
+                    "artifact_digest": artifact_digest,
+                    "platform": platform,
+                }
+                try:
+                    reference = resolve_artifact(
+                        store,
+                        artifact_digest,
+                        platform,
+                        operational_telemetry=diagnostics,
+                    )
+                except ArtifactStoreIntegrityError as error:
+                    failure_diagnostics = {
+                        **identity,
+                        "status": "failed",
                         "condition": str(error),
-                    },
+                    }
+                    if persist_telemetry:
+                        append_operational_telemetry(
+                            directory,
+                            {
+                                "type": "artifact_resolution_failed",
+                                **failure_diagnostics,
+                            },
+                        )
+                    failure = InfrastructureError(
+                        f"Bot Artifact archive resolution failed for {team_id}: {error}"
+                    )
+                    failure.retain_diagnostic(
+                        "artifact_resolution", failure_diagnostics
+                    )
+                    raise failure from error
+                resolution_diagnostics = {
+                    **identity,
+                    "status": diagnostics.get("status", "verified"),
+                    "archive_restored": diagnostics.get(
+                        "archive_restored", False
+                    ),
+                }
+                if persist_telemetry:
+                    append_operational_telemetry(
+                        directory,
+                        {
+                            "type": "artifact_resolution_verified",
+                            **resolution_diagnostics,
+                        },
+                    )
+                return ResolvedArtifactReference(
+                    reference, resolution_diagnostics
                 )
-                raise failure from error
 
-        if container_match_executor is None:
-            executor = ContainerMatchExecutor(
+            return resolve
+
+        def executor(
+            resolve: Callable[[str, str], ResolvedArtifactReference],
+            startup_timeout_seconds: float,
+            shutdown_timeout_seconds: float,
+        ) -> Callable[[MatchExecutionRequest], MatchExecutionResult]:
+            if container_match_executor is not None:
+                return container_match_executor
+            return ContainerMatchExecutor(
                 resolve,
                 operations=ContainerOperations(
                     startup_timeout_seconds=startup_timeout_seconds,
                     shutdown_timeout_seconds=shutdown_timeout_seconds,
                 ),
             ).execute
-        else:
-            executor = container_match_executor
 
         if directory.exists():
             def verify_sealed_manifest(manifest: dict[str, object]) -> None:
@@ -445,27 +484,58 @@ def _run_plan_command(
                     raise ValueError(
                         "Existing Tournament ID does not match --tournament-id"
                     )
-                validate_sealed_tournament_artifacts(manifest, store, catalog)
+
+            def execution_boundary(
+                manifest: dict[str, object],
+            ) -> TournamentExecutionBoundary:
+                archived = validate_sealed_tournament_artifacts(
+                    manifest, store, catalog
+                )
+                match_resolver = resolver(
+                    archived.platform_by_digest,
+                    persist_telemetry=False,
+                )
+                opening_resolver = resolver(
+                    archived.platform_by_digest,
+                    persist_telemetry=True,
+                )
+                return TournamentExecutionBoundary(
+                    executor(
+                        match_resolver,
+                        archived.startup_timeout_seconds,
+                        archived.shutdown_timeout_seconds,
+                    ),
+                    lambda team_id, digest: bool(
+                        opening_resolver(team_id, digest)
+                    ),
+                )
 
             runner = TournamentRunner.open(
                 directory,
-                match_executor=executor,
-                artifact_digest_verifier=lambda team_id, digest: bool(
-                    resolve(team_id, digest)
-                ),
                 sealed_manifest_verifier=verify_sealed_manifest,
+                execution_boundary_factory=execution_boundary,
             )
             disposition = "resumed"
         else:
+            creation_resolver = resolver(
+                validated.platform_by_digest,
+                persist_telemetry=False,
+            )
             for team in validated.roster:
-                resolve(team.team_id, team.bot_artifact.artifact_digest)
+                creation_resolver(
+                    team.team_id, team.bot_artifact.artifact_digest
+                )
             runner = TournamentRunner.create(
                 directory,
                 tournament_id=options.tournament_id,
                 tournament_seed=validated.tournament_seed,
                 roster=validated.roster,
                 config=validated.config,
-                match_executor=executor,
+                match_executor=executor(
+                    creation_resolver,
+                    validated.startup_timeout_seconds,
+                    validated.shutdown_timeout_seconds,
+                ),
             )
             disposition = "created"
         committed_records: list[StoredCompetitionRecord] = []

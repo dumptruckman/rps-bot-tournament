@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, MutableMapping, Sequence
 
 
 ARTIFACT_SET_INDEX_FORMAT_VERSION = "artifact-set-index-v1"
@@ -645,7 +645,13 @@ def _load_archive(archive: Path) -> None:
         )
 
 
-def resolve_artifact(store: Path, artifact_digest: str, platform: str) -> str:
+def resolve_artifact(
+    store: Path,
+    artifact_digest: str,
+    platform: str,
+    *,
+    operational_telemetry: MutableMapping[str, object] | None = None,
+) -> str:
     """Resolve one exact image, restoring only from the verified local archive."""
     requested_digest = _require_digest(artifact_digest, "requested artifact digest")
     requested_platform = _require_platform(platform, "requested platform")
@@ -680,6 +686,10 @@ def resolve_artifact(store: Path, artifact_digest: str, platform: str) -> str:
     image_id = str(entry["image_id"])
     if _inspect_image(image_id, requested_platform, allow_missing=True):
         _verify_resolved_authority(store, entry, requested_digest)
+        if operational_telemetry is not None:
+            operational_telemetry.update(
+                {"status": "verified", "archive_restored": False}
+            )
         return image_id
     _load_archive(store / "images.tar")
     if not _inspect_image(image_id, requested_platform, allow_missing=True):
@@ -691,6 +701,10 @@ def resolve_artifact(store: Path, artifact_digest: str, platform: str) -> str:
             + ")"
         )
     _verify_resolved_authority(store, entry, requested_digest)
+    if operational_telemetry is not None:
+        operational_telemetry.update(
+            {"status": "verified", "archive_restored": True}
+        )
     return image_id
 
 

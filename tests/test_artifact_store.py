@@ -203,6 +203,7 @@ class ArtifactStoreTests(unittest.TestCase):
         store, artifact = self.preserve()
         calls: list[list[str]] = []
         inspect_count = 0
+        telemetry: dict[str, object] = {}
 
         def docker(command: list[str], **_: object) -> mock.Mock:
             nonlocal inspect_count
@@ -223,6 +224,7 @@ class ArtifactStoreTests(unittest.TestCase):
                 store,
                 str(artifact["artifact_digest"]),
                 str(artifact["platform"]),
+                operational_telemetry=telemetry,
             )
 
         self.assertEqual(resolved, artifact["image_id"])
@@ -237,6 +239,9 @@ class ArtifactStoreTests(unittest.TestCase):
         self.assertEqual(calls[1][-1], str(store / "images.tar"))
         self.assertFalse(
             any("build" in command or "tag" in command for command in calls)
+        )
+        self.assertEqual(
+            telemetry, {"status": "verified", "archive_restored": True}
         )
 
     def test_loads_the_integrity_verified_retained_manifest(self) -> None:

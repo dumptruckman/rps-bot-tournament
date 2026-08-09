@@ -193,6 +193,12 @@ class Team:
 
 
 @dataclass(frozen=True)
+class TournamentExecutionBoundary:
+    match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult]
+    artifact_digest_verifier: Callable[[str, str], bool]
+
+
+@dataclass(frozen=True)
 class _ScheduledMatchAttempt:
     fixture: dict[str, Any]
     match_ordinal: int
@@ -248,16 +254,38 @@ class TournamentRunner:
         cls,
         tournament_directory: Union[Path, str],
         *,
-        match_executor: Callable[[MatchExecutionRequest], MatchExecutionResult],
-        artifact_digest_verifier: Callable[[str, str], bool],
+        match_executor: Optional[
+            Callable[[MatchExecutionRequest], MatchExecutionResult]
+        ] = None,
+        artifact_digest_verifier: Optional[Callable[[str, str], bool]] = None,
         sealed_manifest_verifier: Optional[
             Callable[[dict[str, Any]], None]
+        ] = None,
+        execution_boundary_factory: Optional[
+            Callable[[dict[str, Any]], TournamentExecutionBoundary]
         ] = None,
     ) -> "TournamentRunner":
         directory = Path(tournament_directory)
         with TournamentRunLock(directory):
             stored = load_manifest(directory)
             _verify_compatibility(stored.manifest)
+            if execution_boundary_factory is not None:
+                if match_executor is not None or artifact_digest_verifier is not None:
+                    raise TypeError(
+                        "Use either an execution boundary factory or direct "
+                        "Tournament execution dependencies"
+                    )
+                if sealed_manifest_verifier is not None:
+                    sealed_manifest_verifier(stored.manifest)
+                boundary = execution_boundary_factory(stored.manifest)
+                if not isinstance(boundary, TournamentExecutionBoundary):
+                    raise TypeError(
+                        "Tournament execution boundary factory returned an invalid value"
+                    )
+                match_executor = boundary.match_executor
+                artifact_digest_verifier = boundary.artifact_digest_verifier
+            if match_executor is None or artifact_digest_verifier is None:
+                raise TypeError("Tournament opening requires an execution boundary")
             _verify_executor_kind(
                 str(stored.manifest.get("executor_kind", "host-development")),
                 match_executor,
@@ -265,7 +293,10 @@ class TournamentRunner:
             _verify_artifact_digests(
                 stored.manifest, artifact_digest_verifier
             )
-            if sealed_manifest_verifier is not None:
+            if (
+                execution_boundary_factory is None
+                and sealed_manifest_verifier is not None
+            ):
                 sealed_manifest_verifier(stored.manifest)
             records = load_competition_records(directory)
             control = load_control_state(directory)

@@ -9,6 +9,7 @@ from typing import Any
 import unittest
 from unittest.mock import patch
 
+from rps_runner.artifact_store import ArtifactStoreIntegrityError
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import load_catalog
 from rps_runner.tournament.match_executor import (
@@ -224,6 +225,7 @@ class TournamentPlanCliTests(unittest.TestCase):
         self,
         *extra: str,
         report_override: dict[str, Any] | None = None,
+        resolve_error: Exception | None = None,
     ) -> int:
         manifests = {
             team["bot_artifact_manifest"]["artifact_digest"]: team[
@@ -251,7 +253,11 @@ class TournamentPlanCliTests(unittest.TestCase):
                 "rps_runner.tournament.plan.load_retained_validation_reports",
                 return_value=reports,
             ),
-            patch("rps_runner.tournament_cli.resolve_artifact", return_value=self.digest("e")),
+            patch(
+                "rps_runner.tournament_cli.resolve_artifact",
+                return_value=self.digest("e"),
+                side_effect=resolve_error,
+            ),
         ):
             return main(
                 [
@@ -395,6 +401,12 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(len(self.executor.requests), 1)
         self.assertEqual(resolve.call_count, 4)
         self.assertIn("Tournament: resumed", self.stdout.getvalue())
+        telemetry = load_operational_telemetry(self.directory)
+        self.assertEqual(
+            [entry["type"] for entry in telemetry[:4]],
+            ["artifact_resolution_verified"] * 4,
+        )
+        self.assertNotIn("artifact_resolution", str(load_scoreboard_projection(self.directory)))
 
     def test_resume_rejects_an_artifact_store_with_another_index_identity(self) -> None:
         self.assertEqual(self.run_plan("--create-only"), 0)
@@ -453,6 +465,22 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("final validation identity mismatch", self.stderr.getvalue())
         self.assertEqual(self.executor.requests, [])
+
+    def test_resume_persists_archive_resolution_failure_as_telemetry(self) -> None:
+        self.assertEqual(self.run_plan("--create-only"), 0)
+        self.stderr = StringIO()
+
+        code = self.run_plan(
+            resolve_error=ArtifactStoreIntegrityError(
+                "verified archive is corrupt"
+            )
+        )
+
+        self.assertEqual(code, 2)
+        telemetry = load_operational_telemetry(self.directory)
+        self.assertEqual(telemetry[-1]["type"], "artifact_resolution_failed")
+        self.assertIn("verified archive is corrupt", telemetry[-1]["condition"])
+        self.assertNotIn("artifact_resolution", str(load_scoreboard_projection(self.directory)))
 
     def test_one_step_preserves_a_continuous_plan_as_the_current_mode(self) -> None:
         self.plan["execution"]["mode"] = "continuous"

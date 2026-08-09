@@ -20,6 +20,7 @@ from rps_runner.tournament.runner import (
     Team,
     TournamentCompatibilityError,
     TournamentConfig,
+    TournamentExecutionBoundary,
     TournamentRunner,
 )
 from rps_runner.tournament.state import (
@@ -4252,6 +4253,27 @@ class TournamentResumeTests(unittest.TestCase):
         )
 
         self.assertEqual(verified_tournament_ids, ["resume-verification-cup"])
+
+    def test_open_verifies_sealed_identity_before_resolving_artifacts(self) -> None:
+        events: list[str] = []
+
+        TournamentRunner.open(
+            self.directory,
+            execution_boundary_factory=lambda manifest: (
+                TournamentExecutionBoundary(
+                    lambda request: executor_result(
+                        request, winner_team_id="beta"
+                    ),
+                    lambda team_id, digest: (
+                        events.append("artifact") or True
+                    ),
+                )
+            ),
+            sealed_manifest_verifier=lambda manifest: events.append("sealed"),
+        )
+
+        self.assertEqual(events[0], "sealed")
+        self.assertEqual(events.count("artifact"), 4)
 
     def test_open_rebuilds_missing_and_corrupt_projection_from_records(
         self,
