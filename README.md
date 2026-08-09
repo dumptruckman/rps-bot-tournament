@@ -476,6 +476,15 @@ requested platform; emulation is not accepted. GitHub runs the same lane as
 ceilings, evidence, platform-specific runtime identities, and four-Match initial
 parallelism.
 
+### Diagnose container-host readiness
+
+Use `rps-doctor` to inspect the active Docker-compatible context, native
+platform, engine controls, frozen catalog, prepared images, durable Bot Artifact
+store, disk, CPU capacity, execution profile, and optional rehearsal evidence.
+The command is read-only and accepts OrbStack without requiring Docker Desktop.
+See [`docs/HOST_READINESS.md`](docs/HOST_READINESS.md) for its immutable-image
+inputs, stable JSON report, and complete Docker command allowlist.
+
 ---
 
 # Submission Format
