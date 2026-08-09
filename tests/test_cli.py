@@ -276,7 +276,7 @@ class MatchEngineCliTests(unittest.TestCase):
         self.assertEqual(result["faults"]["a"]["kind"], "timeout")
         self.assertIsNone(result["faults"]["b"])
 
-    def test_stderr_is_drained_and_capture_is_bounded(self) -> None:
+    def test_stderr_overflow_is_bounded_and_forfeits_the_match(self) -> None:
         noisy_bot_move = "R"
         quiet_bot_move = "S"
         emitted_stderr_bytes = 100_000
@@ -296,7 +296,9 @@ class MatchEngineCliTests(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "forfeit")
+        self.assertEqual(result["winner"], "b")
+        self.assertEqual(result["faults"]["a"]["kind"], "excessive_stderr")
         self.assertEqual(
             len(result["bots"]["a"]["stderr"]), captured_stderr_bytes
         )

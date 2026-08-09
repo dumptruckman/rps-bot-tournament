@@ -131,6 +131,11 @@ class HostProcessBotSession:
                 f"Could not read bot {self.bot_position} output: {error}"
             ) from error
 
+    def disconnection_fault(
+        self, turn: int, default_detail: str
+    ) -> dict[str, object]:
+        return {"kind": "unexpected_exit", "turn": turn, "detail": default_detail}
+
     def terminate(self) -> None:
         process = self.process
         if process is None or process.poll() is not None:
@@ -177,6 +182,9 @@ class HostProcessBotSession:
     @property
     def stderr_truncated(self) -> bool:
         return False if self.stderr is None else self.stderr.truncated
+
+    def operational_telemetry(self) -> dict[str, object]:
+        return {}
 
     def _started_process(self) -> subprocess.Popen[bytes]:
         if self.process is None:

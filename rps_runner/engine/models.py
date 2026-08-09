@@ -7,6 +7,13 @@ from typing import Optional
 class InfrastructureError(RuntimeError):
     """The runner could not create or operate the match infrastructure."""
 
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.operational_telemetry: dict[str, object] = {}
+
+    def retain_diagnostic(self, key: str, value: object) -> None:
+        self.operational_telemetry[key] = value
+
 
 @dataclass(frozen=True)
 class MatchConfig:

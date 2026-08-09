@@ -57,6 +57,11 @@ class ScriptedSession:
         )
         return os.read(self.read_descriptor, maximum_bytes)
 
+    def disconnection_fault(
+        self, turn: int, default_detail: str
+    ) -> dict[str, object]:
+        return {"kind": "unexpected_exit", "turn": turn, "detail": default_detail}
+
     def terminate(self) -> None:
         self.terminated = True
 
@@ -90,6 +95,9 @@ class ScriptedSession:
     @property
     def stderr_truncated(self) -> bool:
         return False
+
+    def operational_telemetry(self) -> dict[str, object]:
+        return {}
 
 
 class SessionHarness:

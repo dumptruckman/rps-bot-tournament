@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Callable, Optional, cast
 
 from rps_runner.engine import (
     CONTAINER_ISOLATION_PROFILE_VERSION,
     ContainerBotSession,
     ContainerIsolationProfile,
+    ContainerMatchAttemptIdentity,
     ContainerOperations,
     DEFAULT_READINESS_MARKER,
     InfrastructureError,
     MatchConfig,
+    cleanup_stale_match_attempt_containers,
+    inspect_docker_engine,
     run_match,
 )
 from rps_runner.tournament.immutable import FrozenJsonDict, freeze_json
@@ -217,6 +221,20 @@ class ContainerMatchExecutor:
         self.readiness_marker = readiness_marker
 
     def execute(self, request: MatchExecutionRequest) -> MatchExecutionResult:
+        identity = ContainerMatchAttemptIdentity.from_request(
+            request.tournament_id, request.match_id, request.attempt_number
+        )
+        docker_operations: list[dict[str, object]] = []
+        try:
+            cleanup_stale_match_attempt_containers(
+                identity, self.operations, docker_operations
+            )
+            engine_details = inspect_docker_engine(
+                self.operations, docker_operations
+            )
+        except InfrastructureError as error:
+            error.retain_diagnostic("docker_operations", docker_operations)
+            return _failed_match_attempt(request, {}, error)
         profile = ContainerIsolationProfile(
             version=request.execution_profile_version,
             cpu_millis_per_second=request.cpu_limit_ms,
@@ -232,23 +250,111 @@ class ContainerMatchExecutor:
             artifact_reference: str,
             session_config: MatchConfig,
         ) -> ContainerBotSession:
-            return ContainerBotSession(
+            session = ContainerBotSession(
                 bot_position,
                 artifact_reference,
                 session_config,
                 profile,
+                identity,
+                engine_details,
                 operations=self.operations,
                 readiness_marker=self.readiness_marker,
             )
+            sessions.append(session)
+            return session
 
         def run_container_match(config: MatchConfig) -> dict[str, object]:
-            return run_match(config, session_factory=create_session)
+            try:
+                return run_match(config, session_factory=create_session)
+            except InfrastructureError as error:
+                error.retain_diagnostic(
+                    "bots_by_position",
+                    {
+                        session.bot_position: session.operational_telemetry()
+                        for session in sessions
+                    },
+                )
+                raise
 
-        return _execute_match_request(
+        sessions: list[ContainerBotSession] = []
+        result = _execute_match_request(
             request,
             self.artifact_image_resolver,
             run_container_match,
         )
+        result = _with_docker_operations(result, docker_operations)
+        return _container_security_result(request, identity, result)
+
+
+def _with_docker_operations(
+    result: MatchExecutionResult,
+    docker_operations: list[dict[str, object]],
+) -> MatchExecutionResult:
+    telemetry = dict(result.operational_telemetry)
+    telemetry["docker_operations"] = docker_operations
+    return MatchExecutionResult(
+        infrastructure_failure=result.infrastructure_failure,
+        competitive_outcome=result.competitive_outcome,
+        operational_telemetry=telemetry,
+        suspected_security_violation_team_id=(
+            result.suspected_security_violation_team_id
+        ),
+        evidence_link=result.evidence_link,
+        suspected_security_violation_team_ids=(
+            result.suspected_security_violation_team_ids
+        ),
+    )
+
+
+def _container_security_result(
+    request: MatchExecutionRequest,
+    identity: ContainerMatchAttemptIdentity,
+    result: MatchExecutionResult,
+) -> MatchExecutionResult:
+    if result.infrastructure_failure or result.competitive_outcome is None:
+        return result
+    faults = result.competitive_outcome.get("faults")
+    bots = result.operational_telemetry.get("bots")
+    if not isinstance(faults, dict) or not isinstance(bots, dict):
+        return result
+
+    suspected_team_ids: list[str] = []
+    evidence_material: list[str] = []
+    for team_id in (request.team_a_id, request.team_b_id):
+        fault = faults.get(team_id)
+        diagnostics = bots.get(team_id)
+        if not isinstance(fault, dict) or not isinstance(diagnostics, dict):
+            continue
+        evidence = diagnostics.get("security_evidence")
+        if (
+            fault.get("kind") != "suspected_security_violation"
+            or not isinstance(evidence, dict)
+            or evidence.get("source") != "container_runtime"
+            or evidence.get("attributable") is not True
+            or not isinstance(evidence.get("raw"), str)
+            or not evidence["raw"]
+        ):
+            continue
+        suspected_team_ids.append(team_id)
+        evidence_material.append(evidence["raw"])
+
+    if not suspected_team_ids:
+        return result
+    opaque_digest = hashlib.sha256(
+        (identity.value + "\0" + "\0".join(evidence_material)).encode("utf-8")
+    ).hexdigest()
+    fields: dict[str, object] = {}
+    if len(suspected_team_ids) == 1:
+        fields["suspected_security_violation_team_id"] = suspected_team_ids[0]
+    else:
+        fields["suspected_security_violation_team_ids"] = tuple(suspected_team_ids)
+    return MatchExecutionResult(
+        infrastructure_failure=False,
+        competitive_outcome=None,
+        operational_telemetry=result.operational_telemetry,
+        evidence_link=f"evidence:sha256:{opaque_digest}",
+        **fields,
+    )
 
 
 def _execute_match_request(
@@ -509,21 +615,30 @@ def _failed_match_attempt(
     commands: dict[str, str],
     error: InfrastructureError,
 ) -> MatchExecutionResult:
+    telemetry: dict[str, object] = {
+        "tournament_id": request.tournament_id,
+        "fixture_id": request.fixture_id,
+        "match_id": request.match_id,
+        "attempt_number": request.attempt_number,
+        "resource_limits": _resource_limits(request),
+        "commands": commands,
+        "infrastructure_failure": {
+            "kind": type(error).__name__,
+            "message": str(error),
+        },
+    }
+    diagnostics = dict(error.operational_telemetry)
+    bots_by_position = diagnostics.pop("bots_by_position", None)
+    if isinstance(bots_by_position, dict):
+        telemetry["bots"] = {
+            request.team_a_id: bots_by_position.get("a", {}),
+            request.team_b_id: bots_by_position.get("b", {}),
+        }
+    telemetry.update(diagnostics)
     return MatchExecutionResult(
         infrastructure_failure=True,
         competitive_outcome=None,
-        operational_telemetry={
-            "tournament_id": request.tournament_id,
-            "fixture_id": request.fixture_id,
-            "match_id": request.match_id,
-            "attempt_number": request.attempt_number,
-            "resource_limits": _resource_limits(request),
-            "commands": commands,
-            "infrastructure_failure": {
-                "kind": type(error).__name__,
-                "message": str(error),
-            },
-        },
+        operational_telemetry=telemetry,
     )
 
 
@@ -623,7 +738,7 @@ def _operational_telemetry(
             for position, duration in total_response_ns.items()
         }
     raw_bots = cast(dict[str, object], raw_result["bots"])
-    return {
+    telemetry = {
         "tournament_id": request.tournament_id,
         "fixture_id": request.fixture_id,
         "match_id": request.match_id,
@@ -647,6 +762,10 @@ def _operational_telemetry(
             if fault is not None
         },
     }
+    lifecycle = raw_result.get("lifecycle")
+    if lifecycle is not None:
+        telemetry["lifecycle"] = lifecycle
+    return telemetry
 
 
 def _resource_limits(request: MatchExecutionRequest) -> dict[str, object]:

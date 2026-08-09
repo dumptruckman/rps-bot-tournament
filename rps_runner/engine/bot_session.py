@@ -28,6 +28,11 @@ class BotSession(Protocol):
     def read_output(self, maximum_bytes: int) -> bytes:
         """Read up to ``maximum_bytes`` from the Bot Artifact's output."""
 
+    def disconnection_fault(
+        self, turn: int, default_detail: str
+    ) -> dict[str, object]:
+        """Classify a closed output stream using attributable runtime evidence."""
+
     def terminate(self) -> None:
         """Ask a faulty Bot Artifact to terminate without blocking."""
 
@@ -46,6 +51,9 @@ class BotSession(Protocol):
     @property
     def stderr_truncated(self) -> bool:
         """Report whether diagnostic output exceeded its capture limit."""
+
+    def operational_telemetry(self) -> dict[str, object]:
+        """Return runtime observations excluded from competitive results."""
 
 
 class BotSessionFactory(Protocol):

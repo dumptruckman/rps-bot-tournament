@@ -45,6 +45,7 @@ def _bot_result(session: BotSession) -> dict[str, object]:
         "command": session.artifact_reference,
         "stderr": session.stderr_text(),
         "stderr_truncated": session.stderr_truncated,
+        **session.operational_telemetry(),
     }
 
 
@@ -58,8 +59,12 @@ def _start_sessions(
     ]
     try:
         _run_session_phase(sessions, lambda session: session.start())
-    except InfrastructureError:
-        _stop_sessions(sessions)
+    except InfrastructureError as error:
+        cleanup_failures = _stop_sessions(sessions)
+        if cleanup_failures:
+            error.retain_diagnostic(
+                "lifecycle", {"cleanup_failures": cleanup_failures}
+            )
         raise
     return sessions
 
@@ -67,7 +72,15 @@ def _start_sessions(
 def _run_session_phase(
     sessions: list[BotSession], operation: Callable[[BotSession], None]
 ) -> None:
-    first_error: Optional[InfrastructureError] = None
+    errors = _session_phase_errors(sessions, operation)
+    if errors:
+        raise errors[0]
+
+
+def _session_phase_errors(
+    sessions: list[BotSession], operation: Callable[[BotSession], None]
+) -> list[InfrastructureError]:
+    errors: list[InfrastructureError] = []
     with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
         futures = [
             executor.submit(operation, session) for session in sessions
@@ -76,27 +89,27 @@ def _run_session_phase(
             try:
                 future.result()
             except InfrastructureError as error:
-                if first_error is None:
-                    first_error = error
-    if first_error is not None:
-        raise first_error
+                errors.append(error)
+    return errors
 
 
-def _stop_sessions(sessions: list[BotSession]) -> None:
-    cleanup_error: Optional[InfrastructureError] = None
-    operations: tuple[Callable[[BotSession], None], ...] = (
-        lambda session: session.stop(),
-        lambda session: session.force_stop(),
-        lambda session: session.finish_stop(),
+def _stop_sessions(sessions: list[BotSession]) -> list[dict[str, str]]:
+    cleanup_failures: list[dict[str, str]] = []
+    operations: tuple[tuple[str, Callable[[BotSession], None]], ...] = (
+        ("graceful_stop", lambda session: session.stop()),
+        ("force_stop", lambda session: session.force_stop()),
+        ("finish_stop", lambda session: session.finish_stop()),
     )
-    for operation in operations:
-        try:
-            _run_session_phase(sessions, operation)
-        except InfrastructureError as error:
-            if cleanup_error is None:
-                cleanup_error = error
-    if cleanup_error is not None:
-        raise cleanup_error
+    for phase, operation in operations:
+        for error in _session_phase_errors(sessions, operation):
+            cleanup_failures.append(
+                {
+                    "phase": phase,
+                    "kind": type(error).__name__,
+                    "message": str(error),
+                }
+            )
+    return cleanup_failures
 
 
 @dataclass
@@ -192,12 +205,12 @@ class _ResponseReader:
             self.stdout_limit_bytes + 1
         )
         if not chunk:
-            self._record_fault(
-                selector,
-                bot_position,
-                "unexpected_exit",
-                "Bot closed stdout before returning a move",
+            self.faults[bot_position] = self.sessions[
+                bot_position
+            ].disconnection_fault(
+                self.turn, "Bot closed stdout before returning a move"
             )
+            self._complete(selector, bot_position)
             return
 
         output_buffer = self.output_buffers[bot_position]
@@ -340,6 +353,7 @@ class _MatchRunner:
         ).read()
 
         turn_faults = send_faults | response_faults
+        turn_faults.update(self._stderr_faults(turn))
         if turn_faults:
             return self._stop_for_faults(turn_faults)
 
@@ -349,10 +363,12 @@ class _MatchRunner:
     def _pre_request_faults(
         self, turn: int
     ) -> dict[str, dict[str, object]]:
-        faults: dict[str, dict[str, object]] = {}
+        faults = self._stderr_faults(turn)
         selector = selectors.DefaultSelector()
         try:
             for bot_position, session in self.sessions_by_position.items():
+                if bot_position in faults:
+                    continue
                 selector.register(
                     session.output_descriptor,
                     selectors.EVENT_READ,
@@ -371,14 +387,27 @@ class _MatchRunner:
                         "Bot wrote output before receiving this turn's request",
                     )
                 else:
-                    faults[bot_position] = _fault(
-                        "unexpected_exit",
+                    faults[bot_position] = self.sessions_by_position[
+                        bot_position
+                    ].disconnection_fault(
                         turn,
                         "Bot closed stdout before receiving this turn's request",
                     )
                 self.sessions_by_position[bot_position].terminate()
         finally:
             selector.close()
+        return faults
+
+    def _stderr_faults(self, turn: int) -> dict[str, dict[str, object]]:
+        faults: dict[str, dict[str, object]] = {}
+        for bot_position, session in self.sessions_by_position.items():
+            if session.stderr_truncated:
+                faults[bot_position] = _fault(
+                    "excessive_stderr",
+                    turn,
+                    "Bot Artifact stderr exceeded its Match limit",
+                )
+                session.terminate()
         return faults
 
     def _requests(self, turn: int) -> dict[str, bytes]:
@@ -397,10 +426,11 @@ class _MatchRunner:
                     requests[bot_position]
                 )
             except BotArtifactDisconnected:
-                send_faults[bot_position] = _fault(
-                    "unexpected_exit",
+                send_faults[bot_position] = self.sessions_by_position[
+                    bot_position
+                ].disconnection_fault(
                     turn,
-                    "Bot exited or closed stdin before receiving the request",
+                    "Bot Artifact exited or closed stdin before receiving the request",
                 )
         return send_faults
 
@@ -472,6 +502,18 @@ class _MatchRunner:
             },
         }
 
+    def reconcile_final_policy_faults(self) -> None:
+        """Apply stream breaches observed only after final stderr drainage."""
+
+        turn = max(0, min(len(self.played_rounds), self.config.rounds - 1))
+        for bot_position, session in self.sessions_by_position.items():
+            if self.faults[bot_position] is None and session.stderr_truncated:
+                self.faults[bot_position] = _fault(
+                    "excessive_stderr",
+                    turn,
+                    "Bot Artifact stderr exceeded its Match limit",
+                )
+
     def _outcome(self) -> tuple[str, Optional[str]]:
         faulted = [
             bot_position
@@ -497,11 +539,24 @@ def run_match(
     sessions = _start_sessions(config, session_factory)
     runner = _MatchRunner(config, sessions)
 
+    play_error: Optional[InfrastructureError] = None
     try:
         runner.play()
+    except InfrastructureError as error:
+        play_error = error
     except OSError as error:
-        raise InfrastructureError(f"Match runner failed: {error}") from error
-    finally:
-        _stop_sessions(sessions)
+        play_error = InfrastructureError(f"Match runner failed: {error}")
 
-    return runner.result()
+    cleanup_failures = _stop_sessions(sessions)
+    if play_error is not None:
+        if cleanup_failures:
+            play_error.retain_diagnostic(
+                "lifecycle", {"cleanup_failures": cleanup_failures}
+            )
+        raise play_error
+
+    runner.reconcile_final_policy_faults()
+    result = runner.result()
+    if cleanup_failures:
+        result["lifecycle"] = {"cleanup_failures": cleanup_failures}
+    return result

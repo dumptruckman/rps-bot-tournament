@@ -77,6 +77,370 @@ class ContainerMatchExecutorTests(unittest.TestCase):
             sorted(call["command"] for call in self.calls()).count("rm"), 2
         )
 
+    def test_match_attempt_labels_remove_only_precisely_owned_stale_containers(
+        self,
+    ) -> None:
+        attempt_identity = (
+            "summer-cup/qualifying-001-match-1/attempt-1"
+        )
+        owned_stale = self.state / "owned-stale-container"
+        unrelated = self.state / "unrelated-container"
+        owned_stale.write_text(
+            json.dumps(
+                {
+                    "image": "stale",
+                    "environment": {},
+                    "labels": {
+                        "rps.runner.owner": "rps-tournament",
+                        "rps.match-attempt": attempt_identity,
+                    },
+                }
+            )
+        )
+        unrelated.write_text(
+            json.dumps(
+                {
+                    "image": "unrelated",
+                    "environment": {},
+                    "labels": {"rps.runner.owner": "someone-else"},
+                }
+            )
+        )
+
+        result = self.executor(
+            {"red-team": "fixed-r", "blue-team": "fixed-s"}
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        self.assertFalse(owned_stale.exists())
+        self.assertTrue(unrelated.exists())
+        creates = [call for call in self.calls() if call["command"] == "create"]
+        for call in creates:
+            arguments = list(call["arguments"])
+            labels = [
+                arguments[index + 1]
+                for index, argument in enumerate(arguments)
+                if argument == "--label"
+            ]
+            self.assertIn("rps.runner.owner=rps-tournament", labels)
+            self.assertIn(f"rps.match-attempt={attempt_identity}", labels)
+
+    def test_interrupted_attempt_restarts_with_the_same_images_and_inputs(
+        self,
+    ) -> None:
+        attempt_identity = "summer-cup/qualifying-001-match-1/attempt-1"
+        labels = {
+            "rps.runner.owner": "rps-tournament",
+            "rps.match-attempt": attempt_identity,
+        }
+        for position, image, seed in (
+            ("a", "sealed-r", "111"),
+            ("b", "sealed-s", "222"),
+        ):
+            (self.state / f"interrupted-{position}").write_text(
+                json.dumps(
+                    {
+                        "image": image,
+                        "environment": {
+                            "RPS_PROTOCOL_VERSION": "1",
+                            "RPS_ROUNDS": "300",
+                            "RPS_SEED": seed,
+                        },
+                        "labels": labels | {"rps.bot-position": position},
+                    }
+                )
+            )
+
+        result = self.executor(
+            {"red-team": "sealed-r", "blue-team": "sealed-s"}
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        calls = self.calls()
+        stale_removals = [
+            call
+            for call in calls
+            if call["command"] == "rm"
+            and str(call["container_id"]).startswith("interrupted-")
+        ]
+        self.assertEqual(len(stale_removals), 2)
+        creates = [call for call in calls if call["command"] == "create"]
+        self.assertEqual(
+            sorted(call["image"] for call in creates),
+            ["sealed-r", "sealed-s"],
+        )
+        protocol_inputs = []
+        for call in creates:
+            arguments = list(call["arguments"])
+            protocol_inputs.append(
+                sorted(
+                    arguments[index + 1]
+                    for index, argument in enumerate(arguments)
+                    if argument == "--env"
+                    and arguments[index + 1].startswith("RPS_")
+                )
+            )
+        self.assertEqual(
+            sorted(protocol_inputs),
+            sorted(
+                [
+                    [
+                        "RPS_PROTOCOL_VERSION=1",
+                        "RPS_ROUNDS=300",
+                        "RPS_SEED=111",
+                    ],
+                    [
+                        "RPS_PROTOCOL_VERSION=1",
+                        "RPS_ROUNDS=300",
+                        "RPS_SEED=222",
+                    ],
+                ]
+            ),
+        )
+
+    def test_terminal_fault_gracefully_stops_both_then_kills_only_a_survivor(
+        self,
+    ) -> None:
+        result = self.executor(
+            {"red-team": "invalid-r", "blue-team": "stubborn-s"}
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        self.assertEqual(result.competitive_outcome["status"], "forfeit")
+        lifecycle = [
+            call
+            for call in self.calls()
+            if call["command"] in {"stop", "kill", "rm"}
+        ]
+        stops = [call for call in lifecycle if call["command"] == "stop"]
+        kills = [call for call in lifecycle if call["command"] == "kill"]
+        removes = [call for call in lifecycle if call["command"] == "rm"]
+        self.assertEqual(len(stops), 2)
+        self.assertEqual(len(kills), 1)
+        self.assertEqual(len(removes), 2)
+        self.assertGreater(
+            kills[0]["time_ns"], max(call["time_ns"] for call in stops)
+        )
+
+    def test_cleanup_failure_is_diagnostic_and_preserves_competitive_outcome(
+        self,
+    ) -> None:
+        result = self.executor(
+            {"red-team": "remove-failure-r", "blue-team": "fixed-s"}
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        self.assertEqual(result.competitive_outcome["winner_team_id"], "red-team")
+        cleanup_failures = result.operational_telemetry["lifecycle"][
+            "cleanup_failures"
+        ]
+        self.assertEqual(len(cleanup_failures), 1)
+        self.assertIn("remove failed", cleanup_failures[0]["message"])
+
+    def test_both_cleanup_failures_are_retained_without_changing_outcome(self) -> None:
+        result = self.executor(
+            {
+                "red-team": "remove-failure-r",
+                "blue-team": "remove-failure-s",
+            }
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        self.assertIsNotNone(result.competitive_outcome)
+        self.assertEqual(
+            len(
+                result.operational_telemetry["lifecycle"][
+                    "cleanup_failures"
+                ]
+            ),
+            2,
+        )
+
+    def test_attributable_runtime_exhaustion_is_a_competitive_resource_fault(
+        self,
+    ) -> None:
+        cases = (
+            ("oom-r", "resource_oom"),
+            ("pid-exhaustion-r", "resource_pid_exhaustion"),
+            ("open-file-exhaustion-r", "resource_open_file_exhaustion"),
+            ("filesystem-exhaustion-r", "resource_filesystem_exhaustion"),
+        )
+
+        for image, expected_kind in cases:
+            with self.subTest(image=image):
+                result = self.executor(
+                    {"red-team": image, "blue-team": "fixed-s"}
+                ).execute(request())
+
+                self.assertFalse(result.infrastructure_failure)
+                self.assertEqual(result.competitive_outcome["status"], "forfeit")
+                self.assertEqual(
+                    result.competitive_outcome["faults"]["red-team"]["kind"],
+                    expected_kind,
+                )
+
+    def test_stdin_disconnect_uses_attributable_runtime_evidence(self) -> None:
+        result = self.executor(
+            {"red-team": "disconnect-oom-r", "blue-team": "fixed-s"}
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        self.assertEqual(
+            result.competitive_outcome["faults"]["red-team"]["kind"],
+            "resource_oom",
+        )
+
+    def test_stderr_limit_breach_is_a_competitive_stream_fault(self) -> None:
+        result = self.executor(
+            {"red-team": "unterminated-diagnostic-r", "blue-team": "fixed-s"}
+        ).execute(request(stderr_limit_bytes=5))
+
+        self.assertFalse(result.infrastructure_failure)
+        self.assertEqual(
+            result.competitive_outcome["faults"]["red-team"]["kind"],
+            "excessive_stderr",
+        )
+
+    def test_final_stderr_overflow_is_reconciled_after_cleanup(self) -> None:
+        for _ in range(3):
+            result = self.executor(
+                {"red-team": "final-overflow-r", "blue-team": "fixed-s"}
+            ).execute(request(stderr_limit_bytes=5))
+
+            self.assertFalse(result.infrastructure_failure)
+            self.assertEqual(result.competitive_outcome["status"], "forfeit")
+            self.assertEqual(
+                result.competitive_outcome["faults"]["red-team"]["kind"],
+                "excessive_stderr",
+            )
+            self.assertEqual(
+                result.competitive_outcome["faults"]["red-team"]["turn"],
+                299,
+            )
+
+    def test_container_runtime_details_are_operational_telemetry_only(self) -> None:
+        result = self.executor(
+            {"red-team": "fixed-r", "blue-team": "fixed-s"}
+        ).execute(request())
+
+        self.assertFalse(result.infrastructure_failure)
+        competitive_json = json.dumps(result.competitive_outcome, sort_keys=True)
+        for prohibited in (
+            "container_id",
+            "container_name",
+            "docker_commands",
+            "engine",
+            "host",
+            "startup_duration_ms",
+            "cleanup_duration_ms",
+            "exit_metadata",
+            "readiness_observed",
+            "raw_errors",
+        ):
+            self.assertNotIn(prohibited, competitive_json)
+
+        red = result.operational_telemetry["bots"]["red-team"]
+        self.assertEqual(red["match_attempt_identity"], (
+            "summer-cup/qualifying-001-match-1/attempt-1"
+        ))
+        self.assertEqual(red["engine"]["Version"], "fake-1")
+        self.assertIn("system", red["host"])
+        self.assertTrue(red["container_id"])
+        self.assertTrue(red["container_name"])
+        self.assertTrue(red["docker_commands"])
+        self.assertTrue(red["started_at"])
+        self.assertGreaterEqual(red["startup_duration_ms"], 0)
+        self.assertTrue(red["cleanup_started_at"])
+        self.assertGreaterEqual(red["cleanup_duration_ms"], 0)
+        self.assertTrue(red["readiness_observed"])
+        self.assertEqual(red["exit_metadata"]["status"], "exited")
+        self.assertFalse(red["exit_metadata"]["oom_killed"])
+        self.assertEqual(red["raw_errors"], [])
+        self.assertNotIn("RPS_READY", red["stderr"])
+
+    def test_only_clear_attributable_runtime_evidence_suspends_the_match(self) -> None:
+        denied = self.executor(
+            {"red-team": "denied-operation-r", "blue-team": "fixed-s"}
+        ).execute(request())
+        suspected = self.executor(
+            {"red-team": "security-evidence-r", "blue-team": "fixed-s"}
+        ).execute(request())
+
+        self.assertTrue(denied.infrastructure_failure)
+        self.assertIsNone(denied.competitive_outcome)
+        self.assertIsNone(denied.suspected_security_violation_team_id)
+
+        self.assertFalse(suspected.infrastructure_failure)
+        self.assertIsNone(suspected.competitive_outcome)
+        self.assertEqual(
+            suspected.suspected_security_violation_team_id, "red-team"
+        )
+        self.assertRegex(suspected.evidence_link, r"^evidence:sha256:[0-9a-f]{64}$")
+        evidence = suspected.operational_telemetry["bots"]["red-team"][
+            "security_evidence"
+        ]
+        self.assertEqual(evidence["source"], "container_runtime")
+        self.assertTrue(evidence["attributable"])
+        self.assertIn("incident-42", evidence["raw"])
+
+    def test_protocol_timing_and_stream_breaches_use_competitive_faults(self) -> None:
+        cases = (
+            ("invalid-r", {}, "invalid_response"),
+            ("slow-r", {"first_move_timeout_ms": 20}, "timeout"),
+            ("early-stdout", {}, "unexpected_output"),
+            ("overflow-r", {"stdout_limit_bytes": 10}, "excessive_output"),
+        )
+
+        for image, overrides, expected_kind in cases:
+            with self.subTest(image=image):
+                result = self.executor(
+                    {"red-team": image, "blue-team": "fixed-s"}
+                ).execute(request(**overrides))
+
+                self.assertFalse(result.infrastructure_failure)
+                self.assertEqual(
+                    result.competitive_outcome["faults"]["red-team"]["kind"],
+                    expected_kind,
+                )
+
+    def test_non_attributable_docker_and_host_failures_are_infrastructure(
+        self,
+    ) -> None:
+        cases = (
+            ("create-failure", "Docker create failed"),
+            ("attach-failure", "Docker attach failed"),
+            ("inspect-failure-r", "Docker inspect failed"),
+            ("host-exhaustion-r", "non-attributable execution failure"),
+        )
+        for image, expected_message in cases:
+            with self.subTest(image=image):
+                result = self.executor(
+                    {"red-team": image, "blue-team": "fixed-s"}
+                ).execute(request())
+                self.assertTrue(result.infrastructure_failure)
+                self.assertIsNone(result.competitive_outcome)
+                self.assertIsNone(result.suspected_security_violation_team_id)
+                self.assertIn(
+                    expected_message,
+                    result.operational_telemetry["infrastructure_failure"][
+                        "message"
+                    ],
+                )
+
+        (self.state / ".control-version-failure").touch()
+        daemon = self.executor(
+            {"red-team": "fixed-r", "blue-team": "fixed-s"}
+        ).execute(request())
+        self.assertTrue(daemon.infrastructure_failure)
+        self.assertIn(
+            "daemon unavailable",
+            daemon.operational_telemetry["infrastructure_failure"]["message"],
+        )
+        operation = daemon.operational_telemetry["docker_operations"][-1]
+        self.assertIn("version", operation["command"])
+        self.assertEqual(operation["returncode"], 34)
+        self.assertIn("daemon unavailable", operation["raw_error"])
+
     def test_public_match_applies_the_same_isolation_profile_to_both_positions(
         self,
     ) -> None:
@@ -96,6 +460,10 @@ class ContainerMatchExecutorTests(unittest.TestCase):
                     "RPS_SEED="
                 ):
                     arguments[index + 1] = "RPS_SEED=<bot-visible>"
+                if argument == "--label" and arguments[index + 1].startswith(
+                    "rps.bot-position="
+                ):
+                    arguments[index + 1] = "rps.bot-position=<position>"
             arguments[-1] = "<artifact>"
             normalized.append(arguments)
 

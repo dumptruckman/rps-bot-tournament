@@ -59,3 +59,39 @@ not competitive inputs.
 
 Organizers may configure these outer ceilings only before Tournament creation.
 Changing a fixed control requires a new execution-profile version.
+
+## Runtime faults and lifecycle
+
+The executor labels every container with `rps.runner.owner=rps-tournament`, the
+canonical `<Tournament ID>/<Match ID>/attempt-<number>` Match Attempt identity,
+and its Bot Position. Before an attempt starts, stale cleanup selects containers
+by both the runner-owner and exact Match Attempt labels, rejects an unsafe result
+set, and removes those containers individually. It never invokes Docker pruning.
+
+On Match completion or a terminal fault, the runner closes both input streams,
+starts graceful stops concurrently, force-kills a survivor after the bounded
+grace period, reaps Docker helper processes, captures final state, and attempts
+to remove both containers. Cleanup errors are retained in Operational Telemetry.
+They do not replace an already determined competitive outcome.
+
+Protocol errors, response timeouts, premature output, stdout overflow, and an
+unexpected Bot Artifact process exit use the existing competitive fault kinds. Docker's
+explicit `OOMKilled` state is attributable OOM evidence. A trusted runtime
+monitor can report the other published resource breaches through the reserved
+`RPS_RESOURCE_EVIDENCE_V1:` state-error control signal with one of
+`pid_exhaustion`, `open_file_exhaustion`, or `filesystem_exhaustion`. Generic
+Docker errors, including ambiguous resource text that could describe host
+exhaustion, are Infrastructure Failures.
+
+Prevention remains the primary security mechanism. Only the trusted runtime
+signal `RPS_SECURITY_EVIDENCE_V1:<evidence>` can produce a suspected Security
+Violation. The executor requires the evidence to be attributable to a Bot
+Position, retains the raw signal only in Operational Telemetry, and exposes an
+opaque SHA-256 evidence link through the existing ruling seam. Ordinary denied
+operations do not imply a Security Violation.
+
+Container IDs and names, labels, exact Docker commands, engine and host facts,
+timestamps, startup and cleanup durations, readiness observations, Bot Artifact stderr,
+resource observations, exit metadata, OOM state, and raw errors are Operational
+Telemetry only. Readiness markers are removed before Bot Artifact stderr accounting and
+do not consume its allowance.
