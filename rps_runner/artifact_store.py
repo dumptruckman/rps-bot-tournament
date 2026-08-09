@@ -374,8 +374,8 @@ def preserve_artifact_set(
     )
     try:
         entries = [
-            _write_artifact(staging, selection, details)
-            for selection, details in sorted(
+            _write_artifact(staging, selection, identity)
+            for selection, identity in sorted(
                 zip(selections, validated),
                 key=lambda pair: pair[1].artifact_digest,
             )
