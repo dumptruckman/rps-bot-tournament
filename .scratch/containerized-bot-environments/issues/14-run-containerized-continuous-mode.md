@@ -1,6 +1,6 @@
 # Run containerized Continuous Mode without drift
 
-Status: ready-for-agent
+Status: claimed
 
 Blocked by: 13
 
@@ -26,4 +26,3 @@ unowned or reusable Team container state.
 - [ ] Container timing, IDs, startup order, cleanup order, and resource observations may change telemetry but not Competition Records, standings, bracket, Champion, or Scoreboard Projection.
 - [ ] Repeated sealed Tournament runs with varied worker timing produce byte-identical canonical records and equivalent reconstructed state.
 - [ ] The public Continuous Mode command can complete a general plan-created Tournament through Tournament Champion declaration or the existing canonical no-champion outcome.
-

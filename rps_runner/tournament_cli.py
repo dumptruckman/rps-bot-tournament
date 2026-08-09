@@ -99,10 +99,39 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--artifact-store", type=Path)
     plan.add_argument("--directory", required=True, type=Path)
     plan.add_argument("--tournament-id", required=True)
-    plan.add_argument(
+    plan_execution = plan.add_mutually_exclusive_group()
+    plan_execution.add_argument(
         "--create-only",
         action="store_true",
         help="seal and publish the initial projection without advancing a Match",
+    )
+    plan_execution.add_argument(
+        "--continuous",
+        action="store_true",
+        help=(
+            "create or resume a Continuous Mode Tournament and advance it "
+            "through Tournament Champion declaration"
+        ),
+    )
+    plan_execution.add_argument(
+        "--start",
+        action="store_true",
+        help="explicitly start a Continuous Mode Tournament",
+    )
+    plan_execution.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume a paused Continuous Mode Tournament",
+    )
+    plan_execution.add_argument(
+        "--request-pause",
+        action="store_true",
+        help="durably request a pause at the next Match boundary",
+    )
+    plan_execution.add_argument(
+        "--switch-mode",
+        choices=("step", "continuous"),
+        help="switch execution mode at a verified Match boundary",
     )
     demo = commands.add_parser(
         "demo", help="create or resume the bundled four-Team demo Tournament"
@@ -374,6 +403,21 @@ def _run_plan_command(
     error_output: TextIO,
 ) -> int:
     try:
+        if options.request_pause:
+            if not directory.exists():
+                raise ValueError(
+                    "The Tournament must already exist for this control"
+                )
+            TournamentRunner.request_pause_at(directory)
+            _print_summary(
+                directory,
+                disposition="pause requested",
+                committed_records=[],
+                output=output,
+            )
+            return 0
+        if (options.resume or options.switch_mode) and not directory.exists():
+            raise ValueError("The Tournament must already exist for this control")
         plan_path = (
             options.plan.expanduser().resolve()
             if options.plan is not None
@@ -539,7 +583,13 @@ def _run_plan_command(
             )
             disposition = "created"
         committed_records: list[StoredCompetitionRecord] = []
-        if not options.create_only:
+        if options.switch_mode:
+            runner.switch_mode(options.switch_mode)
+        elif options.continuous or options.start:
+            committed_records.extend(runner.start())
+        elif options.resume:
+            committed_records.extend(runner.resume())
+        elif not options.create_only:
             restore_continuous_mode = runner.current_mode == "continuous"
             if restore_continuous_mode:
                 runner.switch_mode("step")

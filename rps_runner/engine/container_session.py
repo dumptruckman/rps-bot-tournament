@@ -26,6 +26,7 @@ SECURITY_EVIDENCE_PREFIX = "RPS_SECURITY_EVIDENCE_V1:"
 RESOURCE_EVIDENCE_PREFIX = "RPS_RESOURCE_EVIDENCE_V1:"
 CONTAINER_ISOLATION_PROFILE_VERSION = INITIAL_EXECUTION_PROFILE.version
 RUNNER_OWNER_LABEL = "rps.runner.owner"
+MATCH_LABEL = "rps.match"
 MATCH_ATTEMPT_LABEL = "rps.match-attempt"
 BOT_POSITION_LABEL = "rps.bot-position"
 RUNNER_OWNER = "rps-tournament"
@@ -181,9 +182,14 @@ class ContainerMatchAttemptIdentity:
         digest = hashlib.sha256(self.value.encode("utf-8")).hexdigest()[:20]
         return f"rps-match-{digest}-{bot_position}"
 
+    @property
+    def match_value(self) -> str:
+        return self.value.rsplit("/attempt-", 1)[0]
+
     def labels(self, bot_position: str) -> tuple[str, ...]:
         return (
             f"{RUNNER_OWNER_LABEL}={RUNNER_OWNER}",
+            f"{MATCH_LABEL}={self.match_value}",
             f"{MATCH_ATTEMPT_LABEL}={self.value}",
             f"{BOT_POSITION_LABEL}={bot_position}",
         )
@@ -194,7 +200,7 @@ def cleanup_stale_match_attempt_containers(
     operations: ContainerOperations,
     docker_operations: Optional[list[dict[str, object]]] = None,
 ) -> list[str]:
-    """Remove only stale containers proven to belong to one Match Attempt."""
+    """Remove stale runner-owned containers for this canonical Match."""
 
     completed = _run_docker_command(
         operations,
@@ -205,9 +211,9 @@ def cleanup_stale_match_attempt_containers(
             "--filter",
             f"label={RUNNER_OWNER_LABEL}={RUNNER_OWNER}",
             "--filter",
-            f"label={MATCH_ATTEMPT_LABEL}={identity.value}",
+            f"label={MATCH_LABEL}={identity.match_value}",
         ),
-        "list stale Match Attempt containers",
+        "list stale Match containers",
         docker_operations,
     )
     container_ids = [
@@ -215,18 +221,18 @@ def cleanup_stale_match_attempt_containers(
         for line in completed.stdout.decode("utf-8", errors="replace").splitlines()
         if line.strip()
     ]
-    if len(container_ids) > 2 or any(
+    if any(
         re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value) is None
         for value in container_ids
     ):
         raise InfrastructureError(
-            "Docker returned unsafe stale-container identities for Match Attempt"
+            "Docker returned unsafe runner-owned container identities"
         )
     for container_id in container_ids:
         _run_docker_command(
             operations,
             ("rm", "--force", container_id),
-            "remove stale Match Attempt container",
+            "remove stale Match container",
             docker_operations,
         )
     return container_ids

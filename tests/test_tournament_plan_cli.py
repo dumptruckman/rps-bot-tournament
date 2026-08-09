@@ -5,6 +5,7 @@ from io import StringIO
 import json
 from pathlib import Path
 import tempfile
+import threading
 from typing import Any
 import unittest
 from unittest.mock import patch
@@ -40,8 +41,12 @@ class RecordingContainerExecutor(ContainerMatchExecutor):
 
     def execute(self, request: MatchExecutionRequest) -> MatchExecutionResult:
         self.requests.append(request)
-        winner = request.team_a_id
-        loser = request.team_b_id
+        winner = min(request.team_a_id, request.team_b_id)
+        loser = (
+            request.team_b_id
+            if winner == request.team_a_id
+            else request.team_a_id
+        )
         return MatchExecutionResult(
             infrastructure_failure=False,
             competitive_outcome={
@@ -491,6 +496,115 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(code, 0, self.stderr.getvalue())
         self.assertEqual(len(self.executor.requests), 1)
         self.assertIn("Current Mode: Continuous", self.stdout.getvalue())
+
+    def test_continuous_plan_completes_through_tournament_champion(self) -> None:
+        class ParallelRecordingContainerExecutor(RecordingContainerExecutor):
+            def __init__(self) -> None:
+                super().__init__()
+                self.lock = threading.Lock()
+                self.active_team_ids: set[str] = set()
+                self.maximum_active_matches = 0
+                self.overlap = threading.Event()
+
+            def execute(
+                self, request: MatchExecutionRequest
+            ) -> MatchExecutionResult:
+                team_ids = {request.team_a_id, request.team_b_id}
+                with self.lock:
+                    if not self.active_team_ids.isdisjoint(team_ids):
+                        raise AssertionError(
+                            "Continuous Mode overlapped a Team across Matches"
+                        )
+                    self.active_team_ids.update(team_ids)
+                    self.maximum_active_matches = max(
+                        self.maximum_active_matches,
+                        len(self.active_team_ids) // 2,
+                    )
+                    if self.maximum_active_matches == 2:
+                        self.overlap.set()
+                try:
+                    if not self.overlap.wait(5):
+                        raise AssertionError(
+                            "Continuous Mode did not start independent Matches"
+                        )
+                    return super().execute(request)
+                finally:
+                    with self.lock:
+                        self.active_team_ids.difference_update(team_ids)
+
+        self.plan["execution"]["mode"] = "continuous"
+        self.plan["execution"]["parallelism"] = 2
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.executor = ParallelRecordingContainerExecutor()
+
+        code = self.run_plan("--continuous")
+
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        self.assertEqual(len(self.executor.requests), 18)
+        self.assertEqual(self.executor.maximum_active_matches, 2)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "complete")
+        self.assertIsNotNone(projection["champion"])
+        self.assertEqual(
+            load_competition_records(self.directory)[-1].record["type"],
+            "tournament_champion_declared",
+        )
+
+    def test_plan_controls_pause_switch_and_resume_at_match_boundaries(self) -> None:
+        class PausingContainerExecutor(RecordingContainerExecutor):
+            def __init__(self) -> None:
+                super().__init__()
+                self.lock = threading.Lock()
+                self.started = 0
+                self.both_started = threading.Event()
+                self.release = threading.Event()
+
+            def execute(
+                self, request: MatchExecutionRequest
+            ) -> MatchExecutionResult:
+                with self.lock:
+                    self.started += 1
+                    if self.started == 2:
+                        self.both_started.set()
+                if not self.release.wait(5):
+                    raise AssertionError("Continuous Mode workers did not resume")
+                return super().execute(request)
+
+        self.plan["execution"]["mode"] = "continuous"
+        self.plan["execution"]["parallelism"] = 2
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.assertEqual(self.run_plan("--create-only"), 0)
+
+        self.assertEqual(self.run_plan("--switch-mode", "step"), 0)
+        self.assertEqual(self.executor.requests, [])
+        self.assertIn("Current Mode: Step", self.stdout.getvalue())
+        self.assertEqual(self.run_plan(), 0)
+        self.assertEqual(len(self.executor.requests), 1)
+        self.assertEqual(self.run_plan("--switch-mode", "continuous"), 0)
+
+        pausing = PausingContainerExecutor()
+        self.executor = pausing
+        start_result: list[int] = []
+        worker = threading.Thread(
+            target=lambda: start_result.append(self.run_plan("--start"))
+        )
+        worker.start()
+        self.assertTrue(pausing.both_started.wait(5))
+        self.assertEqual(self.run_plan("--request-pause"), 0)
+        pausing.release.set()
+        worker.join(5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(start_result, [0])
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"], "paused"
+        )
+
+        self.executor = RecordingContainerExecutor()
+        self.assertEqual(self.run_plan("--resume"), 0)
+        self.assertEqual(
+            load_scoreboard_projection(self.directory)["status"], "complete"
+        )
 
     def test_rejects_stale_profile_before_sealing(self) -> None:
         self.plan["global_resources"]["memory_limit_bytes"] += 1

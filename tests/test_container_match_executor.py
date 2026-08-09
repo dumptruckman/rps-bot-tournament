@@ -92,6 +92,7 @@ class ContainerMatchExecutorTests(unittest.TestCase):
                     "environment": {},
                     "labels": {
                         "rps.runner.owner": "rps-tournament",
+                        "rps.match": "summer-cup/qualifying-001-match-1",
                         "rps.match-attempt": attempt_identity,
                     },
                 }
@@ -123,14 +124,18 @@ class ContainerMatchExecutorTests(unittest.TestCase):
                 if argument == "--label"
             ]
             self.assertIn("rps.runner.owner=rps-tournament", labels)
+            self.assertIn(
+                "rps.match=summer-cup/qualifying-001-match-1", labels
+            )
             self.assertIn(f"rps.match-attempt={attempt_identity}", labels)
 
-    def test_interrupted_attempt_restarts_with_the_same_images_and_inputs(
+    def test_resumed_attempt_cleans_interrupted_prior_attempt_for_same_match(
         self,
     ) -> None:
         attempt_identity = "summer-cup/qualifying-001-match-1/attempt-1"
         labels = {
             "rps.runner.owner": "rps-tournament",
+            "rps.match": "summer-cup/qualifying-001-match-1",
             "rps.match-attempt": attempt_identity,
         }
         for position, image, seed in (
@@ -151,11 +156,29 @@ class ContainerMatchExecutorTests(unittest.TestCase):
                 )
             )
 
+        unrelated_match = self.state / "unrelated-match"
+        unrelated_match.write_text(
+            json.dumps(
+                {
+                    "image": "unrelated",
+                    "environment": {},
+                    "labels": {
+                        "rps.runner.owner": "rps-tournament",
+                        "rps.match": "summer-cup/qualifying-002-match-1",
+                        "rps.match-attempt": (
+                            "summer-cup/qualifying-002-match-1/attempt-1"
+                        ),
+                    },
+                }
+            )
+        )
+
         result = self.executor(
             {"red-team": "sealed-r", "blue-team": "sealed-s"}
-        ).execute(request())
+        ).execute(request(attempt_number=2))
 
         self.assertFalse(result.infrastructure_failure)
+        self.assertTrue(unrelated_match.exists())
         calls = self.calls()
         stale_removals = [
             call
