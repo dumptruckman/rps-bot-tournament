@@ -1,5 +1,32 @@
 {
   "contract": "choose-move-contract-v1",
-  "fixtures": ["fixed-move", "random", "copycat", "protocol"],
+  "diagnostic_fixtures": [
+    "syntax-build",
+    "import-time",
+    "nondeterministic",
+    "protocol-fault",
+    "slow-response",
+    "memory",
+    "process",
+    "filesystem",
+    "premature-output"
+  ],
+  "fixture_sources": {
+    "filesystem": "import os\ntry:\n    with open('/tmp/conformance-fill', 'wb') as stream:\n        stream.write(b'x' * (32 * 1024 * 1024))\nexcept OSError:\n    ENFORCED = True\nelse:\n    ENFORCED = False\nfinally:\n    try:\n        os.unlink('/tmp/conformance-fill')\n    except OSError:\n        pass\ndef choose_move(turn, my_history, opponent_history, rng):\n    return 'R' if ENFORCED else 'X'\n",
+    "import-time": "raise RuntimeError('conformance import-time fixture')\ndef choose_move(turn, my_history, opponent_history, rng):\n    return 'R'\n",
+    "memory": "def choose_move(turn, my_history, opponent_history, rng):\n    bytearray(512 * 1024 * 1024)\n    return 'R'\n",
+    "nondeterministic": "import os\ndef choose_move(turn, my_history, opponent_history, rng):\n    return ('R', 'P', 'S')[os.urandom(1)[0] % 3]\n",
+    "premature-output": "print('R', flush=True)\ndef choose_move(turn, my_history, opponent_history, rng):\n    return 'R'\n",
+    "process": "import os, signal\nchildren = []\ntry:\n    for _ in range(80):\n        child = os.fork()\n        if child == 0:\n            os.pause()\n            os._exit(0)\n        children.append(child)\nexcept OSError:\n    ENFORCED = True\nelse:\n    ENFORCED = False\nfinally:\n    for child in children:\n        try:\n            os.kill(child, signal.SIGKILL)\n            os.waitpid(child, 0)\n        except OSError:\n            pass\ndef choose_move(turn, my_history, opponent_history, rng):\n    return 'R' if ENFORCED else 'X'\n",
+    "protocol-fault": "def choose_move(turn, my_history, opponent_history, rng):\n    return 'X'\n",
+    "slow-response": "import time\ndef choose_move(turn, my_history, opponent_history, rng):\n    time.sleep(0.2)\n    return 'R'\n",
+    "syntax-build": "def choose_move(turn, my_history, opponent_history, rng)\n    return 'R'\n"
+  },
+  "practice_artifacts": {
+    "copycat": "def choose_move(turn, my_history, opponent_history, rng):\n    return opponent_history[-1] if opponent_history else 'R'\n",
+    "fixed-move": "def choose_move(turn, my_history, opponent_history, rng):\n    return 'R'\n",
+    "protocol-test": "def choose_move(turn, my_history, opponent_history, rng):\n    assert turn == len(my_history) == len(opponent_history)\n    assert set(my_history + opponent_history) <= set('RPS')\n    return ('R', 'P', 'S')[turn % 3]\n",
+    "random": "def choose_move(turn, my_history, opponent_history, rng):\n    return rng.choice(('R', 'P', 'S'))\n"
+  },
   "version": "python-conformance-v1"
 }

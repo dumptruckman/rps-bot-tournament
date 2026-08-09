@@ -427,6 +427,38 @@ new candidate directory retains read-only source, bounded build diagnostics, and
 all frozen build inputs. It is a suite candidate, not an official Bot Artifact,
 until conformance certification succeeds.
 
+### Certify a Python Bot Artifact
+
+All validation authorities invoke the same versioned command with explicit mode,
+platform, and execution-profile inputs:
+
+```text
+rps-certify-artifact \
+  --catalog language_environments/catalog-v1/catalog.json \
+  --candidate path/to/new-artifact-candidate \
+  --mode participant-local \
+  --platform linux/amd64 \
+  --profile docker-execution-v1 \
+  --output path/to/new-certified-artifact
+```
+
+The other modes are `github-advisory` (Linux/AMD64 only) and
+`organizer-final` (Linux/ARM64 only). Participant-local and GitHub results are
+explicitly advisory; they can never stand in for the canonical organizer-final
+ARM64 Bot Artifact.
+
+Certification verifies the frozen catalog and source/build record, exact local
+image identity, entrypoint, readiness, lifecycle, protocol transcripts,
+same-seed behavior, timing and stream limits, the isolation/resource profile,
+and complete 300-Turn container Matches. Fixed-move, random, copycat, and
+protocol-test practice Bot Artifacts are built through the same Python Language
+Environment and container path. Their protocol conformance can fail the suite,
+but their score and winner never do. Successful output contains immutable
+`bot-artifact-manifest.json` and `validation-report.json` files with every
+source, image, runtime, wrapper, recipe, entrypoint, catalog, suite, platform,
+profile, and core-tool identity. A host-process development check is useful but
+is always reported as insufficient evidence for official validation.
+
 ---
 
 # Submission Format
