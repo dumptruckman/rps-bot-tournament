@@ -129,6 +129,9 @@ test("shows Match-boundary progress, committed history, and supplied bracket ord
     await expect(page.getByText("Match active: qualifying-0001-match-1")).toBeVisible();
     await expect(page.locator("body")).not.toContainText("Round score");
     await expect(page.getByText("qualifying-0002")).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Qualifying Fixtures" }).locator("ol")
+    ).toBeVisible();
 
     replaceProjection(presentation.directory, projection({
       status: "paused",
@@ -211,6 +214,8 @@ test("shows Match-boundary progress, committed history, and supplied bracket ord
     await expect(bracket.locator(".seed").nth(1)).toContainText("Seed 1");
     await expect(bracket.locator(".fixture-card").nth(0)).toContainText("playoff-semifinal-2");
     await expect(bracket.locator(".fixture-card").nth(1)).toContainText("playoff-final");
+    await expect(bracket.locator(".fixture-card").nth(0)).toContainText("Complete");
+    await expect(bracket.locator(".fixture-card").nth(0)).not.toContainText("Tournament complete");
     await expect(bracket).toContainText("Gamma replaced disqualified Team Beta");
   } finally {
     await presentation.stop();

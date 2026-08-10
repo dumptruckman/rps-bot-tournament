@@ -52,7 +52,9 @@ p { line-height: 1.5; }
 .outcome-lead, .champion-label { margin: 0; color: #fde68a; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
 .champion-name { margin: .25rem 0; font-size: clamp(2.2rem, 7vw, 5rem); font-weight: 900; }
 
-.fixture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 1rem; }
+.fixture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 1rem; margin: 0; padding: 0; list-style: none; }
+.fixture-grid > li { min-width: 0; }
+.fixture-grid .fixture-card { height: 100%; }
 .fixture-card { position: relative; background: #111923; border: 1px solid #3f4e60; border-left: .35rem solid #64748b; border-radius: .55rem; padding: 1rem; }
 .fixture-card p { margin: .5rem 0 0; }
 .fixture-card.status-active { border-left-color: #22c55e; box-shadow: 0 0 0 1px rgb(34 197 94 / 25%); }

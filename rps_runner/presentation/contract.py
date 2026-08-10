@@ -113,7 +113,10 @@ def project_live(projection: Mapping[str, Any]) -> dict[str, Any]:
         standings.append(copied_standing)
 
     fixtures = _project_fixtures(
-        projection, "fixtures", team_ids, allow_empty_slots=False
+        projection,
+        "fixtures",
+        team_ids,
+        playoff=False,
     )
     champion = projection.get("champion")
     if champion is not None:
@@ -182,7 +185,7 @@ def _project_bracket(
             bracket,
             "fixtures",
             team_ids,
-            allow_empty_slots=True,
+            playoff=True,
             location="bracket",
         ),
     }
@@ -193,7 +196,7 @@ def _project_fixtures(
     field: str,
     projected_team_ids: set[str],
     *,
-    allow_empty_slots: bool,
+    playoff: bool,
     location: str = "projection",
 ) -> list[dict[str, Any]]:
     raw_fixtures = _required_list(value, field, location)
@@ -210,7 +213,7 @@ def _project_fixtures(
         team_ids: list[Any] = []
         for team_index, raw_team_id in enumerate(raw_team_ids):
             team_location = f"{item_location}.team_ids[{team_index}]"
-            if raw_team_id is None and allow_empty_slots:
+            if raw_team_id is None and playoff:
                 team_ids.append(None)
             else:
                 team_ids.append(
@@ -236,7 +239,7 @@ def _project_fixtures(
                 copied[optional_field] = _required_string(
                     fixture, optional_field, item_location
                 )
-        if "stage" in fixture:
+        if playoff:
             stage = _required_string(fixture, "stage", item_location)
             if stage not in _PLAYOFF_STAGES:
                 raise ProjectionContractError(f"{item_location}.stage is invalid")
@@ -258,13 +261,13 @@ def _project_fixtures(
                     f"{item_location}.administrative_series_win",
                 ),
             }
-        if "resolved_team_id" in fixture:
+        if playoff and "resolved_team_id" in fixture:
             copied["resolved_team_id"] = _projected_team_id(
                 fixture.get("resolved_team_id"),
                 projected_team_ids,
                 f"{item_location}.resolved_team_id",
             )
-        if "bracket_position_replacement" in fixture:
+        if playoff and "bracket_position_replacement" in fixture:
             replacement_location = (
                 f"{item_location}.bracket_position_replacement"
             )

@@ -16,10 +16,6 @@ const labels = {
   aborted: "Tournament aborted",
   qualifying: "Qualifying Phase",
   playoff: "Playoff Phase",
-  scheduled: "Scheduled",
-  active: "Active",
-  in_progress: "In progress",
-  skipped: "Skipped",
   win: "Win",
   draw: "Draw",
   double_forfeit: "Double Forfeit",
@@ -31,6 +27,14 @@ const completionMessages = {
   no_eligible_teams: "No eligible Teams remained.",
   all_finalists_disqualified: "All Playoff finalists were disqualified.",
   operator_requested: "The Tournament was stopped by the organizer.",
+};
+
+const fixtureLabels = {
+  scheduled: "Scheduled",
+  active: "Active",
+  in_progress: "In progress",
+  complete: "Complete",
+  skipped: "Skipped",
 };
 
 function element(tag, text, className) {
@@ -128,7 +132,11 @@ function fixtureCard(fixture, teamNames) {
       fixture.team_ids.map((teamId) => teamName(teamNames, teamId)).join(" vs "),
       "fixture-teams"
     ),
-    element("p", labels[fixture.status] || displayCode(fixture.status), "fixture-status")
+    element(
+      "p",
+      fixtureLabels[fixture.status] || displayCode(fixture.status),
+      "fixture-status"
+    )
   );
   if (fixture.active_match_id !== undefined) {
     card.append(element("p", `Match active: ${fixture.active_match_id}`, "active-match"));
@@ -173,8 +181,12 @@ function fixtureCard(fixture, teamNames) {
 }
 
 function fixtureGrid(fixtures, teamNames) {
-  const grid = element("div", undefined, "fixture-grid");
-  fixtures.forEach((fixture) => grid.append(fixtureCard(fixture, teamNames)));
+  const grid = element("ol", undefined, "fixture-grid");
+  fixtures.forEach((fixture) => {
+    const item = element("li");
+    item.append(fixtureCard(fixture, teamNames));
+    grid.append(item);
+  });
   return grid;
 }
 
@@ -210,7 +222,7 @@ function renderBracket(bracket, teamNames) {
   const fixturesHeading = element("h3", "Playoff Fixtures");
   const grid = fixtureGrid(bracket.fixtures, teamNames);
   bracket.fixtures.forEach((fixture, index) => {
-    const card = grid.children[index];
+    const card = grid.children[index].firstElementChild;
     card.insertBefore(
       element("p", labels[fixture.stage] || displayCode(fixture.stage), "fixture-stage"),
       card.firstChild

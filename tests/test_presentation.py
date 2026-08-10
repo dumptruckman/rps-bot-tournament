@@ -287,6 +287,41 @@ class LiveContractTests(unittest.TestCase):
         self.assertNotIn("operator_abort", aborted)
         self.assertNotIn("organizer-secret", json.dumps(aborted))
 
+    def test_bracket_fields_are_required_only_for_playoff_fixtures(self) -> None:
+        source = projection()
+        source["fixtures"][0].update(
+            stage="final",
+            resolved_team_id="alpha",
+            bracket_position_replacement={
+                "disqualified_team_id": "beta",
+                "reinstated_team_id": "alpha",
+                "source_fixture_id": "playoff-semifinal-1",
+                "reason_code": "disqualified_advancer",
+            },
+        )
+
+        qualifying = project_live(source)["fixtures"][0]
+
+        self.assertNotIn("stage", qualifying)
+        self.assertNotIn("resolved_team_id", qualifying)
+        self.assertNotIn("bracket_position_replacement", qualifying)
+
+        source["phase"] = "playoff"
+        source["bracket"] = {
+            "locked": False,
+            "seeds": [],
+            "fixtures": [
+                {
+                    "fixture_id": "playoff-final",
+                    "team_ids": ["alpha", "beta"],
+                    "status": "scheduled",
+                    "matches": [],
+                }
+            ],
+        }
+        with self.assertRaisesRegex(ProjectionContractError, "stage"):
+            project_live(source)
+
     def test_accepts_running_and_rejects_unsupported_or_invalid_projection(
         self,
     ) -> None:
