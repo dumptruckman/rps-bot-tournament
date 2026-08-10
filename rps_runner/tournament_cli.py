@@ -15,6 +15,7 @@ from rps_runner.artifact_store import ArtifactStoreIntegrityError, resolve_artif
 from rps_runner.engine import ContainerOperations, InfrastructureError
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import load_catalog
+from rps_runner.presentation.server import serve_presentation
 from rps_runner.tournament.execution_inputs import TournamentExecutionInputs
 from rps_runner.tournament.match_executor import (
     ContainerMatchExecutor,
@@ -226,6 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="closed canonical reason code for abort",
     )
     demo.add_argument("--abort-note", help="optional canonical organizer note")
+    present = commands.add_parser(
+        "present", help="serve a read-only browser presentation"
+    )
+    present.add_argument("--directory", required=True, type=Path)
+    present.add_argument("--host", default="127.0.0.1")
+    present.add_argument("--port", default=8000, type=int)
     return parser
 
 
@@ -247,6 +254,14 @@ def main(
     output = stdout or sys.stdout
     error_output = stderr or sys.stderr
     directory = options.directory.expanduser().resolve()
+    if options.command == "present":
+        return _run_present_command(
+            directory,
+            host=options.host,
+            port=options.port,
+            output=output,
+            error_output=error_output,
+        )
     if options.command == "plan":
         return _run_plan_command(
             options,
@@ -388,6 +403,24 @@ def main(
             output=output,
         )
     except (OSError, RuntimeError, StorageError, TypeError, ValueError) as error:
+        print(f"rps-tournament: {error}", file=error_output)
+        return ERROR_EXIT_CODE
+    return 0
+
+
+def _run_present_command(
+    directory: Path,
+    *,
+    host: str,
+    port: int,
+    output: TextIO,
+    error_output: TextIO,
+) -> int:
+    try:
+        serve_presentation(directory, host, port, output)
+    except KeyboardInterrupt:
+        return 0
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
         print(f"rps-tournament: {error}", file=error_output)
         return ERROR_EXIT_CODE
     return 0

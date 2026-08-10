@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tournament presentation</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <p class="eyebrow">Rock–Paper–Scissors</p>
+      <h1 id="tournament-name">Tournament presentation</h1>
+    </header>
+    <div id="freshness-warning" class="warning" role="status" aria-live="polite" hidden></div>
+    <main id="live-view">
+      <section class="waiting" aria-labelledby="waiting-title">
+        <h2 id="waiting-title">Waiting for Tournament data</h2>
+        <p>The presentation will begin when a Scoreboard Projection is available.</p>
+      </section>
+    </main>
+    <noscript>This live presentation requires JavaScript.</noscript>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>
