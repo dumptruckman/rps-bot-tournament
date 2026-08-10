@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from typing import Callable, Mapping, Optional, cast
+from typing import Callable, Mapping, Optional, Union, cast
 
 from rps_runner.engine import (
     CONTAINER_ISOLATION_PROFILE_VERSION,
@@ -29,7 +29,7 @@ class ResolvedArtifactReference:
 
 
 ArtifactReferenceResolver = Callable[
-    [str, str], str | ResolvedArtifactReference
+    [str, str], Union[str, ResolvedArtifactReference]
 ]
 MatchRunner = Callable[[MatchConfig], dict[str, object]]
 

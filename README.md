@@ -284,7 +284,8 @@ Playoffs:
 # Local Match Engine
 
 Create an isolated virtual environment and install the local command into it.
-The project has no third-party runtime dependencies:
+The runner supports Python 3.9 or newer and has no third-party runtime
+dependencies:
 
 ```text
 python -m venv .venv
