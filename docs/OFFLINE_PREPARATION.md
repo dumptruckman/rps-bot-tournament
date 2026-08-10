@@ -39,12 +39,26 @@ The `rps-preparation-report-v1` JSON report records:
 - Match parallelism and elapsed time;
 - organizer, practice, representative, validation, and artifact-store identities;
 - networkless rebuild, readiness, isolation, archive, and restore results;
+- the identity and filenames of the installed, network-independent presentation
+  assets;
 - the exact `rps-doctor` argument array that reproduced the successful check.
 
 Both the artifact-store and report destinations must be absent. Preparation
 does not replace either destination, install Docker, change host or engine
 settings, prune caches, delete unrelated images, or alter the selected catalog
 or profile.
+
+After installing the prepared package, verify the exact installed presentation
+resources before disconnecting the event machine:
+
+```text
+rps-tournament verify-presentation-assets
+```
+
+The command reads HTML, CSS, and JavaScript through Python package resources,
+rejects missing, empty, non-UTF-8, or externally hosted assets, and prints their
+combined SHA-256 identity. It performs no network request. The same check runs
+inside `rps-prepare` and is recorded as `offline_checks.presentation_assets`.
 
 ## Failure disposition
 

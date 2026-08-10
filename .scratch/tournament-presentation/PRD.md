@@ -1,8 +1,8 @@
 # Tournament Presentation
 
-Status: ready-for-agent
+Status: resolved
 
-Implementation status: not started
+Implementation status: complete
 
 ## Purpose
 

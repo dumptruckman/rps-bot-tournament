@@ -495,3 +495,86 @@ test("replays ordinary Rounds and terminal faults with keyboard controls", async
     await presentation.stop();
   }
 });
+
+test("is responsive, semantic, reduced-motion safe, and preserves focus", async ({ page }) => {
+  const presentation = await startPresentation();
+  const hostile = '<img id="hostile-record" src=x onerror="document.body.dataset.injected=1">';
+  const matchId = `qualifying-0001-${hostile}`;
+  try {
+    replaceProjection(presentation.directory, projection({
+      status: "running",
+      teams: [
+        { team_id: "alpha", display_name: '<img id="hostile-team" src=x>' },
+        ...projection().teams.slice(1),
+      ],
+      fixtures: [
+        {
+          fixture_id: "qualifying-0001",
+          team_ids: ["alpha", "beta"],
+          status: "complete",
+          matches: [{ match_id: matchId, outcome: "win", winner_team_id: "alpha" }],
+        },
+      ],
+    }));
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 375, height: 720 });
+    await page.goto(presentation.url);
+
+    await expect(page.getByRole("table", { name: "Runner-ordered qualifying standings" })).toBeVisible();
+    const fixtures = page.getByRole("region", { name: "Qualifying Fixtures" });
+    await expect(fixtures.locator("ol > li > article")).toHaveCount(1);
+    await expect(page.locator("#hostile-team, #hostile-record")).toHaveCount(0);
+    await expect(page.locator("body")).toContainText(hostile);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(await page.locator(".fixture-card").evaluate(
+      (node) => getComputedStyle(node).transitionDuration
+    )).toBe("0s");
+
+    const replayButton = page.getByRole("button", { name: `Replay Match ${matchId}` });
+    await replayButton.focus();
+    await expect(replayButton).toBeFocused();
+    expect(await replayButton.evaluate((node) => getComputedStyle(node).outlineStyle)).not.toBe("none");
+
+    replaceProjection(presentation.directory, projection({
+      status: "paused",
+      fixtures: [
+        {
+          fixture_id: "qualifying-0001",
+          team_ids: ["alpha", "beta"],
+          status: "complete",
+          matches: [{ match_id: matchId, outcome: "win", winner_team_id: "alpha" }],
+        },
+      ],
+    }));
+    await expect(page.getByText("Tournament paused")).toBeVisible();
+    await expect(page.getByRole("button", { name: `Replay Match ${matchId}` })).toBeFocused();
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally {
+    await presentation.stop();
+  }
+});
+
+test("politely announces connectivity loss and recovery", async ({ page }) => {
+  const presentation = await startPresentation();
+  try {
+    replaceProjection(presentation.directory, projection());
+    await page.goto(presentation.url);
+    await expect(page.getByText("Tournament paused")).toBeVisible();
+
+    await page.route("**/api/live", (route) => route.abort());
+    await expect(page.locator("#connectivity-status")).toHaveText("Updates unavailable.", {
+      timeout: 5_000,
+    });
+    await expect(page.locator("#freshness-warning")).toBeVisible();
+
+    await page.unroute("**/api/live");
+    await expect(page.locator("#connectivity-status")).toHaveText("Updates restored.", {
+      timeout: 3_000,
+    });
+    await expect(page.locator("#freshness-warning")).toBeHidden();
+  } finally {
+    await presentation.stop();
+  }
+});

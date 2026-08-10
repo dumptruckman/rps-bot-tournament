@@ -37,6 +37,7 @@ from rps_runner.language_environment import (
     freeze_source_bundle,
     load_catalog,
 )
+from rps_runner.presentation.resources import verify_presentation_assets
 
 
 PREPARATION_REPORT_FORMAT_VERSION = "rps-preparation-report-v1"
@@ -381,6 +382,7 @@ def _finalize_preparation(
 ) -> dict[str, object]:
     practices = prepared["practice_artifacts"]
     assert isinstance(practices, dict)
+    presentation_assets = verify_presentation_assets()
     doctor_request = HostReadinessRequest(
         catalog=catalog_path,
         platform=options.platform,
@@ -460,7 +462,15 @@ def _finalize_preparation(
             "representative_artifact": prepared["artifact_digest"],
             "validation": prepared["validation_identity"],
         },
-        "offline_checks": prepared["offline_checks"],
+        "offline_checks": {
+            **prepared["offline_checks"],
+            "presentation_assets": "passed",
+        },
+        "presentation_assets": {
+            "identity": presentation_assets["identity"],
+            "filenames": sorted(presentation_assets["assets"]),
+            "network_dependencies": [],
+        },
         "doctor": {
             "report_format_version": doctor.get("report_format_version"),
             "status": doctor["status"],

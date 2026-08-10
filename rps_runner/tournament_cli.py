@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 import hashlib
+import json
 from pathlib import Path
 import shlex
 import sys
@@ -16,6 +17,7 @@ from rps_runner.engine import ContainerOperations, InfrastructureError
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import load_catalog
 from rps_runner.presentation.server import serve_presentation
+from rps_runner.presentation.resources import verify_presentation_assets
 from rps_runner.tournament.execution_inputs import TournamentExecutionInputs
 from rps_runner.tournament.match_executor import (
     ContainerMatchExecutor,
@@ -233,6 +235,10 @@ def build_parser() -> argparse.ArgumentParser:
     present.add_argument("--directory", required=True, type=Path)
     present.add_argument("--host", default="127.0.0.1")
     present.add_argument("--port", default=8000, type=int)
+    commands.add_parser(
+        "verify-presentation-assets",
+        help="verify installed offline presentation package resources",
+    )
     return parser
 
 
@@ -253,6 +259,26 @@ def main(
     options = build_parser().parse_args(arguments)
     output = stdout or sys.stdout
     error_output = stderr or sys.stderr
+    if options.command == "verify-presentation-assets":
+        try:
+            evidence = verify_presentation_assets()
+        except (OSError, UnicodeError, ValueError) as error:
+            print(f"rps-tournament: {error}", file=error_output)
+            return ERROR_EXIT_CODE
+        print(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "identity": evidence["identity"],
+                    "filenames": sorted(evidence["assets"]),
+                    "network_dependencies": [],
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            file=output,
+        )
+        return 0
     directory = options.directory.expanduser().resolve()
     if options.command == "present":
         return _run_present_command(

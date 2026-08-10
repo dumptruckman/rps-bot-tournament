@@ -11,6 +11,7 @@ from typing import Any, Iterator
 import unittest
 from unittest.mock import patch
 
+from rps_runner.presentation.resources import verify_presentation_assets
 from rps_runner.presentation.contract import (
     ProjectionContractError,
     project_live,
@@ -560,6 +561,41 @@ class PresentationHttpTests(unittest.TestCase):
             )
             self.assertEqual(status, 304)
             self.assertEqual(body, b"")
+
+    def test_serves_verified_package_assets_with_offline_safe_cache_rules(self) -> None:
+        evidence = verify_presentation_assets()
+        self.assertEqual(
+            set(evidence["assets"]),
+            {"index.html", "styles.css", "app.js"},
+        )
+        self.assertTrue(str(evidence["identity"]).startswith("sha256:"))
+
+        with self.serving() as address:
+            expected = {
+                "/": ("text/html; charset=utf-8", "no-store"),
+                "/assets/styles.css?v=test": (
+                    "text/css; charset=utf-8",
+                    "public, max-age=31536000, immutable",
+                ),
+                "/assets/app.js?v=test": (
+                    "text/javascript; charset=utf-8",
+                    "public, max-age=31536000, immutable",
+                ),
+            }
+            for path, (content_type, cache_control) in expected.items():
+                with self.subTest(path=path):
+                    status, headers, body = self.request(address, path)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(headers["content-type"], content_type)
+                    self.assertEqual(headers["cache-control"], cache_control)
+                    self.assertTrue(body)
+                    if path == "/":
+                        self.assertNotIn(b"__STYLES_VERSION__", body)
+                        self.assertNotIn(b"__APP_VERSION__", body)
+
+        shell = evidence["assets"]["index.html"]
+        self.assertNotIn("http://", shell)
+        self.assertNotIn("https://", shell)
 
     def test_serves_one_verified_terminal_record_for_a_completed_match(self) -> None:
         self.write_completed_projection()

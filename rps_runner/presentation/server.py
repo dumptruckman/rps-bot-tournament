@@ -22,26 +22,14 @@ from rps_runner.presentation.contract import (
     project_live,
     project_replay,
 )
+from rps_runner.presentation.resources import (
+    ASSET_ROUTES,
+    served_presentation_asset_bytes,
+)
 from rps_runner.tournament.storage import StorageError, load_competition_records
 
 
 LOGGER = logging.getLogger(__name__)
-_ASSET_DIRECTORY = Path(__file__).with_name("assets")
-_ASSETS = {
-    "/": ("index.html", "text/html; charset=utf-8", "no-store"),
-    "/assets/styles.css": (
-        "styles.css",
-        "text/css; charset=utf-8",
-        "public, max-age=3600, immutable",
-    ),
-    "/assets/app.js": (
-        "app.js",
-        "text/javascript; charset=utf-8",
-        "public, max-age=3600, immutable",
-    ),
-}
-
-
 @dataclass(frozen=True)
 class LiveResponse:
     status: HTTPStatus
@@ -180,19 +168,18 @@ class PresentationRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "replay_unavailable"})
             return
-        asset = _ASSETS.get(path)
+        asset = ASSET_ROUTES.get(path)
         if asset is None:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        filename, content_type, cache_control = asset
         try:
-            content = (_ASSET_DIRECTORY / filename).read_bytes()
-        except OSError:
+            content = served_presentation_asset_bytes(asset)
+        except (OSError, ValueError):
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", cache_control)
+        self.send_header("Content-Type", asset.content_type)
+        self.send_header("Cache-Control", asset.cache_control)
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)

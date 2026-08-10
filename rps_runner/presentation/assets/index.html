@@ -4,14 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Tournament presentation</title>
-    <link rel="stylesheet" href="/assets/styles.css">
+    <link rel="stylesheet" href="/assets/styles.css?v=__STYLES_VERSION__">
   </head>
   <body>
     <header class="site-header">
       <p class="eyebrow">Rock–Paper–Scissors</p>
       <h1 id="tournament-name">Tournament presentation</h1>
     </header>
-    <div id="freshness-warning" class="warning" role="status" aria-live="polite" hidden></div>
+    <div id="freshness-warning" class="warning" hidden></div>
+    <div id="connectivity-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
     <main>
       <div id="live-view">
         <section class="waiting" aria-labelledby="waiting-title">
@@ -22,6 +23,6 @@
       <section id="replay-panel" class="replay-panel" aria-labelledby="replay-title" hidden></section>
     </main>
     <noscript>This live presentation requires JavaScript.</noscript>
-    <script src="/assets/app.js" defer></script>
+    <script src="/assets/app.js?v=__APP_VERSION__" defer></script>
   </body>
 </html>

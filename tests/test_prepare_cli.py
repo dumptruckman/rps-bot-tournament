@@ -103,6 +103,17 @@ class PrepareCliTests(unittest.TestCase):
                 "rps_runner.prepare_cli.diagnose_host_readiness",
                 return_value=self.doctor(),
             ) as doctor,
+            mock.patch(
+                "rps_runner.prepare_cli.verify_presentation_assets",
+                return_value={
+                    "identity": "sha256:" + "9" * 64,
+                    "assets": {
+                        "index.html": "<!doctype html>",
+                        "styles.css": "body{}",
+                        "app.js": '"use strict";',
+                    },
+                },
+            ),
             mock.patch("rps_runner.prepare_cli.time.monotonic", side_effect=(10.0, 22.5)),
         ):
             result = prepare_cli.run(self.arguments())
@@ -119,6 +130,11 @@ class PrepareCliTests(unittest.TestCase):
         self.assertEqual(result["docker_version"], "27.3.1")
         self.assertEqual(result["cached_identities"]["practice_artifacts"]["fixed-move"], digest("3"))
         self.assertEqual(result["offline_checks"]["artifact_restore"], "passed")
+        self.assertEqual(result["offline_checks"]["presentation_assets"], "passed")
+        self.assertEqual(
+            result["presentation_assets"]["identity"],
+            "sha256:" + "9" * 64,
+        )
         self.assertEqual(result["artifact_store"]["path"], str(self.store.resolve()))
         self.assertEqual(json.loads(self.report.read_text()), result)
         request = doctor.call_args.args[0]

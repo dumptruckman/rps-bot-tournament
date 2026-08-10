@@ -225,9 +225,9 @@ or unavailable port.
 HTML, CSS, and JavaScript are package resources shipped with `rps_runner`. The
 browser implementation uses standards-based HTML, CSS, and small vanilla
 JavaScript modules. It has no CDN, network, framework, asset compilation, or
-runtime package dependency beyond Python's standard library. Assets use content
-types and cache rules set by the presentation server; the HTML shell and live
-JSON are not persistently cached.
+runtime package dependency beyond Python's standard library. The HTML shell
+uses `no-store`; its CSS and JavaScript URLs carry content digests and use a
+one-year immutable cache; live and replay JSON use `no-store`.
 
 The support target is the latest two major versions, at implementation and
 release time, of desktop Chrome/Chromium, Firefox, and Safari. The page remains
@@ -240,6 +240,24 @@ Browser automation is a development-only dependency, pinned separately from the
 Python runtime. It does not enter the offline event-day asset path. All runtime
 assets and Python dependencies must be installable during the repository's
 existing offline preparation workflow.
+
+Release verification records the browser name, complete version, operating
+system, viewport, tester, date, and result. A release is supported only after
+the current and immediately previous desktop major versions of Chrome/Chromium,
+Firefox, and Safari have passed. Chromium is covered by the pinned development
+suite; Firefox and Safari are manual release checks so neither browser nor Node
+becomes an event-day dependency.
+
+For each Firefox and Safari version, start a real presentation process and check
+both 1280×720 and 375 CSS-pixel widths. Confirm initial waiting, paused and
+running states, Match-boundary updates, Qualifying-to-Playoff transition,
+pending organizer review, replay keyboard controls, completion with and without
+a Tournament Champion, abort, three-poll connectivity warning, and recovery.
+Also confirm visible keyboard focus, semantic table/list navigation, no document
+horizontal overflow, reduced-motion preference, and literal display of the
+hostile string `<img src=x onerror=alert(1)>`. Save the completed version matrix
+using [PRESENTATION_BROWSER_SMOKE_CHECK.md](PRESENTATION_BROWSER_SMOKE_CHECK.md)
+with the release evidence; a blank or failed row blocks the release.
 
 ## Accessibility and audience safety
 
@@ -281,6 +299,18 @@ presentation consumer did not change Tournament execution or competitive
 records. Event rehearsal starts the runner and presentation as separate
 processes, interrupts and resumes each independently, and confirms that
 Competition Record bytes and reconstructed Tournament state remain unchanged.
+
+Development verification is:
+
+```text
+.venv/bin/python -m unittest discover -s tests
+npm ci
+npx playwright install chromium
+npm run test:browser
+```
+
+Node, Playwright, and browser downloads are development-only; event day needs
+only the prepared Python installation and a supported browser already installed.
 
 ## Explicit non-decisions for later releases
 

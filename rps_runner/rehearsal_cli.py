@@ -11,10 +11,13 @@ import json
 import os
 from pathlib import Path
 import platform
+import select
 import subprocess
 import sys
 import time
 from typing import Any, Callable, Mapping, Optional, TextIO
+from urllib.parse import quote
+from urllib.request import urlopen
 
 from rps_runner.artifact_store import resolve_artifact
 from rps_runner.batch_plan_cli import main as batch_plan_main
@@ -35,7 +38,6 @@ from rps_runner.tournament.storage import (
     load_operational_telemetry,
     load_scoreboard_projection,
 )
-from rps_runner.tournament_cli import main as tournament_main
 
 
 OBJECTIVE_SECONDS = 40 * 60
@@ -57,7 +59,8 @@ class RehearsalOperations:
     review_plan: Callable[[Path, Path, Path], Mapping[str, Any]]
     approve_plan: Callable[[Mapping[str, Any], TextIO], bool]
     prove_archive_restore: Callable[[Path, Path], Mapping[str, Any]]
-    run_tournament: Callable[[list[str]], int]
+    run_tournament: Callable[[list[str]], Mapping[str, Any]]
+    rehearse_presentation: Callable[[Path], Mapping[str, Any]]
     verify_tournament: Callable[[Path], Mapping[str, Any]]
 
 
@@ -65,8 +68,328 @@ def _run_batch(arguments: list[str]) -> int:
     return batch_plan_main(arguments, stdout=io.StringIO(), stderr=sys.stderr)
 
 
-def _run_tournament(arguments: list[str]) -> int:
-    return tournament_main(arguments, stdout=sys.stdout, stderr=sys.stderr)
+def _runner_control_arguments(arguments: list[str], control: str) -> list[str]:
+    retained: list[str] = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--plan":
+            index += 2
+            continue
+        if argument in ("--continuous", "--start", "--resume", "--request-pause"):
+            index += 1
+            continue
+        retained.append(argument)
+        index += 1
+    return [*retained, control]
+
+
+def _run_tournament(arguments: list[str]) -> Mapping[str, Any]:
+    """Run, pause, and resume the public Runner as an independent process."""
+
+    directory = Path(arguments[arguments.index("--directory") + 1])
+    command = [sys.executable, "-m", "rps_runner.tournament_cli", *arguments]
+    runner = subprocess.Popen(command)
+    observed: list[str] = []
+    try:
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            if runner.poll() is not None:
+                return {
+                    "exit_code": int(runner.returncode or 0),
+                    "separate_process": True,
+                    "interrupted": False,
+                    "resumed": False,
+                    "states_observed": observed,
+                }
+            projection = load_scoreboard_projection(directory)
+            records_directory = directory / "records"
+            has_record = records_directory.is_dir() and any(
+                records_directory.glob("*.json")
+            )
+            if projection is not None and projection.get("status") == "running":
+                if "running" not in observed:
+                    observed.append("running")
+                if has_record:
+                    break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("Runner did not reach an interruptible Match boundary")
+
+        presentation_while_running = _exercise_presentation_while_runner_active(
+            directory, runner
+        )
+
+        pause = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "rps_runner.tournament_cli",
+                *_runner_control_arguments(arguments, "--request-pause"),
+            ],
+            check=False,
+        )
+        if pause.returncode != 0:
+            raise RuntimeError("public Runner pause request failed")
+        if runner.wait(timeout=300) != 0:
+            raise RuntimeError("interrupted public Runner exited non-zero")
+        paused = load_scoreboard_projection(directory)
+        if paused is None or paused.get("status") != "paused":
+            raise RuntimeError("public Runner did not pause at a Match boundary")
+        observed.append("paused")
+
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "rps_runner.tournament_cli",
+                *_runner_control_arguments(arguments, "--resume"),
+            ],
+            check=False,
+        )
+        final = load_scoreboard_projection(directory)
+        final_status = None if final is None else str(final.get("status"))
+        if final_status is not None:
+            observed.append(final_status)
+        resumed_successfully = resumed.returncode == 0 and final_status == "complete"
+        return {
+            "exit_code": 0 if resumed_successfully else CORRECTNESS_FAILURE_EXIT_CODE,
+            "separate_process": True,
+            "interrupted": True,
+            "resumed": resumed_successfully,
+            "states_observed": observed,
+            "presentation_while_runner_active": presentation_while_running,
+        }
+    finally:
+        if runner.poll() is None:
+            _stop_process(runner)
+
+
+def _competitive_snapshot(directory: Path) -> Mapping[str, Any]:
+    manifest = load_manifest(directory).manifest
+    records = load_competition_records(directory)
+    state = fold_tournament_state(manifest, records)
+    record_bytes = {
+        str(path.relative_to(directory)): path.read_bytes()
+        for path in (
+            directory / "records.index.json",
+            *sorted((directory / "records").glob("*.json")),
+        )
+    }
+    return {
+        "record_bytes": record_bytes,
+        "projection_bytes": (directory / "scoreboard.json").read_bytes(),
+        "state": state,
+        "champion": state.champion_team_id,
+    }
+
+
+def _stop_process(process: subprocess.Popen[Any]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _start_presentation_process(directory: Path) -> tuple[subprocess.Popen[str], str]:
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "rps_runner.tournament_cli",
+            "present",
+            "--directory",
+            str(directory),
+            "--port",
+            "0",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    ready, _write, _errors = select.select([process.stdout], [], [], 10)
+    if not ready:
+        _stop_process(process)
+        raise RuntimeError("presentation process did not print its loopback URL")
+    url = process.stdout.readline().strip()
+    if not url.startswith("http://"):
+        _stop_process(process)
+        raise RuntimeError("presentation process printed an invalid loopback URL")
+    return process, url
+
+
+def _read_live(url: str) -> Mapping[str, Any]:
+    with urlopen(url + "api/live", timeout=10) as response:
+        if response.status != 200:
+            raise RuntimeError("presentation live read failed")
+        value = json.loads(response.read())
+    if not isinstance(value, dict):
+        raise RuntimeError("presentation live response was invalid")
+    return value
+
+
+def _exercise_presentation_while_runner_active(
+    directory: Path, runner: subprocess.Popen[Any]
+) -> Mapping[str, Any]:
+    for operation in ("initial_read", "restart_read"):
+        process, url = _start_presentation_process(directory)
+        try:
+            _read_live(url)
+        finally:
+            _stop_process(process)
+        if runner.poll() is not None:
+            raise RuntimeError(
+                "presentation interruption did not leave the Runner active"
+            )
+    return {
+        "separate_process": True,
+        "interrupted": True,
+        "resumed": True,
+        "runner_remained_active": True,
+        "operations": ["initial_read", "restart_read"],
+    }
+
+
+def _write_scenario_projection(directory: Path, projection: Mapping[str, Any]) -> None:
+    replacement = directory / ".scoreboard.next"
+    replacement.write_text(json.dumps(projection), encoding="utf-8")
+    replacement.replace(directory / "scoreboard.json")
+
+
+def _rehearse_presentation_lifecycle(
+    tournament_directory: Path, final_projection: Mapping[str, Any], match_id: str
+) -> Mapping[str, Any]:
+    scenario_directory = tournament_directory.parent / "presentation-event-scenarios"
+    scenario_directory.mkdir()
+    qualifying = json.loads(json.dumps(final_projection))
+    qualifying.update(status="running", phase="qualifying", champion=None)
+    qualifying.pop("bracket", None)
+    qualifying.pop("completion_reason", None)
+    qualifying.pop("security_review", None)
+    _write_scenario_projection(scenario_directory, qualifying)
+
+    process, url = _start_presentation_process(scenario_directory)
+    try:
+        observed: list[str] = []
+        qualifying_view = _read_live(url)["tournament"]
+        observed.append(str(qualifying_view["status"]))
+        qualifying_phase = str(qualifying_view["phase"])
+
+        playoff = json.loads(json.dumps(final_projection))
+        playoff.update(status="running", phase="playoff", champion=None)
+        playoff.pop("completion_reason", None)
+        _write_scenario_projection(scenario_directory, playoff)
+        playoff_view = _read_live(url)["tournament"]
+        observed.append(str(playoff_view["status"]))
+        playoff_phase = str(playoff_view["phase"])
+
+        pending = json.loads(json.dumps(playoff))
+        pending["status"] = "awaiting_security_ruling"
+        pending["security_review"] = {
+            "fixture_id": str(pending["fixtures"][0]["fixture_id"]),
+            "match_id": match_id,
+        }
+        _write_scenario_projection(scenario_directory, pending)
+        observed.append(str(_read_live(url)["tournament"]["status"]))
+
+        aborted = json.loads(json.dumps(playoff))
+        aborted.update(status="aborted", completion_reason="operator_requested")
+        _write_scenario_projection(scenario_directory, aborted)
+        observed.append(str(_read_live(url)["tournament"]["status"]))
+    finally:
+        _stop_process(process)
+    return {
+        "phase_transition_observed": (
+            qualifying_phase == "qualifying" and playoff_phase == "playoff"
+        ),
+        "states_observed": observed,
+        "pending_review_observed": "awaiting_security_ruling" in observed,
+        "abort_observed": "aborted" in observed,
+    }
+
+
+def _rehearse_presentation(directory: Path) -> Mapping[str, Any]:
+    """Read live and replay data across an independent process restart."""
+
+    before = _competitive_snapshot(directory)
+    projection = load_scoreboard_projection(directory)
+    if projection is None:
+        raise RuntimeError("presentation rehearsal requires a Scoreboard Projection")
+    match_ids = [
+        str(match["match_id"])
+        for fixture in projection.get("fixtures", [])
+        for match in fixture.get("matches", [])
+    ]
+    bracket = projection.get("bracket")
+    if isinstance(bracket, dict):
+        match_ids.extend(
+            str(match["match_id"])
+            for fixture in bracket.get("fixtures", [])
+            for match in fixture.get("matches", [])
+        )
+    if not match_ids:
+        raise RuntimeError("presentation rehearsal requires a completed Match")
+
+    live_process, live_url = _start_presentation_process(directory)
+    try:
+        _read_live(live_url)
+    finally:
+        _stop_process(live_process)
+
+    replay_process, replay_base_url = _start_presentation_process(directory)
+    try:
+        replay_url = (
+            replay_base_url
+            + "api/matches/"
+            + quote(match_ids[0], safe="")
+            + "/replay"
+        )
+        with urlopen(replay_url, timeout=10) as response:
+            if response.status != 200:
+                raise RuntimeError("presentation replay read failed")
+            response.read()
+    finally:
+        _stop_process(replay_process)
+
+    lifecycle = _rehearse_presentation_lifecycle(
+        directory, projection, match_ids[0]
+    )
+    if not all(
+        lifecycle.get(field) is True
+        for field in (
+            "phase_transition_observed",
+            "pending_review_observed",
+            "abort_observed",
+        )
+    ):
+        raise RuntimeError("presentation lifecycle rehearsal was incomplete")
+
+    after = _competitive_snapshot(directory)
+    checks = {
+        "competition_record_bytes_unchanged": (
+            before["record_bytes"] == after["record_bytes"]
+        ),
+        "scoreboard_projection_unchanged": (
+            before["projection_bytes"] == after["projection_bytes"]
+        ),
+        "reconstructed_state_unchanged": before["state"] == after["state"],
+        "tournament_champion_unchanged": (
+            before["champion"] == after["champion"]
+        ),
+    }
+    if not all(checks.values()):
+        raise RuntimeError("presentation reads changed authoritative Tournament data")
+    return {
+        "separate_process": True,
+        "interrupted": True,
+        "resumed": True,
+        "live_read_verified": True,
+        "replay_read_verified": True,
+        "lifecycle": lifecycle,
+        **checks,
+    }
 
 
 def _sysctl(name: str) -> str:
@@ -385,6 +708,7 @@ DEFAULT_OPERATIONS = RehearsalOperations(
     approve_plan=_approve_plan,
     prove_archive_restore=_prove_archive_restore,
     run_tournament=_run_tournament,
+    rehearse_presentation=_rehearse_presentation,
     verify_tournament=_verify_tournament,
 )
 
@@ -553,7 +877,7 @@ def main(
             timings,
             clock,
         )
-        tournament_code = _timed(
+        runner_rehearsal = _timed(
             "tournament_execution",
             lambda: operations.run_tournament(
                 [
@@ -565,8 +889,44 @@ def main(
             timings,
             clock,
         )
-        if tournament_code != 0:
+        if runner_rehearsal.get("exit_code") != 0:
             raise RuntimeError("public Tournament command failed")
+        if not all(
+            runner_rehearsal.get(field) is True
+            for field in ("separate_process", "interrupted", "resumed")
+        ):
+            raise RuntimeError("public Runner interruption rehearsal was incomplete")
+        active_presentation = runner_rehearsal.get(
+            "presentation_while_runner_active"
+        )
+        if not isinstance(active_presentation, dict) or not all(
+            active_presentation.get(field) is True
+            for field in (
+                "separate_process",
+                "interrupted",
+                "resumed",
+                "runner_remained_active",
+            )
+        ):
+            raise RuntimeError(
+                "presentation independence from the active Runner was not proven"
+            )
+        presentation_rehearsal = _timed(
+            "presentation_rehearsal",
+            lambda: operations.rehearse_presentation(tournament),
+            timings,
+            clock,
+        )
+        lifecycle = presentation_rehearsal.get("lifecycle")
+        if not isinstance(lifecycle, dict) or not all(
+            lifecycle.get(field) is True
+            for field in (
+                "phase_transition_observed",
+                "pending_review_observed",
+                "abort_observed",
+            )
+        ):
+            raise RuntimeError("presentation lifecycle rehearsal was incomplete")
         tournament_evidence = _timed(
             "public_verification",
             lambda: operations.verify_tournament(tournament),
@@ -602,6 +962,10 @@ def main(
                 "plan_review": {"status": "approved"},
                 "plan_approval_seconds_excluded": approval_seconds,
                 "archive_restore": dict(archive),
+                "event_day": {
+                    "runner": dict(runner_rehearsal),
+                    "presentation": dict(presentation_rehearsal),
+                },
                 "tournament": dict(tournament_evidence),
                 "capacity_contract": {"maximum_teams": 32},
             }

@@ -179,11 +179,50 @@ class RehearsalCliTests(unittest.TestCase):
         ) -> dict[str, object]:
             return {"selected_images": 16, "restored_images": 16, "status": "passed"}
 
-        def run_tournament(_arguments: list[str]) -> int:
+        def run_tournament(_arguments: list[str]) -> dict[str, object]:
             tournament = self.output / "tournament"
             tournament.mkdir()
             (tournament / "canonical.marker").write_bytes(b"unchanged")
-            return 0
+            return {
+                "exit_code": 0,
+                "separate_process": True,
+                "interrupted": True,
+                "resumed": True,
+                "states_observed": ["running", "paused", "complete"],
+                "presentation_while_runner_active": {
+                    "separate_process": True,
+                    "interrupted": True,
+                    "resumed": True,
+                    "runner_remained_active": True,
+                },
+            }
+
+        def rehearse_presentation(directory: Path) -> dict[str, object]:
+            self.assertEqual(
+                (directory / "canonical.marker").read_bytes(), b"unchanged"
+            )
+            return {
+                "separate_process": True,
+                "interrupted": True,
+                "resumed": True,
+                "live_read_verified": True,
+                "replay_read_verified": True,
+                "competition_record_bytes_unchanged": True,
+                "scoreboard_projection_unchanged": True,
+                "reconstructed_state_unchanged": True,
+                "tournament_champion_unchanged": True,
+                "lifecycle": {
+                    "phase_transition_observed": True,
+                    "pending_review_observed": True,
+                    "abort_observed": True,
+                    "states_observed": [
+                        "running",
+                        "running",
+                        "awaiting_security_ruling",
+                        "aborted",
+                    ],
+                },
+            }
 
         def verify_tournament(_directory: Path) -> dict[str, object]:
             return {
@@ -210,11 +249,12 @@ class RehearsalCliTests(unittest.TestCase):
             approve_plan=lambda _evidence, _output: True,
             prove_archive_restore=prove_archive_restore,
             run_tournament=run_tournament,
+            rehearse_presentation=rehearse_presentation,
             verify_tournament=verify_tournament,
         )
 
     def test_public_command_records_complete_real_path_report(self) -> None:
-        clock = SequenceClock(tuple(float(value) for value in range(17)))
+        clock = SequenceClock(tuple(float(value) for value in range(19)))
 
         code = main(
             self.arguments(),
@@ -235,6 +275,22 @@ class RehearsalCliTests(unittest.TestCase):
         self.assertEqual(report["tournament"]["match_count"], 369)
         self.assertTrue(report["tournament"]["all_series_used_three_matches"])
         self.assertTrue(report["tournament"]["timing_isolation_verified"])
+        self.assertTrue(report["event_day"]["runner"]["interrupted"])
+        self.assertTrue(
+            report["event_day"]["runner"]["presentation_while_runner_active"][
+                "runner_remained_active"
+            ]
+        )
+        self.assertTrue(
+            report["event_day"]["presentation"][
+                "competition_record_bytes_unchanged"
+            ]
+        )
+        self.assertTrue(
+            report["event_day"]["presentation"]["lifecycle"][
+                "pending_review_observed"
+            ]
+        )
         self.assertEqual(
             set(report["phase_timings_seconds"]),
             {
@@ -244,6 +300,7 @@ class RehearsalCliTests(unittest.TestCase):
                 "plan_review",
                 "archive_restore",
                 "tournament_execution",
+                "presentation_rehearsal",
                 "public_verification",
             },
         )
@@ -257,9 +314,11 @@ class RehearsalCliTests(unittest.TestCase):
     def test_timing_overrun_fails_only_readiness_after_completion(self) -> None:
         operations = self.operations()
         clock = SequenceClock(
-            (0.0, 100.0, 100.0, 500.0, 500.0, 900.0, 900.0,
-             1200.0, 1200.0, 1300.0, 1300.0, 1600.0, 1600.0,
-             2000.0, 2000.0, 2400.0, 2501.0)
+            (
+                0.0, 100.0, 100.0, 500.0, 500.0, 900.0, 900.0,
+                1200.0, 1200.0, 1300.0, 1300.0, 1600.0, 1600.0,
+                2000.0, 2000.0, 2100.0, 2100.0, 2400.0, 2501.0,
+            )
         )
 
         code = main(

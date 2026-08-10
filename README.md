@@ -293,6 +293,12 @@ source .venv/bin/activate
 python -m pip install -e .
 ```
 
+Verify that the installed package contains its complete offline presentation:
+
+```text
+rps-tournament verify-presentation-assets
+```
+
 Then run a match:
 
 ```text
@@ -602,6 +608,12 @@ inputs. It does not install Docker, change engine settings, prune caches, or
 replace either output. Omit `--allow-pull` to require every pinned runtime to be
 present already. See [`docs/OFFLINE_PREPARATION.md`](docs/OFFLINE_PREPARATION.md)
 for report fields, failure dispositions, and the separate full rehearsal.
+
+For the audience display, start a separate read-only process with
+`rps-tournament present --directory TOURNAMENT_DIRECTORY`. The Tournament Runner
+and presentation can be stopped and restarted independently. See
+[`docs/PRESENTATION.md`](docs/PRESENTATION.md) for supported browsers, launch and
+recovery instructions, and the release smoke-check matrix.
 
 ---
 

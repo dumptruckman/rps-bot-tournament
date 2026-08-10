@@ -3,6 +3,7 @@
 const liveView = document.querySelector("#live-view");
 const title = document.querySelector("#tournament-name");
 const warning = document.querySelector("#freshness-warning");
+const connectivityStatus = document.querySelector("#connectivity-status");
 const replayPanel = document.querySelector("#replay-panel");
 let etag = null;
 let missedPolls = 0;
@@ -12,6 +13,7 @@ let currentTournament = null;
 let replayState = null;
 let replayOpener = null;
 let replayRequest = 0;
+let connectivityUnavailable = false;
 
 const labels = {
   paused: "Tournament paused",
@@ -260,6 +262,7 @@ function renderHistory(tournament, teamNames) {
         }
         const replayButton = element("button", `Replay Match ${match.match_id}`, "replay-open");
         replayButton.type = "button";
+        replayButton.dataset.matchId = match.match_id;
         replayButton.addEventListener("click", () => openReplay(match.match_id, replayButton));
         item.append(replayButton);
         list.append(item);
@@ -285,7 +288,11 @@ function renderStandings(tournament, teamNames) {
   const head = element("thead");
   const headerRow = element("tr");
   ["Rank", "Team", "Standing points", "Series wins", "Match diff.", "Round diff.", "Protocol fault forfeits", "Tie-break key"]
-    .forEach((label) => headerRow.append(element("th", label)));
+    .forEach((label) => {
+      const heading = element("th", label);
+      heading.scope = "col";
+      headerRow.append(heading);
+    });
   head.append(headerRow);
   const body = element("tbody");
   tournament.standings.forEach((standing, index) => {
@@ -319,6 +326,10 @@ function renderStandings(tournament, teamNames) {
 }
 
 function render(tournament) {
+  const focusedMatchId = document.activeElement instanceof HTMLElement
+    && document.activeElement.classList.contains("replay-open")
+    ? document.activeElement.dataset.matchId
+    : undefined;
   currentTournament = tournament;
   const teamNames = new Map(
     tournament.teams.map((team) => [team.team_id, team.display_name])
@@ -339,6 +350,11 @@ function render(tournament) {
     renderStandings(tournament, teamNames)
   );
   liveView.replaceChildren(content);
+  if (focusedMatchId !== undefined) {
+    const replacement = Array.from(document.querySelectorAll(".replay-open"))
+      .find((button) => button.dataset.matchId === focusedMatchId);
+    if (replacement !== undefined) replacement.focus({ preventScroll: true });
+  }
 }
 
 function replayTeamNames() {
@@ -527,6 +543,10 @@ function recordFailure() {
     : `Last update received ${Math.max(0, Math.floor((Date.now() - lastValidAt) / 1000))} seconds ago.`;
   warning.textContent = `Updates unavailable. ${age}`;
   warning.hidden = false;
+  if (!connectivityUnavailable) {
+    connectivityUnavailable = true;
+    connectivityStatus.textContent = "Updates unavailable.";
+  }
 }
 
 function recordSuccess() {
@@ -534,6 +554,10 @@ function recordSuccess() {
   lastValidAt = Date.now();
   warning.hidden = true;
   warning.textContent = "";
+  if (connectivityUnavailable) {
+    connectivityUnavailable = false;
+    connectivityStatus.textContent = "Updates restored.";
+  }
 }
 
 async function poll() {
@@ -557,7 +581,6 @@ async function poll() {
     }
     recordSuccess();
   } catch (_error) {
-    lastFreshness = false;
     recordFailure();
   } finally {
     setTimeout(poll, 1000);

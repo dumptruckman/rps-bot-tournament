@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import json
 from pathlib import Path
 import socket
 import tempfile
@@ -43,6 +44,21 @@ class PresentationCliTests(unittest.TestCase):
             {"directory": self.directory.resolve(), "host": "127.0.0.1", "port": 8765},
         )
         self.assertEqual(self.stdout.getvalue(), "http://127.0.0.1:8765/\n")
+
+    def test_installed_asset_verification_reports_offline_resources(self) -> None:
+        exit_code = main(
+            ["verify-presentation-assets"],
+            stdout=self.stdout,
+            stderr=self.stderr,
+        )
+
+        self.assertEqual(exit_code, 0, self.stderr.getvalue())
+        report = json.loads(self.stdout.getvalue())
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(
+            report["filenames"], ["app.js", "index.html", "styles.css"]
+        )
+        self.assertEqual(report["network_dependencies"], [])
 
     def test_present_passes_a_configured_loopback_host(self) -> None:
         captured: dict[str, object] = {}

@@ -16,5 +16,7 @@ jobs:
         with:
           python-version: "3.9"
       - run: python -m pip install -e .
+      - name: Verify installed offline presentation assets
+        run: rps-tournament verify-presentation-assets
       - name: Run unit tests at the supported minimum Python version
         run: python -m unittest discover -s tests
