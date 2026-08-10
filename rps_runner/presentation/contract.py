@@ -7,6 +7,7 @@ from typing import Any
 
 
 SUPPORTED_PROJECTION_VERSION = 1
+SUPPORTED_REPLAY_VERSION = 1
 _STATUSES = frozenset(
     (
         "paused",
@@ -36,6 +37,10 @@ _PLAYOFF_STAGES = frozenset(("semifinal", "final"))
 
 class ProjectionContractError(ValueError):
     """A Scoreboard Projection cannot enter the browser contract."""
+
+
+class ReplayContractError(ValueError):
+    """A terminal Competition Record cannot enter the replay contract."""
 
 
 def project_live(projection: Mapping[str, Any]) -> dict[str, Any]:
@@ -154,6 +159,157 @@ def project_live(projection: Mapping[str, Any]) -> dict[str, Any]:
     if "bracket" in projection:
         live["bracket"] = _project_bracket(projection["bracket"], team_ids)
     return live
+
+
+def project_replay(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and copy the allowlisted completed-Match replay contract."""
+
+    if not isinstance(record, Mapping) or record.get("type") != "match_terminal":
+        raise ReplayContractError("Replay requires a terminal Competition Record")
+    phase = _replay_string(record, "phase")
+    if phase not in _PHASES:
+        raise ReplayContractError("Replay phase is invalid")
+    fixture_id = _replay_string(record, "fixture_id")
+    match_id = _replay_string(record, "match_id")
+    match_ordinal = _replay_integer(record.get("match_ordinal"), "match_ordinal")
+    if match_ordinal < 1:
+        raise ReplayContractError("Replay match_ordinal must be positive")
+
+    raw_team_ids = _replay_sequence(record.get("team_ids"), "team_ids")
+    if (
+        len(raw_team_ids) != 2
+        or any(not isinstance(team_id, str) or not team_id for team_id in raw_team_ids)
+        or raw_team_ids[0] == raw_team_ids[1]
+    ):
+        raise ReplayContractError("Replay team_ids must identify two Teams")
+    team_ids = [raw_team_ids[0], raw_team_ids[1]]
+    team_id_set = set(team_ids)
+
+    outcome = _replay_string(record, "outcome")
+    if outcome not in _MATCH_OUTCOMES:
+        raise ReplayContractError("Replay outcome is invalid")
+    winner_team_id = record.get("winner_team_id")
+    if winner_team_id is not None and winner_team_id not in team_id_set:
+        raise ReplayContractError("Replay winner_team_id is invalid")
+    if outcome in ("draw", "double_forfeit") and winner_team_id is not None:
+        raise ReplayContractError("Replay outcome cannot declare a Match winner")
+    if outcome == "win" and winner_team_id is None:
+        raise ReplayContractError("Winning replay must declare a Match winner")
+
+    raw_round_wins = record.get("round_wins")
+    if not isinstance(raw_round_wins, Mapping) or set(raw_round_wins) != team_id_set:
+        raise ReplayContractError("Replay round_wins do not match Teams")
+    round_wins: dict[str, int] = {}
+    for team_id in team_ids:
+        value = _replay_integer(raw_round_wins.get(team_id), "round_wins")
+        if value < 0:
+            raise ReplayContractError("Replay Round wins cannot be negative")
+        round_wins[team_id] = value
+
+    rounds: list[dict[str, Any]] = []
+    for index, raw_round in enumerate(
+        _replay_sequence(record.get("rounds"), "rounds")
+    ):
+        location = f"rounds[{index}]"
+        if not isinstance(raw_round, Mapping):
+            raise ReplayContractError(f"Replay {location} must be an object")
+        turn = _replay_integer(raw_round.get("turn"), f"{location}.turn")
+        if turn != index:
+            raise ReplayContractError("Replay completed Round Turns are invalid")
+        raw_moves = raw_round.get("moves")
+        if not isinstance(raw_moves, Mapping) or set(raw_moves) != team_id_set:
+            raise ReplayContractError(f"Replay {location}.moves do not match Teams")
+        moves: dict[str, str] = {}
+        for team_id in team_ids:
+            move = raw_moves.get(team_id)
+            if move not in ("R", "P", "S"):
+                raise ReplayContractError(f"Replay {location}.moves are invalid")
+            moves[team_id] = move
+        round_winner = raw_round.get("winner_team_id")
+        if round_winner is not None and round_winner not in team_id_set:
+            raise ReplayContractError(f"Replay {location} winner is invalid")
+        rounds.append(
+            {
+                "round": index + 1,
+                "turn": turn,
+                "moves": moves,
+                "winner_team_id": round_winner,
+            }
+        )
+
+    raw_faults = record.get("faults")
+    if not isinstance(raw_faults, Mapping) or set(raw_faults) != team_id_set:
+        raise ReplayContractError("Replay faults do not match Teams")
+    faults: list[dict[str, Any]] = []
+    for team_id in team_ids:
+        raw_fault = raw_faults.get(team_id)
+        if raw_fault is None:
+            continue
+        if not isinstance(raw_fault, Mapping) or set(raw_fault) != {"kind", "turn"}:
+            raise ReplayContractError("Replay fault shape is invalid")
+        kind = _replay_string(raw_fault, "kind", "fault")
+        turn = _replay_integer(raw_fault.get("turn"), "fault.turn")
+        if turn != len(rounds):
+            raise ReplayContractError("Replay fault Turn is invalid")
+        faults.append({"team_id": team_id, "kind": kind, "turn": turn})
+
+    protocol_forfeit_team_id = record.get("protocol_forfeit_team_id")
+    if (
+        protocol_forfeit_team_id is not None
+        and protocol_forfeit_team_id not in team_id_set
+    ):
+        raise ReplayContractError("Replay protocol_forfeit_team_id is invalid")
+    if outcome == "double_forfeit":
+        if len(faults) != 2 or protocol_forfeit_team_id is not None:
+            raise ReplayContractError("Double Forfeit replay faults are invalid")
+    elif protocol_forfeit_team_id is not None:
+        if (
+            outcome != "win"
+            or len(faults) != 1
+            or faults[0]["team_id"] != protocol_forfeit_team_id
+            or winner_team_id == protocol_forfeit_team_id
+        ):
+            raise ReplayContractError("Protocol forfeit replay faults are invalid")
+    elif faults:
+        raise ReplayContractError("Ordinary replay cannot contain protocol faults")
+
+    return {
+        "version": SUPPORTED_REPLAY_VERSION,
+        "phase": phase,
+        "fixture_id": fixture_id,
+        "match_id": match_id,
+        "match_ordinal": match_ordinal,
+        "team_ids": team_ids,
+        "outcome": outcome,
+        "winner_team_id": winner_team_id,
+        "round_wins": round_wins,
+        "protocol_forfeit_team_id": protocol_forfeit_team_id,
+        "rounds": rounds,
+        "faults": faults,
+    }
+
+
+def _replay_sequence(value: Any, field: str) -> list[Any]:
+    if not isinstance(value, (list, tuple)):
+        raise ReplayContractError(f"Replay {field} must be an array")
+    return list(value)
+
+
+def _replay_string(
+    value: Mapping[str, Any], field: str, location: str = "record"
+) -> str:
+    candidate = value.get(field)
+    if not isinstance(candidate, str) or not candidate:
+        raise ReplayContractError(
+            f"Replay {location}.{field} must be a non-empty string"
+        )
+    return candidate
+
+
+def _replay_integer(value: Any, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ReplayContractError(f"Replay {field} must be an integer")
+    return value
 
 
 def _project_bracket(

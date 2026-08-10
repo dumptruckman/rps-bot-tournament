@@ -12,11 +12,14 @@
       <h1 id="tournament-name">Tournament presentation</h1>
     </header>
     <div id="freshness-warning" class="warning" role="status" aria-live="polite" hidden></div>
-    <main id="live-view">
-      <section class="waiting" aria-labelledby="waiting-title">
-        <h2 id="waiting-title">Waiting for Tournament data</h2>
-        <p>The presentation will begin when a Scoreboard Projection is available.</p>
-      </section>
+    <main>
+      <div id="live-view">
+        <section class="waiting" aria-labelledby="waiting-title">
+          <h2 id="waiting-title">Waiting for Tournament data</h2>
+          <p>The presentation will begin when a Scoreboard Projection is available.</p>
+        </section>
+      </div>
+      <section id="replay-panel" class="replay-panel" aria-labelledby="replay-title" hidden></section>
     </main>
     <noscript>This live presentation requires JavaScript.</noscript>
     <script src="/assets/app.js" defer></script>

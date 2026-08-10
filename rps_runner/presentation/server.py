@@ -14,9 +14,15 @@ from pathlib import Path
 import socket
 import threading
 from typing import Any, Optional, TextIO, Type
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
-from rps_runner.presentation.contract import ProjectionContractError, project_live
+from rps_runner.presentation.contract import (
+    ProjectionContractError,
+    ReplayContractError,
+    project_live,
+    project_replay,
+)
+from rps_runner.tournament.storage import StorageError, load_competition_records
 
 
 LOGGER = logging.getLogger(__name__)
@@ -85,6 +91,55 @@ class LiveProjectionState:
             return LiveResponse(HTTPStatus.OK, body, _etag(body))
 
 
+@dataclass(frozen=True)
+class ReplayResponse:
+    status: HTTPStatus
+    body: dict[str, Any]
+
+
+class ReplayState:
+    """Load one committed Match through verified Competition Record storage."""
+
+    def __init__(
+        self,
+        tournament_directory: Path,
+        live_state: LiveProjectionState,
+    ):
+        self._directory = tournament_directory
+        self._live_state = live_state
+
+    def response(self, match_id: str) -> ReplayResponse:
+        live_response = self._live_state.response()
+        freshness = live_response.body.get("freshness")
+        if (
+            live_response.status != HTTPStatus.OK
+            or not isinstance(freshness, dict)
+            or freshness.get("available") is not True
+        ):
+            return _replay_unavailable()
+        tournament = live_response.body.get("tournament")
+        if not isinstance(tournament, dict):
+            return _replay_unavailable()
+        if _completed_match_occurrences(tournament, match_id) != 1:
+            return _replay_unavailable()
+
+        try:
+            terminal_records = [
+                stored.record
+                for stored in load_competition_records(self._directory)
+                if stored.record.get("type") == "match_terminal"
+                and stored.record.get("match_id") == match_id
+            ]
+            if len(terminal_records) != 1:
+                return _replay_unavailable()
+            replay = project_replay(terminal_records[0])
+        except (OSError, StorageError, ReplayContractError) as error:
+            LOGGER.warning("Replay unavailable for Match %s: %s", match_id, error)
+            return _replay_unavailable()
+
+        return ReplayResponse(HTTPStatus.OK, {"replay": replay})
+
+
 class PresentationServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -93,8 +148,10 @@ class PresentationServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         handler: Type[BaseHTTPRequestHandler],
         state: LiveProjectionState,
+        replay_state: ReplayState,
     ):
         self.presentation_state = state
+        self.replay_state = replay_state
         super().__init__(server_address, handler)
 
 
@@ -109,6 +166,19 @@ class PresentationRequestHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/live":
             self._serve_live()
+            return
+        replay_prefix = "/api/matches/"
+        replay_suffix = "/replay"
+        if path.startswith(replay_prefix) and path.endswith(replay_suffix):
+            encoded_match_id = path[len(replay_prefix) : -len(replay_suffix)]
+            try:
+                match_id = unquote(encoded_match_id, errors="strict")
+            except UnicodeDecodeError:
+                match_id = ""
+            if match_id and "/" not in match_id:
+                self._serve_replay(match_id)
+                return
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "replay_unavailable"})
             return
         asset = _ASSETS.get(path)
         if asset is None:
@@ -149,6 +219,19 @@ class PresentationRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _serve_replay(self, match_id: str) -> None:
+        response = self.server.replay_state.response(match_id)
+        self._send_json(response.status, response.body)
+
+    def _send_json(self, status: HTTPStatus, body: dict[str, Any]) -> None:
+        encoded = _json_bytes(body)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def log_message(self, format: str, *args: object) -> None:
         LOGGER.info("Presentation HTTP: " + format, *args)
 
@@ -165,8 +248,12 @@ def create_server(
     server_type: Type[PresentationServer] = (
         _IPv6PresentationServer if family == socket.AF_INET6 else PresentationServer
     )
+    live_state = LiveProjectionState(directory)
     return server_type(
-        (host, port), PresentationRequestHandler, LiveProjectionState(directory)
+        (host, port),
+        PresentationRequestHandler,
+        live_state,
+        ReplayState(directory, live_state),
     )
 
 
@@ -233,3 +320,25 @@ def _json_bytes(value: Any) -> bytes:
 def _etag(value: Any) -> str:
     digest = hashlib.sha256(_json_bytes(value)).hexdigest()
     return f'"{digest}"'
+
+
+def _completed_match_occurrences(
+    tournament: dict[str, Any], match_id: str
+) -> int:
+    occurrences = 0
+    phase_fixtures = [tournament.get("fixtures", [])]
+    bracket = tournament.get("bracket")
+    if isinstance(bracket, dict):
+        phase_fixtures.append(bracket.get("fixtures", []))
+    for fixtures in phase_fixtures:
+        for fixture in fixtures:
+            for match in fixture.get("matches", []):
+                if match.get("match_id") == match_id:
+                    occurrences += 1
+    return occurrences
+
+
+def _replay_unavailable() -> ReplayResponse:
+    return ReplayResponse(
+        HTTPStatus.NOT_FOUND, {"error": "replay_unavailable"}
+    )

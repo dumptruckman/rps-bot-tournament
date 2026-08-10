@@ -3,10 +3,15 @@
 const liveView = document.querySelector("#live-view");
 const title = document.querySelector("#tournament-name");
 const warning = document.querySelector("#freshness-warning");
+const replayPanel = document.querySelector("#replay-panel");
 let etag = null;
 let missedPolls = 0;
 let lastValidAt = null;
 let lastFreshness = null;
+let currentTournament = null;
+let replayState = null;
+let replayOpener = null;
+let replayRequest = 0;
 
 const labels = {
   paused: "Tournament paused",
@@ -36,6 +41,8 @@ const fixtureLabels = {
   complete: "Complete",
   skipped: "Skipped",
 };
+
+const moveLabels = { R: "Rock", P: "Paper", S: "Scissors" };
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -251,6 +258,10 @@ function renderHistory(tournament, teamNames) {
         if (match.winner_team_id !== null) {
           item.append(element("p", `Winner: ${teamName(teamNames, match.winner_team_id)}`));
         }
+        const replayButton = element("button", `Replay Match ${match.match_id}`, "replay-open");
+        replayButton.type = "button";
+        replayButton.addEventListener("click", () => openReplay(match.match_id, replayButton));
+        item.append(replayButton);
         list.append(item);
       });
     });
@@ -308,6 +319,7 @@ function renderStandings(tournament, teamNames) {
 }
 
 function render(tournament) {
+  currentTournament = tournament;
   const teamNames = new Map(
     tournament.teams.map((team) => [team.team_id, team.display_name])
   );
@@ -328,6 +340,184 @@ function render(tournament) {
   );
   liveView.replaceChildren(content);
 }
+
+function replayTeamNames() {
+  return new Map(
+    currentTournament === null
+      ? []
+      : currentTournament.teams.map((team) => [team.team_id, team.display_name])
+  );
+}
+
+function replayHeader(matchId) {
+  const header = element("div", undefined, "replay-header");
+  const heading = element("h2", "Match replay");
+  heading.id = "replay-title";
+  const close = element("button", "Close replay", "replay-close");
+  close.type = "button";
+  close.addEventListener("click", closeReplay);
+  header.append(heading, close, element("p", matchId, "replay-match-id"));
+  return header;
+}
+
+function showReplayUnavailable(matchId) {
+  replayState = null;
+  replayPanel.replaceChildren(
+    replayHeader(matchId),
+    element("p", "Replay unavailable", "replay-unavailable"),
+    element(
+      "p",
+      "This Match does not have one verified committed replay record. The live Tournament view is unchanged."
+    )
+  );
+}
+
+async function openReplay(matchId, opener) {
+  const requestId = ++replayRequest;
+  replayOpener = opener;
+  replayState = null;
+  replayPanel.hidden = false;
+  replayPanel.replaceChildren(
+    replayHeader(matchId),
+    element("p", "Loading committed Match replay…", "replay-loading")
+  );
+  try {
+    const response = await fetch(
+      `/api/matches/${encodeURIComponent(matchId)}/replay`,
+      { cache: "no-store" }
+    );
+    if (requestId !== replayRequest) return;
+    if (!response.ok) {
+      showReplayUnavailable(matchId);
+      return;
+    }
+    const payload = await response.json();
+    if (requestId !== replayRequest) return;
+    const replay = payload.replay;
+    replayState = {
+      replay,
+      events: [
+        ...replay.rounds.map((round) => ({ type: "round", value: round })),
+        ...(replay.faults.length === 0
+          ? []
+          : [{ type: "fault", value: replay.faults }]),
+      ],
+      index: 0,
+    };
+    renderReplay();
+  } catch (_error) {
+    if (requestId !== replayRequest) return;
+    showReplayUnavailable(matchId);
+  }
+}
+
+function closeReplay() {
+  replayRequest += 1;
+  replayPanel.hidden = true;
+  replayPanel.replaceChildren();
+  replayState = null;
+  if (replayOpener !== null && replayOpener.isConnected) replayOpener.focus();
+  replayOpener = null;
+}
+
+function renderReplay() {
+  if (replayState === null) return;
+  const { replay, events, index } = replayState;
+  const teamNames = replayTeamNames();
+  const summary = element("div", undefined, "replay-summary");
+  summary.append(
+    element(
+      "p",
+      `Outcome: ${labels[replay.outcome] || displayCode(replay.outcome)}`,
+      "replay-outcome"
+    )
+  );
+  if (replay.winner_team_id !== null) {
+    summary.append(
+      element("p", `Winner: ${teamName(teamNames, replay.winner_team_id)}`, "replay-winner")
+    );
+  }
+
+  const frame = element("article", undefined, "replay-frame");
+  frame.setAttribute("aria-live", "polite");
+  if (events.length === 0) {
+    frame.append(element("h3", "No completed Rounds"));
+  } else {
+    const event = events[index];
+    if (event.type === "round") {
+      const round = event.value;
+      frame.append(
+        element("h3", `Round ${round.round}`),
+        element("p", `Turn ${round.turn}`, "replay-turn")
+      );
+      const moves = element("ul", undefined, "replay-moves");
+      replay.team_ids.forEach((teamId) => {
+        moves.append(
+          element("li", `${teamName(teamNames, teamId)}: ${moveLabels[round.moves[teamId]]}`)
+        );
+      });
+      frame.append(moves);
+      frame.append(
+        element(
+          "p",
+          round.winner_team_id === null
+            ? "Drawn Round"
+            : `Round winner: ${teamName(teamNames, round.winner_team_id)}`,
+          "replay-round-result"
+        )
+      );
+    } else {
+      const faults = event.value;
+      frame.append(element("h3", `Protocol fault on Turn ${faults[0].turn}`));
+      const list = element("ul", undefined, "replay-faults");
+      faults.forEach((fault) => {
+        list.append(
+          element("li", `${teamName(teamNames, fault.team_id)}: ${displayCode(fault.kind)}`)
+        );
+      });
+      frame.append(list);
+    }
+  }
+
+  const controls = element("div", undefined, "replay-controls");
+  const previous = element("button", "Previous", "replay-previous");
+  previous.type = "button";
+  previous.disabled = index === 0;
+  previous.addEventListener("click", () => stepReplay(-1));
+  const position = element(
+    "p",
+    events.length === 0 ? "No replay events" : `${index + 1} of ${events.length}`,
+    "replay-position"
+  );
+  const next = element("button", "Next", "replay-next");
+  next.type = "button";
+  next.disabled = events.length === 0 || index === events.length - 1;
+  next.addEventListener("click", () => stepReplay(1));
+  controls.append(previous, position, next);
+  replayPanel.replaceChildren(replayHeader(replay.match_id), summary, frame, controls);
+}
+
+function stepReplay(offset) {
+  if (replayState === null) return;
+  const nextIndex = replayState.index + offset;
+  if (nextIndex < 0 || nextIndex >= replayState.events.length) return;
+  replayState.index = nextIndex;
+  renderReplay();
+}
+
+document.addEventListener("keydown", (event) => {
+  if (replayPanel.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeReplay();
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    stepReplay(-1);
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    stepReplay(1);
+  }
+});
 
 function recordFailure() {
   missedPolls += 1;

@@ -4,14 +4,20 @@ from contextlib import contextmanager
 import http.client
 import json
 from pathlib import Path
+import stat
 import tempfile
 import threading
 from typing import Any, Iterator
 import unittest
 from unittest.mock import patch
 
-from rps_runner.presentation.contract import ProjectionContractError, project_live
+from rps_runner.presentation.contract import (
+    ProjectionContractError,
+    project_live,
+    project_replay,
+)
 from rps_runner.presentation.server import create_server
+from rps_runner.tournament.storage import append_competition_record
 
 
 def projection(
@@ -59,6 +65,56 @@ def projection(
         ],
         "champion": None,
         "operator_abort": {"note": "secret"},
+    }
+
+
+def terminal_record(
+    *,
+    match_id: str = "qualifying-0001-match-1",
+    outcome: str = "win",
+    winner_team_id: str | None = "alpha",
+    protocol_forfeit_team_id: str | None = None,
+    rounds: list[dict[str, Any]] | None = None,
+    faults: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if rounds is None:
+        rounds = [
+            {
+                "turn": 0,
+                "moves": {"alpha": "R", "beta": "S"},
+                "winner_team_id": "alpha",
+            },
+            {
+                "turn": 1,
+                "moves": {"alpha": "P", "beta": "P"},
+                "winner_team_id": None,
+            },
+        ]
+    if faults is None:
+        faults = {"alpha": None, "beta": None}
+    return {
+        "type": "match_terminal",
+        "phase": "qualifying",
+        "fixture_id": "qualifying-0001",
+        "match_id": match_id,
+        "match_ordinal": 1,
+        "team_ids": ["alpha", "beta"],
+        "outcome": outcome,
+        "winner_team_id": winner_team_id,
+        "round_wins": {"alpha": 1, "beta": 0},
+        "protocol_forfeit_team_id": protocol_forfeit_team_id,
+        "moves": {"alpha": "RP", "beta": "SP"},
+        "rounds": rounds,
+        "faults": faults,
+        "match_seed": "secret-match-seed",
+        "bot_positions": {"a": "alpha", "b": "beta"},
+        "bot_visible_seeds": {"alpha": "secret-a", "beta": "secret-b"},
+        "artifact_digests": {"alpha": "secret-digest-a", "beta": "secret-digest-b"},
+        "security_violation": {
+            "suspects": ["alpha"],
+            "evidence": "secret-evidence",
+        },
+        "operational_telemetry": {"stderr": "secret-stderr"},
     }
 
 
@@ -340,6 +396,92 @@ class LiveContractTests(unittest.TestCase):
             project_live(malformed)
 
 
+class ReplayContractTests(unittest.TestCase):
+    def test_copies_ordered_completed_rounds_and_only_allowlisted_facts(self) -> None:
+        replay = project_replay(terminal_record())
+
+        self.assertEqual(
+            replay,
+            {
+                "version": 1,
+                "phase": "qualifying",
+                "fixture_id": "qualifying-0001",
+                "match_id": "qualifying-0001-match-1",
+                "match_ordinal": 1,
+                "team_ids": ["alpha", "beta"],
+                "outcome": "win",
+                "winner_team_id": "alpha",
+                "round_wins": {"alpha": 1, "beta": 0},
+                "protocol_forfeit_team_id": None,
+                "rounds": [
+                    {
+                        "round": 1,
+                        "turn": 0,
+                        "moves": {"alpha": "R", "beta": "S"},
+                        "winner_team_id": "alpha",
+                    },
+                    {
+                        "round": 2,
+                        "turn": 1,
+                        "moves": {"alpha": "P", "beta": "P"},
+                        "winner_team_id": None,
+                    },
+                ],
+                "faults": [],
+            },
+        )
+        encoded = json.dumps(replay)
+        for secret_field in (
+            "moves\": {\"alpha\": \"RP",
+            "match_seed",
+            "bot_positions",
+            "bot_visible_seeds",
+            "artifact_digests",
+            "security_violation",
+            "operational_telemetry",
+        ):
+            self.assertNotIn(secret_field, encoded)
+
+    def test_projects_protocol_fault_after_completed_rounds(self) -> None:
+        source = terminal_record(
+            protocol_forfeit_team_id="beta",
+            faults={
+                "alpha": None,
+                "beta": {"kind": "malformed_response", "turn": 2},
+            },
+        )
+
+        replay = project_replay(source)
+
+        self.assertEqual(
+            replay["faults"],
+            [{"team_id": "beta", "kind": "malformed_response", "turn": 2}],
+        )
+        self.assertEqual(replay["rounds"][-1]["turn"], 1)
+
+    def test_projects_double_forfeit_as_distinct_outcome_with_shared_turn(self) -> None:
+        source = terminal_record(
+            outcome="double_forfeit",
+            winner_team_id=None,
+            faults={
+                "alpha": {"kind": "timeout", "turn": 2},
+                "beta": {"kind": "malformed_response", "turn": 2},
+            },
+        )
+
+        replay = project_replay(source)
+
+        self.assertEqual(replay["outcome"], "double_forfeit")
+        self.assertIsNone(replay["winner_team_id"])
+        self.assertEqual(
+            replay["faults"],
+            [
+                {"team_id": "alpha", "kind": "timeout", "turn": 2},
+                {"team_id": "beta", "kind": "malformed_response", "turn": 2},
+            ],
+        )
+
+
 class PresentationHttpTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -365,6 +507,22 @@ class PresentationHttpTests(unittest.TestCase):
         replacement = self.directory / ".scoreboard.next"
         replacement.write_text(json.dumps(value), encoding="utf-8")
         replacement.replace(self.directory / "scoreboard.json")
+
+    def write_completed_projection(
+        self, match_id: str = "qualifying-0001-match-1"
+    ) -> None:
+        value = projection()
+        value["fixtures"][0].update(
+            status="complete",
+            matches=[
+                {
+                    "match_id": match_id,
+                    "outcome": "win",
+                    "winner_team_id": "alpha",
+                }
+            ],
+        )
+        self.write_projection(value)
 
     def request(
         self,
@@ -402,6 +560,99 @@ class PresentationHttpTests(unittest.TestCase):
             )
             self.assertEqual(status, 304)
             self.assertEqual(body, b"")
+
+    def test_serves_one_verified_terminal_record_for_a_completed_match(self) -> None:
+        self.write_completed_projection()
+        append_competition_record(self.directory, terminal_record())
+
+        with self.serving() as address:
+            status, headers, body = self.request(
+                address, "/api/matches/qualifying-0001-match-1/replay"
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["cache-control"], "no-store")
+        response = json.loads(body)
+        self.assertEqual(
+            response["replay"]["match_id"], "qualifying-0001-match-1"
+        )
+        self.assertEqual(
+            [item["round"] for item in response["replay"]["rounds"]],
+            [1, 2],
+        )
+        self.assertNotIn("secret", body.decode("utf-8"))
+
+    def test_replay_facts_come_from_the_verified_terminal_record(self) -> None:
+        value = projection()
+        value["fixtures"][0].update(
+            status="complete",
+            matches=[
+                {
+                    "match_id": "qualifying-0001-match-1",
+                    "outcome": "draw",
+                    "winner_team_id": None,
+                }
+            ],
+        )
+        self.write_projection(value)
+        append_competition_record(self.directory, terminal_record())
+
+        with self.serving() as address:
+            status, _headers, body = self.request(
+                address, "/api/matches/qualifying-0001-match-1/replay"
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["replay"]["outcome"], "win")
+
+    def test_replay_is_unavailable_for_uncommitted_ambiguous_or_unverifiable_records(
+        self,
+    ) -> None:
+        self.write_completed_projection()
+        with self.serving() as address:
+            status, _headers, body = self.request(
+                address, "/api/matches/qualifying-0001-match-1/replay"
+            )
+            self.assertEqual(status, 404)
+            self.assertEqual(json.loads(body), {"error": "replay_unavailable"})
+
+        append_competition_record(self.directory, terminal_record())
+        append_competition_record(self.directory, terminal_record())
+        with self.serving() as address:
+            status, _headers, _body = self.request(
+                address, "/api/matches/qualifying-0001-match-1/replay"
+            )
+            self.assertEqual(status, 404)
+
+            live_status, _live_headers, live_body = self.request(
+                address, "/api/live"
+            )
+            self.assertEqual(live_status, 200)
+            self.assertEqual(
+                json.loads(live_body)["tournament"]["tournament_id"],
+                "summer-cup",
+            )
+
+        record_path = self.directory / "records" / "00000001.json"
+        record_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        record_path.write_text("not canonical JSON", encoding="utf-8")
+        with self.serving() as address:
+            status, _headers, _body = self.request(
+                address, "/api/matches/qualifying-0001-match-1/replay"
+            )
+            self.assertEqual(status, 404)
+
+    def test_replay_is_unavailable_when_match_is_not_in_completed_history(self) -> None:
+        self.write_projection(projection())
+        append_competition_record(self.directory, terminal_record())
+
+        with self.serving() as address:
+            status, _headers, body = self.request(
+                address, "/api/matches/qualifying-0001-match-1/replay"
+            )
+
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body), {"error": "replay_unavailable"})
 
     def test_serves_running_lifecycle_without_changing_standings(self) -> None:
         self.write_projection(projection(status="running"))
