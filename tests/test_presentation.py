@@ -33,7 +33,8 @@ def projection(
                 "eligible": True,
                 "status": "eligible",
                 "bot_artifact": {"artifact_digest": "secret"},
-            }
+            },
+            {"team_id": "beta", "display_name": "Beta"},
         ],
         "standings": [
             {
@@ -47,19 +48,23 @@ def projection(
                 "seed": "secret",
             }
         ],
-        "fixtures": [{"fixture_id": "secret-fixture"}],
-        "champion": "alpha",
+        "fixtures": [
+            {
+                "fixture_id": "qualifying-0001",
+                "team_ids": ["alpha", "beta"],
+                "status": "scheduled",
+                "matches": [],
+                "fixture_seed": "secret",
+            }
+        ],
+        "champion": None,
         "operator_abort": {"note": "secret"},
-        "security_review": {"suspected_team_id": "alpha"},
     }
 
 
 class LiveContractTests(unittest.TestCase):
     def test_copies_only_live_standings_fields_in_projection_order(self) -> None:
         source = projection()
-        source["teams"].append(
-            {"team_id": "beta", "display_name": "Beta"}
-        )
         source["standings"].insert(
             0,
             {
@@ -86,6 +91,8 @@ class LiveContractTests(unittest.TestCase):
                     {
                         "team_id": "alpha",
                         "display_name": "Alpha",
+                        "eligible": True,
+                        "status": "eligible",
                     },
                     {"team_id": "beta", "display_name": "Beta"},
                 ],
@@ -109,9 +116,176 @@ class LiveContractTests(unittest.TestCase):
                         "tie_break_key": "99",
                     },
                 ],
+                "fixtures": [
+                    {
+                        "fixture_id": "qualifying-0001",
+                        "team_ids": ["alpha", "beta"],
+                        "status": "scheduled",
+                        "matches": [],
+                    }
+                ],
+                "champion": None,
             },
         )
         self.assertNotIn("secret", json.dumps(live))
+
+    def test_copies_ordered_fixtures_history_bracket_and_terminal_facts(self) -> None:
+        source = projection(status="complete")
+        source["phase"] = "playoff"
+        source["teams"][1].update(
+            eligible=False,
+            status="disqualified",
+        )
+        source["fixtures"] = [
+            {
+                "fixture_id": "qualifying-0002",
+                "team_ids": ["beta", "alpha"],
+                "status": "complete",
+                "matches": [
+                    {
+                        "match_id": "qualifying-0002-match-1",
+                        "outcome": "double_forfeit",
+                        "winner_team_id": None,
+                        "round_wins": {"alpha": 3, "beta": 2},
+                    },
+                    {
+                        "match_id": "qualifying-0002-match-2",
+                        "outcome": "win",
+                        "winner_team_id": "alpha",
+                    },
+                ],
+                "administrative_series_win": {
+                    "winner_team_id": "alpha",
+                    "reason_code": "opponent_disqualified",
+                    "organizer_id": "secret",
+                },
+                "fixture_seed": "secret",
+            },
+            {
+                "fixture_id": "qualifying-0001",
+                "team_ids": ["alpha", "beta"],
+                "status": "skipped",
+                "matches": [],
+                "skip_reason": "teams_disqualified",
+            },
+        ]
+        source["bracket"] = {
+            "locked": True,
+            "seeds": [
+                {"seed": 2, "team_id": "beta"},
+                {"seed": 1, "team_id": "alpha"},
+            ],
+            "fixtures": [
+                {
+                    "fixture_id": "playoff-final",
+                    "stage": "final",
+                    "team_ids": ["alpha", None],
+                    "status": "complete",
+                    "matches": [],
+                    "resolved_team_id": "alpha",
+                    "bracket_position_replacement": {
+                        "disqualified_team_id": "beta",
+                        "reinstated_team_id": None,
+                        "source_fixture_id": "playoff-semifinal-2",
+                        "reason_code": "disqualified_advancer",
+                    },
+                    "fixture_seed": "secret",
+                }
+            ],
+        }
+        source["champion"] = "alpha"
+        source["completion_reason"] = "score"
+
+        live = project_live(source)
+
+        self.assertEqual(
+            live["teams"][1],
+            {
+                "team_id": "beta",
+                "display_name": "Beta",
+                "eligible": False,
+                "status": "disqualified",
+            },
+        )
+        self.assertEqual(
+            [fixture["fixture_id"] for fixture in live["fixtures"]],
+            ["qualifying-0002", "qualifying-0001"],
+        )
+        self.assertEqual(
+            [match["match_id"] for match in live["fixtures"][0]["matches"]],
+            ["qualifying-0002-match-1", "qualifying-0002-match-2"],
+        )
+        self.assertEqual(
+            live["fixtures"][0]["matches"][0],
+            {
+                "match_id": "qualifying-0002-match-1",
+                "outcome": "double_forfeit",
+                "winner_team_id": None,
+            },
+        )
+        self.assertEqual(
+            live["bracket"],
+            {
+                "locked": True,
+                "seeds": [
+                    {"seed": 2, "team_id": "beta"},
+                    {"seed": 1, "team_id": "alpha"},
+                ],
+                "fixtures": [
+                    {
+                        "fixture_id": "playoff-final",
+                        "stage": "final",
+                        "team_ids": ["alpha", None],
+                        "status": "complete",
+                        "matches": [],
+                        "resolved_team_id": "alpha",
+                        "bracket_position_replacement": {
+                            "disqualified_team_id": "beta",
+                            "reinstated_team_id": None,
+                            "source_fixture_id": "playoff-semifinal-2",
+                            "reason_code": "disqualified_advancer",
+                        },
+                    }
+                ],
+            },
+        )
+        self.assertEqual(live["champion"], "alpha")
+        self.assertEqual(live["completion_reason"], "score")
+        self.assertNotIn("secret", json.dumps(live))
+
+    def test_security_review_and_abort_copy_only_audience_safe_fields(self) -> None:
+        source = projection(status="awaiting_security_ruling")
+        source["security_review"] = {
+            "fixture_id": "qualifying-0001",
+            "match_id": "qualifying-0001-match-1",
+            "suspected_team_id": "alpha",
+            "suspected_team_ids": ["alpha", "beta"],
+            "evidence": "secret",
+        }
+
+        review = project_live(source)
+
+        self.assertEqual(
+            review["security_review"],
+            {
+                "fixture_id": "qualifying-0001",
+                "match_id": "qualifying-0001-match-1",
+            },
+        )
+        self.assertNotIn("alpha", json.dumps(review["security_review"]))
+
+        source = projection(status="aborted")
+        source["completion_reason"] = "operator_requested"
+        source["operator_abort"] = {
+            "organizer_id": "organizer-secret",
+            "note": "secret note",
+        }
+
+        aborted = project_live(source)
+
+        self.assertEqual(aborted["completion_reason"], "operator_requested")
+        self.assertNotIn("operator_abort", aborted)
+        self.assertNotIn("organizer-secret", json.dumps(aborted))
 
     def test_accepts_running_and_rejects_unsupported_or_invalid_projection(
         self,

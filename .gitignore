@@ -3,3 +3,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 results/
+node_modules/
+test-results/
+playwright-report/
