@@ -436,6 +436,15 @@ class TournamentRunner:
             allow_infrastructure_intervention=True
         )
 
+    def run_qualifying_matches(self) -> tuple[StoredCompetitionRecord, ...]:
+        """Advance qualification and pause before selecting a playoff Match."""
+
+        return self._run_serially(
+            expected_mode=self.current_mode,
+            allow_infrastructure_intervention=True,
+            qualifying_only=True,
+        )
+
     def _run_continuously(
         self, *, allow_infrastructure_intervention: bool
     ) -> tuple[StoredCompetitionRecord, ...]:
@@ -445,6 +454,15 @@ class TournamentRunner:
                 "a Tournament sealed in Continuous Mode or switched to "
                 "current Continuous Mode"
             )
+        parallelism = int(self._manifest.get("continuous_parallelism", 1))
+        if parallelism == 1:
+            return self._run_serially(
+                expected_mode="continuous",
+                allow_infrastructure_intervention=(
+                    allow_infrastructure_intervention
+                ),
+                qualifying_only=False,
+            )
         if self._state().is_complete:
             return ()
         self._begin_execution(
@@ -453,17 +471,40 @@ class TournamentRunner:
         )
         committed: list[StoredCompetitionRecord] = []
         try:
-            parallelism = int(self._manifest.get("continuous_parallelism", 1))
-            if parallelism > 1:
-                with TournamentRunLock(self.tournament_directory):
-                    committed.extend(self._run_parallel_matches(parallelism))
-                self._set_lifecycle("paused", clear_pause=True)
-                return tuple(committed)
+            with TournamentRunLock(self.tournament_directory):
+                committed.extend(self._run_parallel_matches(parallelism))
+            self._set_lifecycle("paused", clear_pause=True)
+            return tuple(committed)
+        except InfrastructureInterventionRequiredError:
+            self._set_lifecycle("infrastructure_intervention")
+            raise
+        except BaseException:
+            self._set_lifecycle("paused")
+            raise
+
+    def _run_serially(
+        self,
+        *,
+        expected_mode: str,
+        allow_infrastructure_intervention: bool,
+        qualifying_only: bool,
+    ) -> tuple[StoredCompetitionRecord, ...]:
+        if self._state().is_complete:
+            return ()
+        self._begin_execution(
+            expected_mode=expected_mode,
+            allow_intervention=allow_infrastructure_intervention,
+        )
+        committed: list[StoredCompetitionRecord] = []
+        try:
             with TournamentRunLock(self.tournament_directory):
                 while True:
-                    record = self._play_next_match(run_lock_already_held=True)
+                    record = self._play_next_match(
+                        run_lock_already_held=True,
+                        qualifying_only=qualifying_only,
+                    )
                     if record is None:
-                        self._set_lifecycle("paused")
+                        self._set_lifecycle("paused", clear_pause=True)
                         return tuple(committed)
                     if record.record["type"] == "security_violation_suspected":
                         self._set_lifecycle("paused")
@@ -1002,7 +1043,10 @@ class TournamentRunner:
         )
 
     def _play_next_match(
-        self, *, run_lock_already_held: bool = False
+        self,
+        *,
+        run_lock_already_held: bool = False,
+        qualifying_only: bool = False,
     ) -> Optional[StoredCompetitionRecord]:
         lock = (
             nullcontext()
@@ -1019,6 +1063,8 @@ class TournamentRunner:
                     raise SecurityRulingRequiredError(
                         state.pending_security_ruling.match_id
                     )
+                if qualifying_only and state.phase is not Phase.QUALIFYING:
+                    return None
                 selected = _select_next_match(self._manifest, state)
                 if selected is None:
                     return None

@@ -558,6 +558,10 @@ or operator intervention. `--switch-mode step|continuous` is accepted only at
 a verified Match boundary. Reopening may omit `--plan` when `--artifact-store`
 names the retained store explicitly.
 
+To run every remaining qualifying Match and then pause after publishing the
+unlocked playoff bracket, use `--all-qualification`. No playoff Match starts
+until a later operator command advances or resumes the Tournament.
+
 ### Ratify a native platform and the execution profile
 
 Run the complete build, certification, and measured Python profile probe on a

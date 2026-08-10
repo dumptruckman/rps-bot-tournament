@@ -110,6 +110,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="seal and publish the initial projection without advancing a Match",
     )
     plan_execution.add_argument(
+        "--all-qualification",
+        action="store_true",
+        help=(
+            "run every remaining qualifying Match, publish the playoff bracket, "
+            "and pause before the first playoff Match"
+        ),
+    )
+    plan_execution.add_argument(
         "--continuous",
         action="store_true",
         help=(
@@ -408,20 +416,15 @@ def main(
         elif options.execution_scope == "resume":
             committed_records.extend(runner.resume())
         else:
-            while True:
-                projection = load_scoreboard_projection(directory)
-                if (
-                    options.execution_scope == "qualification"
-                    and projection is not None
-                    and projection["phase"] != "qualifying"
-                ):
-                    break
-                committed = runner.play_next_match()
-                if committed is None:
-                    break
-                committed_records.append(committed)
-                if options.execution_scope == "next_match":
-                    break
+            if options.execution_scope == "qualification":
+                committed_records.extend(runner.run_qualifying_matches())
+            else:
+                committed_records.extend(
+                    _play_step_matches(
+                        runner,
+                        all_remaining=options.execution_scope == "tournament",
+                    )
+                )
         _print_summary(
             directory,
             disposition=disposition,
@@ -432,6 +435,22 @@ def main(
         print(f"rps-tournament: {error}", file=error_output)
         return ERROR_EXIT_CODE
     return 0
+
+
+def _play_step_matches(
+    runner: TournamentRunner,
+    *,
+    all_remaining: bool,
+) -> list[StoredCompetitionRecord]:
+    committed_records: list[StoredCompetitionRecord] = []
+    while True:
+        committed = runner.play_next_match()
+        if committed is None:
+            break
+        committed_records.append(committed)
+        if not all_remaining:
+            break
+    return committed_records
 
 
 def _run_present_command(
@@ -650,13 +669,18 @@ def _run_plan_command(
             committed_records.extend(runner.start())
         elif options.resume:
             committed_records.extend(runner.resume())
+        elif options.all_qualification:
+            committed_records.extend(runner.run_qualifying_matches())
         elif not options.create_only:
             restore_continuous_mode = runner.current_mode == "continuous"
             if restore_continuous_mode:
                 runner.switch_mode("step")
-            committed = runner.play_next_match()
-            if committed is not None:
-                committed_records.append(committed)
+            committed_records.extend(
+                _play_step_matches(
+                    runner,
+                    all_remaining=False,
+                )
+            )
             if restore_continuous_mode and runner.status not in (
                 "complete",
                 "aborted",

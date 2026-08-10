@@ -358,6 +358,64 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(load_competition_records(self.directory), [])
         self.assertIsNotNone(load_scoreboard_projection(self.directory))
 
+    def test_all_qualification_pauses_before_the_first_playoff_match(self) -> None:
+        code = self.run_plan("--all-qualification")
+
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        self.assertEqual(len(self.executor.requests), 12)
+        self.assertTrue(
+            all(
+                request.fixture_id.startswith("qualifying-")
+                for request in self.executor.requests
+            )
+        )
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "paused")
+        self.assertEqual(projection["phase"], "playoff")
+        self.assertFalse(projection["bracket"]["locked"])
+        self.assertIsNone(projection["champion"])
+        self.assertEqual(load_control_state(self.directory)["lifecycle"], "paused")
+
+    def test_all_qualification_preserves_continuous_mode_while_paused(self) -> None:
+        self.plan["execution"]["mode"] = "continuous"
+        self.plan_path.write_text(json.dumps(self.plan))
+
+        code = self.run_plan("--all-qualification")
+
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        self.assertEqual(len(self.executor.requests), 12)
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["status"], "paused")
+        self.assertEqual(projection["phase"], "playoff")
+        self.assertFalse(projection["bracket"]["locked"])
+        control = load_control_state(self.directory)
+        self.assertEqual(control["lifecycle"], "paused")
+        self.assertEqual(control["current_mode"], "continuous")
+
+    def test_all_qualification_keeps_continuous_mode_after_failure(self) -> None:
+        class UnavailableContainerExecutor(RecordingContainerExecutor):
+            def execute(
+                self, request: MatchExecutionRequest
+            ) -> MatchExecutionResult:
+                self.requests.append(request)
+                return MatchExecutionResult(
+                    infrastructure_failure=True,
+                    competitive_outcome=None,
+                    operational_telemetry={"error": "container unavailable"},
+                )
+
+        self.plan["execution"]["mode"] = "continuous"
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.executor = UnavailableContainerExecutor()
+
+        code = self.run_plan("--all-qualification")
+
+        self.assertEqual(code, 2)
+        self.assertEqual(len(self.executor.requests), 3)
+        control = load_control_state(self.directory)
+        self.assertEqual(control["lifecycle"], "infrastructure_intervention")
+        self.assertEqual(control["current_mode"], "continuous")
+
     def test_resume_uses_sealed_manifest_when_draft_plan_is_unavailable(self) -> None:
         code = self.run_plan("--create-only")
         self.assertEqual(code, 0, self.stderr.getvalue())
