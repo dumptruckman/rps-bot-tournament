@@ -4,6 +4,7 @@ from collections.abc import Callable
 import hashlib
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ from rps_runner.tournament.match_executor import (
     MatchExecutionRequest,
     MatchExecutionResult,
 )
+from rps_runner import certification_fixture
 from rps_runner.tournament.runner import TournamentRunner
 from rps_runner.tournament.storage import (
     canonical_json_bytes,
@@ -109,7 +111,7 @@ class TournamentDemoCliTests(unittest.TestCase):
         self,
         *extra_arguments: str,
         match_executor=winning_result,
-        project_root: Path = PROJECT_ROOT,
+        fixture_program: Path = Path(str(certification_fixture.__file__)),
         python_executable: Path = Path(sys.executable),
         seed: str = "12345",
     ) -> int:
@@ -123,7 +125,7 @@ class TournamentDemoCliTests(unittest.TestCase):
                 *extra_arguments,
             ],
             match_executor=match_executor,
-            project_root=project_root,
+            fixture_program=fixture_program,
             python_executable=python_executable,
             stdout=self.stdout,
             stderr=self.stderr,
@@ -781,18 +783,19 @@ class TournamentDemoCliTests(unittest.TestCase):
 
     def test_resume_rejects_changed_bot_artifact_bytes(self) -> None:
         demo_inputs = Path(self.temporary_directory.name) / "demo-inputs"
-        shutil.copytree(PROJECT_ROOT / "bots", demo_inputs / "bots")
+        demo_inputs.mkdir()
+        fixture_program = demo_inputs / "certification_fixture.py"
+        shutil.copy2(certification_fixture.__file__, fixture_program)
         self.assertEqual(
-            self.run_demo(project_root=demo_inputs), 0, self.stderr.getvalue()
+            self.run_demo(fixture_program=fixture_program), 0, self.stderr.getvalue()
         )
-        random_bot = demo_inputs / "bots" / "random_bot.py"
-        random_bot.write_text(random_bot.read_text() + "\n# changed\n")
+        fixture_program.write_text(fixture_program.read_text() + "\n# changed\n")
 
-        exit_code = self.run_demo(project_root=demo_inputs)
+        exit_code = self.run_demo(fixture_program=fixture_program)
 
         self.assertNotEqual(exit_code, 0)
         self.assertIn(
-            "Bot Artifact digest verification failed for random-alpha",
+            "Bot Artifact digest verification failed for copycat-alpha",
             self.stderr.getvalue(),
         )
         self.assertEqual(len(load_competition_records(self.directory)), 1)
@@ -917,7 +920,9 @@ class TournamentDemoCliTests(unittest.TestCase):
             self.stderr.getvalue(),
         )
 
-    def test_real_bundled_bot_artifacts_commit_a_300_turn_match(self) -> None:
+    def test_packaged_certification_fixtures_commit_a_300_turn_match_without_repository_files(
+        self,
+    ) -> None:
         exit_code = main(
             [
                 "demo",
@@ -926,7 +931,6 @@ class TournamentDemoCliTests(unittest.TestCase):
                 "--seed",
                 "12345",
             ],
-            project_root=PROJECT_ROOT,
             python_executable=Path(sys.executable),
             stdout=self.stdout,
             stderr=self.stderr,
@@ -941,6 +945,68 @@ class TournamentDemoCliTests(unittest.TestCase):
             {team_id: len(moves) for team_id, moves in record["moves"].items()},
             {team_id: 300 for team_id in record["team_ids"]},
         )
+
+    def test_installed_console_command_runs_demo_without_repository_files(
+        self,
+    ) -> None:
+        installation_source = (
+            Path(self.temporary_directory.name) / "installation-source"
+        )
+        installation_source.mkdir()
+        for filename in ("pyproject.toml", "setup.cfg"):
+            shutil.copy2(PROJECT_ROOT / filename, installation_source / filename)
+        shutil.copytree(
+            PROJECT_ROOT / "rps_runner",
+            installation_source / "rps_runner",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        installed = Path(self.temporary_directory.name) / "installed"
+        installation = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-build-isolation",
+                "--no-deps",
+                "--target",
+                str(installed),
+                str(installation_source),
+            ],
+            cwd=installation_source,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(installation.returncode, 0, installation.stderr)
+
+        working_directory = Path(self.temporary_directory.name) / "working"
+        working_directory.mkdir()
+        tournament = working_directory / "tournament"
+
+        completed = subprocess.run(
+            [
+                str(installed / "bin" / "rps-tournament"),
+                "demo",
+                "--directory",
+                str(tournament),
+                "--seed",
+                "12345",
+            ],
+            cwd=working_directory,
+            env={
+                **os.environ,
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONPATH": str(installed),
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue((tournament / "manifest.json").is_file())
+        self.assertTrue((tournament / "scoreboard.json").is_file())
 
 
 if __name__ == "__main__":

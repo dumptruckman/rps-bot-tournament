@@ -11,6 +11,7 @@ import shlex
 import sys
 from typing import Optional, TextIO
 
+from rps_runner import certification_fixture
 from rps_runner.cli import unsigned_64_bit_integer
 from rps_runner.artifact_store import ArtifactStoreIntegrityError, resolve_artifact
 from rps_runner.engine import ContainerOperations, InfrastructureError
@@ -52,15 +53,14 @@ from rps_runner.tournament.storage import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ERROR_EXIT_CODE = 2
-_ARTIFACT_DIGEST_DOMAIN = b"rps-tournament/demo-bot-artifact/v1\0"
-_DEMO_TOURNAMENT_ID = "bundled-bots-demo"
+_ARTIFACT_DIGEST_DOMAIN = b"rps-tournament/certification-fixture/v1\0"
+_DEMO_TOURNAMENT_ID = "internal-certification-fixtures-demo"
 _DEMO_TEAMS = (
-    ("copycat-alpha", "Copycat Alpha", "copycat_bot.py"),
-    ("copycat-beta", "Copycat Beta", "copycat_bot.py"),
-    ("random-alpha", "Random Alpha", "random_bot.py"),
-    ("random-beta", "Random Beta", "random_bot.py"),
+    ("copycat-alpha", "Internal Copycat A", "copycat"),
+    ("copycat-beta", "Internal Copycat B", "copycat"),
+    ("random-alpha", "Internal Random A", "random"),
+    ("random-beta", "Internal Random B", "random"),
 )
 
 
@@ -146,7 +146,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="switch execution mode at a verified Match boundary",
     )
     demo = commands.add_parser(
-        "demo", help="create or resume the bundled four-Team demo Tournament"
+        "demo",
+        help="create or resume the packaged internal practice Tournament",
     )
     demo.add_argument("--directory", required=True, type=Path)
     demo.add_argument("--seed", required=True, type=unsigned_64_bit_integer)
@@ -259,7 +260,7 @@ def main(
     container_match_executor: Optional[
         Callable[[MatchExecutionRequest], MatchExecutionResult]
     ] = None,
-    project_root: Path = PROJECT_ROOT,
+    fixture_program: Optional[Path] = None,
     python_executable: Optional[Path] = None,
     stdout: Optional[TextIO] = None,
     stderr: Optional[TextIO] = None,
@@ -307,7 +308,9 @@ def main(
     executable = (
         python_executable or Path(sys.executable)
     ).expanduser().absolute()
-    resolved_project_root = project_root.expanduser().resolve()
+    resolved_fixture_program = (
+        fixture_program or Path(str(certification_fixture.__file__))
+    ).expanduser().resolve()
 
     try:
         if (
@@ -349,7 +352,7 @@ def main(
             )
 
         executor = match_executor or LocalMatchExecutor(
-            _demo_artifact_command_resolver(resolved_project_root, executable)
+            _demo_artifact_command_resolver(resolved_fixture_program, executable)
         ).execute
         config = TournamentConfig(
             execution_mode=(
@@ -367,12 +370,12 @@ def main(
                 directory,
                 match_executor=executor,
                 artifact_digest_verifier=_demo_artifact_digest_verifier(
-                    resolved_project_root
+                    resolved_fixture_program
                 ),
                 sealed_manifest_verifier=lambda manifest: _verify_demo_manifest(
                     manifest,
                     tournament_seed=options.seed,
-                    project_root=resolved_project_root,
+                    fixture_program=resolved_fixture_program,
                     python_executable=executable,
                     continuous_parallelism=options.parallelism,
                 ),
@@ -383,7 +386,7 @@ def main(
                 else "resumed"
             )
         else:
-            roster = _demo_roster(resolved_project_root, executable)
+            roster = _demo_roster(resolved_fixture_program, executable)
             runner = TournamentRunner.create(
                 directory,
                 tournament_id=_DEMO_TOURNAMENT_ID,
@@ -699,15 +702,12 @@ def _run_plan_command(
 
 
 def _demo_roster(
-    project_root: Path, python_executable: Path
+    fixture_program: Path, python_executable: Path
 ) -> tuple[Team, ...]:
-    bots_directory = project_root / "bots"
-    wrapper = bots_directory / "python_wrapper.py"
     runtime_digest = _sha256_file(python_executable)
     teams: list[Team] = []
-    for team_id, display_name, bot_filename in _DEMO_TEAMS:
-        bot_path = bots_directory / bot_filename
-        artifact_digest = _bot_artifact_digest(wrapper, bot_path)
+    for team_id, display_name, fixture_name in _DEMO_TEAMS:
+        artifact_digest = _fixture_artifact_digest(fixture_program, fixture_name)
         teams.append(
             Team(
                 team_id,
@@ -715,27 +715,27 @@ def _demo_roster(
                 BotArtifactManifest(
                     artifact_digest=artifact_digest,
                     language_id="python",
-                    wrapper_version="python-wrapper-1",
+                    wrapper_version="internal-certification-fixture-v1",
                     runtime_digest=runtime_digest,
-                    entrypoint=("python3", bot_filename),
+                    entrypoint=(
+                        "python3",
+                        "internal-certification-fixture",
+                        fixture_name,
+                    ),
                 ),
             )
         )
     return tuple(teams)
 
 
-def _bot_artifact_digest(wrapper: Path, strategy: Path) -> str:
+def _fixture_artifact_digest(fixture_program: Path, fixture_name: str) -> str:
     digest = hashlib.sha256(_ARTIFACT_DIGEST_DOMAIN)
-    for logical_name, path in (
-        ("python_wrapper.py", wrapper),
-        ("strategy.py", strategy),
-    ):
-        name = logical_name.encode("utf-8")
-        content = path.read_bytes()
-        digest.update(len(name).to_bytes(4, "big"))
-        digest.update(name)
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
+    fixture_identity = fixture_name.encode("utf-8")
+    content = fixture_program.read_bytes()
+    digest.update(len(fixture_identity).to_bytes(4, "big"))
+    digest.update(fixture_identity)
+    digest.update(len(content).to_bytes(8, "big"))
+    digest.update(content)
     return digest.hexdigest()
 
 
@@ -748,30 +748,29 @@ def _sha256_file(path: Path) -> str:
 
 
 def _demo_artifact_digest_verifier(
-    project_root: Path,
+    fixture_program: Path,
 ) -> Callable[[str, str], bool]:
     def verify(team_id: str, artifact_digest: str) -> bool:
         try:
-            bot_filename = _demo_bot_filename(team_id)
+            fixture_name = _demo_fixture_name(team_id)
         except KeyError:
             return False
-        bots_directory = project_root / "bots"
-        return artifact_digest == _bot_artifact_digest(
-            bots_directory / "python_wrapper.py",
-            bots_directory / bot_filename,
+        return artifact_digest == _fixture_artifact_digest(
+            fixture_program,
+            fixture_name,
         )
 
     return verify
 
 
 def _demo_artifact_command_resolver(
-    project_root: Path, python_executable: Path
+    fixture_program: Path, python_executable: Path
 ) -> Callable[[str, str], str]:
-    verify_digest = _demo_artifact_digest_verifier(project_root)
+    verify_digest = _demo_artifact_digest_verifier(fixture_program)
 
     def resolve(team_id: str, artifact_digest: str) -> str:
         try:
-            bot_filename = _demo_bot_filename(team_id)
+            fixture_name = _demo_fixture_name(team_id)
         except KeyError as error:
             raise InfrastructureError(
                 f"no local command resolves Team {team_id}"
@@ -781,16 +780,16 @@ def _demo_artifact_command_resolver(
                 f"Bot Artifact digest verification failed for {team_id}"
             )
         return shlex.join(
-            [str(python_executable), str(project_root / "bots" / bot_filename)]
+            [str(python_executable), str(fixture_program), fixture_name]
         )
 
     return resolve
 
 
-def _demo_bot_filename(team_id: str) -> str:
-    for candidate_team_id, _display_name, bot_filename in _DEMO_TEAMS:
+def _demo_fixture_name(team_id: str) -> str:
+    for candidate_team_id, _display_name, fixture_name in _DEMO_TEAMS:
         if candidate_team_id == team_id:
-            return bot_filename
+            return fixture_name
     raise KeyError(team_id)
 
 
@@ -798,7 +797,7 @@ def _verify_demo_manifest(
     manifest: dict[str, object],
     *,
     tournament_seed: int,
-    project_root: Path,
+    fixture_program: Path,
     python_executable: Path,
     continuous_parallelism: Optional[int] = None,
 ) -> None:
@@ -806,7 +805,7 @@ def _verify_demo_manifest(
         manifest,
         tournament_id=_DEMO_TOURNAMENT_ID,
         tournament_seed=tournament_seed,
-        roster=_demo_roster(project_root, python_executable),
+        roster=_demo_roster(fixture_program, python_executable),
         config=TournamentConfig(
             execution_mode=str(manifest["execution_mode"]),
             continuous_parallelism=(

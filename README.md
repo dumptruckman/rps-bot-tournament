@@ -1,6 +1,17 @@
 # Rock–Paper–Scissors Bot Tournament
 *A language-agnostic programming competition for internal engineering teams*
 
+This repository is the organizer-owned Tournament Runner and the sole authority
+for the Language Environment Catalog. It does not contain a participant-facing
+Team Template. Teams begin authoring Team Source from the
+[RPS Bot Templates repository](https://github.com/dumptruckman/rps-bot-templates),
+the only documented source for Team starter material and Team guidance.
+
+A Template Release may claim compatibility with one exact Runner Catalog
+Release. The Runner never fetches, imports, or tests the companion repository.
+See [Catalog compatibility](docs/CATALOG_COMPATIBILITY.md) and
+[ADR 0005](docs/adr/0005-runner-owns-language-environment-catalog.md).
+
 ---
 
 # Project Purpose
@@ -185,55 +196,10 @@ A proposed repository layout:
 │   ├── csharp/
 │   └── rust/
 │
-├── templates/
-│
-├── practice_bots/
-│
-├── hidden_bots/
-│
 ├── scoreboard/
 │
 └── tests/
 ```
-
----
-
-# Participant API
-
-Participants should implement exactly one strategy.
-
-Conceptually:
-
-```text
-chooseMove(
-    turn,
-    myHistory,
-    opponentHistory,
-    rng
-)
-```
-
-Returns:
-
-```
-R
-```
-
-or
-
-```
-P
-```
-
-or
-
-```
-S
-```
-
-The language wrapper is organizer-owned.
-
-Participants should never need to parse stdin.
 
 ---
 
@@ -303,8 +269,8 @@ Then run a match:
 
 ```text
 rps-run \
-  --bot-a "python bots/random_bot.py" \
-  --bot-b "python bots/copycat_bot.py" \
+  --bot-a "path/to/explicit-command-a" \
+  --bot-b "path/to/explicit-command-b" \
   --rounds 300 \
   --seed 12345 \
   --output results/demo.json
@@ -331,10 +297,12 @@ Tournament:
 rps-tournament demo --directory results/demo-tournament --seed 12345
 ```
 
-The first invocation seals a new Tournament from the bundled `random_bot.py` and
-`copycat_bot.py` Bot Artifacts and commits one real 300-Turn Match. Run the same
-command again to verify and resume the sealed Tournament, skip committed Matches,
-and execute the next unresolved canonical Match.
+The first invocation seals a new Tournament from packaged, organizer-owned
+certification fixtures and commits one real 300-Turn Match. These fixtures are
+internal Runner assets, not Team Source or Team Templates. The command does not
+read strategy files from the source checkout or the companion repository. Run
+the same command again to verify and resume the sealed Tournament, skip
+committed Matches, and execute the next unresolved canonical Match.
 
 To advance through the Playoff Phase and Tournament Champion declaration, run:
 
@@ -378,19 +346,6 @@ authoritatively validates sixteen local ARM64 Bot Artifacts, proves their shared
 archive restore, executes the 369-Match worst-case Tournament with four
 concurrent Matches, and verifies reconstructed state and the Scoreboard
 Projection. See [docs/REHEARSAL.md](docs/REHEARSAL.md).
-
-## Python starter bot
-
-The starter bot keeps participant code focused on one strategy function:
-
-```python
-def choose_move(turn, my_history, opponent_history, rng):
-    return rng.choice(("R", "P", "S"))
-```
-
-The organizer-owned Python wrapper supplies a deterministic `rng`, translates
-the stdin/stdout protocol, and flushes each response. The complete runnable
-example is in `bots/random_bot.py`.
 
 ### Validate and freeze Team source
 
@@ -471,6 +426,9 @@ but their score and winner never do. Successful output contains immutable
 source, image, runtime, wrapper, recipe, entrypoint, catalog, suite, platform,
 profile, and core-tool identity. A host-process development check is useful but
 is always reported as insufficient evidence for official validation.
+
+These catalog-owned practice artifacts are organizer certification fixtures.
+They are not starter strategies, Team Source examples, or Team Templates.
 
 ### Batch official sources into a Tournament plan
 
@@ -621,33 +579,6 @@ recovery instructions, and the release smoke-check matrix.
 
 ---
 
-# Submission Format
-
-Participants submit source code only.
-
-No Dockerfiles.
-
-No build scripts.
-
-No external dependencies.
-
-A submission contains:
-
-```
-bot.yaml
-src/
-ABOUT.md
-```
-
-The organizer controls:
-
-- compiler
-- wrapper
-- build process
-- runtime
-
----
-
 # Docker Philosophy
 
 Participants never interact with Docker directly.
@@ -698,27 +629,10 @@ Initially:
 
 Every language receives:
 
-- starter project
 - identical API
 - deterministic RNG
 - local runner
 - unit tests
-
----
-
-# Practice Bots
-
-Visible practice bots should teach participants how strategies work.
-
-Examples:
-
-- Always Rock
-- Cycle
-- Random
-- Mirror
-- Frequency Counter
-
-Practice bots should intentionally differ from tournament bots.
 
 ---
 
@@ -870,7 +784,6 @@ Hidden Bot Slayer
 - Protocol specification
 - Match engine
 - Docker runner
-- Python template
 - Validation
 - Round robin tournament
 

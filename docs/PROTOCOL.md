@@ -277,7 +277,8 @@ RPS_SEED=123456789
 
 The organizer-owned wrapper's Seed Adapter deterministically maps this value into the language's seeded random-number generator. Different language wrappers are not required to produce identical random streams.
 
-Bots must use the organizer-provided seeded random-number generator from their language template.
+Bot Artifacts must use the deterministic random-number generator supplied by
+their organizer-owned Language Environment's Seed Adapter.
 
 Bots must not seed randomness from:
 
@@ -415,15 +416,16 @@ The event is a strategy competition, not a container-escape or infrastructure-se
 
 ## 13. Organizer-owned wrappers
 
-Official language templates include an organizer-owned protocol wrapper.
-
-Teams should normally implement only a strategy function similar to:
+Each Language Environment includes an organizer-owned protocol wrapper. The
+wrapper invokes the validated Team Source contract for that environment; for
+Python, the contract has this shape:
 
 ```text
 choose_move(turn, my_history, opponent_history, rng) -> move
 ```
 
-The exact function signature depends on the language template.
+The exact function signature is defined by the Language Environment's Team
+Source schema.
 
 The wrapper is responsible for:
 
@@ -435,9 +437,9 @@ The wrapper is responsible for:
 - Writing and flushing the protocol response.
 - Reporting exceptions to standard error.
 
-Teams must not modify or replace the official wrapper unless the event rules explicitly permit it.
-
-During submission, the organizer may combine the submitted strategy source with a clean copy of the official wrapper.
+The wrapper is not Team Source and cannot be modified or replaced through the
+Runner's source-directory boundary. During validation and building, the Runner
+combines selected Team Source with the exact catalog-owned wrapper.
 
 ---
 

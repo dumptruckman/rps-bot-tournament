@@ -436,15 +436,16 @@ class MatchEngineCliTests(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
 
-    def test_python_starter_bot_runs_deterministically(self) -> None:
-        random_bot = PROJECT_ROOT / "bots" / "random_bot.py"
-        copycat_bot = PROJECT_ROOT / "bots" / "copycat_bot.py"
-
+    def test_protocol_fixtures_run_deterministically(self) -> None:
         first_completed, first_result = self.run_match(
-            bot_command(random_bot), bot_command(copycat_bot), rounds=10
+            test_bot("plays_seeded_random.py"),
+            test_bot("copies_opponent.py"),
+            rounds=10,
         )
         second_completed, second_result = self.run_match(
-            bot_command(random_bot), bot_command(copycat_bot), rounds=10
+            test_bot("plays_seeded_random.py"),
+            test_bot("copies_opponent.py"),
+            rounds=10,
         )
 
         self.assertEqual(first_completed.returncode, 0, first_completed.stderr)
@@ -453,19 +454,16 @@ class MatchEngineCliTests(unittest.TestCase):
         self.assertEqual(first_result["moves"], second_result["moves"])
         self.assertEqual(first_result["score"], second_result["score"])
 
-    def test_python_starter_bot_uses_the_configured_seed(self) -> None:
-        random_bot = PROJECT_ROOT / "bots" / "random_bot.py"
-        copycat_bot = PROJECT_ROOT / "bots" / "copycat_bot.py"
-
+    def test_protocol_fixture_uses_the_configured_seed(self) -> None:
         first_completed, first_result = self.run_match(
-            bot_command(random_bot),
-            bot_command(copycat_bot),
+            test_bot("plays_seeded_random.py"),
+            test_bot("copies_opponent.py"),
             rounds=10,
             seed=1,
         )
         second_completed, second_result = self.run_match(
-            bot_command(random_bot),
-            bot_command(copycat_bot),
+            test_bot("plays_seeded_random.py"),
+            test_bot("copies_opponent.py"),
             rounds=10,
             seed=2,
         )
@@ -602,11 +600,10 @@ class MatchEngineCliTests(unittest.TestCase):
         self.assertIsNone(result["faults"]["b"])
 
     def test_replay_contains_monotonic_response_durations(self) -> None:
-        random_bot = PROJECT_ROOT / "bots" / "random_bot.py"
-        copycat_bot = PROJECT_ROOT / "bots" / "copycat_bot.py"
-
         completed, result = self.run_match(
-            bot_command(random_bot), bot_command(copycat_bot), rounds=2
+            test_bot("plays_seeded_random.py"),
+            test_bot("copies_opponent.py"),
+            rounds=2,
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)

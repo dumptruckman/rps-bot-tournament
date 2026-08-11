@@ -165,7 +165,7 @@ not depend on Bot Position.
 Consequently:
 
 - Opposing Bot Artifacts do not receive correlated random streams merely
-  because they began from the same template.
+  because their Team Source uses the same Language Environment.
 - Swapping Bot Positions does not change a Team's random stream.
 - Replaying the same Match configuration gives each Team the same seed.
 
