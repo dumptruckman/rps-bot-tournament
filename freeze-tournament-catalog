@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import configparser
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+from typing import Any, Dict, Tuple
+
+from rps_runner.artifact_certification import SUITE_VERSION
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
+from rps_runner.language_environment import CatalogError, load_catalog
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+CATALOG_RELATIVE_PATH = Path("language_environments/catalog-v1/catalog.json")
+CATALOG_PATH = PROJECT_ROOT / CATALOG_RELATIVE_PATH
+FULL_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+FULL_ACTION_REF = re.compile(r"^[0-9a-f]{40}$")
+TAG_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class ReleaseError(RuntimeError):
+    """The Catalog Release cannot be created or verified."""
+
+
+def _run(*arguments: str, cwd: Path = PROJECT_ROOT) -> str:
+    completed = subprocess.run(
+        list(arguments), cwd=cwd, capture_output=True, text=True
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ReleaseError("command failed: " + " ".join(arguments) + ": " + detail)
+    return completed.stdout.strip()
+
+
+def _package_version() -> str:
+    configuration = configparser.ConfigParser()
+    try:
+        with (PROJECT_ROOT / "setup.cfg").open() as stream:
+            configuration.read_file(stream)
+    except (OSError, configparser.Error) as error:
+        raise ReleaseError("could not read the Runner package version: " + str(error))
+    version = configuration.get("metadata", "version", fallback="")
+    if not version:
+        raise ReleaseError("setup.cfg must declare metadata.version")
+    return version
+
+
+def _require_clean_repository() -> None:
+    if _run("git", "status", "--porcelain"):
+        raise ReleaseError("repository must be clean before freezing or verifying a release")
+
+
+def _runtime_records(catalog: Any) -> Dict[str, Dict[str, str]]:
+    try:
+        environment = catalog.environment("python")
+        runtime_catalog = json.loads(environment.assets["base_runtime"].content)
+        platforms = runtime_catalog["platforms"]
+    except (CatalogError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ReleaseError("could not read the Python platform runtimes: " + str(error))
+    if set(platforms) != {"linux/amd64", "linux/arm64"}:
+        raise ReleaseError("Python runtimes must pin linux/amd64 and linux/arm64")
+    records: Dict[str, Dict[str, str]] = {}
+    for platform, runtime in sorted(platforms.items()):
+        reference = str(runtime.get("image", ""))
+        if "@" not in reference:
+            raise ReleaseError(platform + " runtime is not pinned by a full digest")
+        digest = reference.rsplit("@", 1)[1]
+        if not FULL_DIGEST.fullmatch(digest) or ":latest" in reference.lower():
+            raise ReleaseError(platform + " runtime is not pinned by a full digest")
+        records[platform] = {
+            "version": str(runtime.get("version", "")),
+            "reference": reference,
+            "digest": digest,
+        }
+    return records
+
+
+def _verify_immutable_references(catalog: Any) -> None:
+    workflow_paths = sorted((PROJECT_ROOT / ".github/workflows").glob("*.yml"))
+    workflow_paths.extend(
+        sorted((PROJECT_ROOT / ".github/workflows").glob("*.yaml"))
+    )
+    for environment in catalog.environments.values():
+        workflow_paths.append(CATALOG_PATH.parent / environment.assets["workflow"].path)
+    for workflow_path in workflow_paths:
+        try:
+            workflow = workflow_path.read_text()
+        except (OSError, UnicodeDecodeError) as error:
+            raise ReleaseError("could not read workflow: " + str(error))
+        references = re.findall(
+            r"^\s*-?\s*uses:\s*[^@\s]+@([^\s#]+)", workflow, re.MULTILINE
+        )
+        for reference in references:
+            if not FULL_ACTION_REF.fullmatch(reference):
+                relative_path = workflow_path.relative_to(PROJECT_ROOT)
+                raise ReleaseError(
+                    str(relative_path) + " uses mutable action ref " + repr(reference)
+                )
+    python = catalog.environment("python")
+    dependency_path = CATALOG_PATH.parent / python.assets[
+        "dependency_definition"
+    ].catalog_path
+    dependency_entries = [
+        line.strip()
+        for line in dependency_path.read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if dependency_entries:
+        raise ReleaseError("the Python Language Environment must remain standard-library-only")
+    recipe_path = CATALOG_PATH.parent / python.assets["recipe"].catalog_path
+    if re.search(r"^\s*RUN\s", recipe_path.read_text(), re.MULTILINE | re.IGNORECASE):
+        raise ReleaseError("the Python recipe must not perform build-time downloads")
+
+
+def _bundle_identity(bundle_path: Path) -> str:
+    try:
+        digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ReleaseError("could not read the offline Runner bundle: " + str(error))
+    return "rps-runner-offline-bundle-v1@sha256:" + digest
+
+
+def _build_manifest(tag: str, bundle_path: Path) -> Dict[str, Any]:
+    if not TAG_NAME.fullmatch(tag):
+        raise ReleaseError(
+            "release tag must use only letters, digits, dots, underscores, and hyphens"
+        )
+    try:
+        catalog = load_catalog(CATALOG_PATH)
+    except CatalogError as error:
+        raise ReleaseError("catalog content verification failed: " + str(error))
+    _verify_immutable_references(catalog)
+    assets = {
+        environment_name + "." + asset_name: asset.identity
+        for environment_name, environment in sorted(catalog.environments.items())
+        for asset_name, asset in sorted(environment.assets.items())
+    }
+    python_conformance = catalog.environment("python").assets["conformance"]
+    return {
+        "release_format_version": "catalog-release-v1",
+        "repository": {"tag": tag},
+        "runner": {
+            "commit": _run("git", "rev-parse", "HEAD"),
+            "package_version": _package_version(),
+        },
+        "catalog": {
+            "path": CATALOG_RELATIVE_PATH.as_posix(),
+            "version": catalog.version,
+            "identity": catalog.identity,
+            "assets": assets,
+        },
+        "execution_profile": {
+            "version": INITIAL_EXECUTION_PROFILE.version,
+            "identity": INITIAL_EXECUTION_PROFILE.identity,
+        },
+        "certification_suites": {
+            "python": SUITE_VERSION + "@" + python_conformance.digest
+        },
+        "platform_runtimes": _runtime_records(catalog),
+        "offline_bundle": {"identity": _bundle_identity(bundle_path)},
+    }
+
+
+def _create_release(tag: str, bundle_path: Path) -> Dict[str, Any]:
+    _require_clean_repository()
+    if bundle_path.exists():
+        raise ReleaseError("offline Runner bundle destination already exists")
+    try:
+        _run("git", "rev-parse", "--verify", "refs/tags/" + tag)
+    except ReleaseError:
+        pass
+    else:
+        raise ReleaseError("release tag " + repr(tag) + " already exists")
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    _run("git", "bundle", "create", str(bundle_path), "HEAD")
+    manifest = _build_manifest(tag, bundle_path)
+    annotation = json.dumps(manifest, indent=2, sort_keys=True)
+    _run("git", "tag", "--no-sign", "--annotate", tag, "--message", annotation)
+    return manifest
+
+
+def _read_tag_manifest(tag: str) -> Tuple[str, Dict[str, Any]]:
+    raw = _run("git", "cat-file", "tag", "refs/tags/" + tag)
+    headers, separator, annotation = raw.partition("\n\n")
+    if not separator:
+        raise ReleaseError("release tag " + repr(tag) + " has no annotation")
+    target = ""
+    for line in headers.splitlines():
+        if line.startswith("object "):
+            target = line[len("object ") :]
+            break
+    try:
+        manifest = json.loads(annotation)
+    except json.JSONDecodeError as error:
+        raise ReleaseError(
+            "release tag " + repr(tag) + " does not contain a JSON manifest"
+        ) from error
+    if not isinstance(manifest, dict):
+        raise ReleaseError("release tag manifest must be a JSON object")
+    return target, manifest
+
+
+def _verify_offline_reproduction(
+    bundle_path: Path, expected_commit: str, expected_catalog_identity: str
+) -> None:
+    _run("git", "bundle", "verify", str(bundle_path))
+    heads = _run("git", "bundle", "list-heads", str(bundle_path)).splitlines()
+    if expected_commit + " HEAD" not in heads:
+        raise ReleaseError("offline Runner bundle does not contain the pinned commit as HEAD")
+    with tempfile.TemporaryDirectory(prefix="rps-catalog-release-") as directory:
+        checkout = Path(directory) / "runner"
+        _run("git", "clone", "--quiet", str(bundle_path), str(checkout))
+        if _run("git", "rev-parse", "HEAD", cwd=checkout) != expected_commit:
+            raise ReleaseError("offline Runner bundle reproduced the wrong commit")
+        try:
+            restored_catalog = load_catalog(checkout / CATALOG_RELATIVE_PATH)
+        except CatalogError as error:
+            raise ReleaseError(
+                "offline Runner bundle catalog verification failed: " + str(error)
+            )
+        if restored_catalog.identity != expected_catalog_identity:
+            raise ReleaseError("offline Runner bundle reproduced the wrong catalog identity")
+
+
+def _verify_release(tag: str, bundle_path: Path) -> Dict[str, Any]:
+    _require_clean_repository()
+    target, recorded = _read_tag_manifest(tag)
+    head = _run("git", "rev-parse", "HEAD")
+    if target != head:
+        raise ReleaseError(
+            "release tag " + repr(tag) + " targets the wrong Runner commit"
+        )
+    expected = _build_manifest(tag, bundle_path)
+    if recorded != expected:
+        raise ReleaseError("release manifest does not match the frozen repository contents")
+    _verify_offline_reproduction(
+        bundle_path,
+        expected["runner"]["commit"],
+        expected["catalog"]["identity"],
+    )
+    return recorded
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Create or verify an immutable Runner-owned Catalog Release"
+    )
+    parser.add_argument("command", choices=("create", "verify"))
+    parser.add_argument("tag")
+    parser.add_argument("--bundle", required=True, type=Path)
+    arguments = parser.parse_args()
+    try:
+        bundle_path = arguments.bundle.expanduser().resolve()
+        if arguments.command == "create":
+            manifest = _create_release(arguments.tag, bundle_path)
+        else:
+            manifest = _verify_release(arguments.tag, bundle_path)
+    except ReleaseError as error:
+        print("Catalog Release failure: " + str(error), file=sys.stderr)
+        return 1
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

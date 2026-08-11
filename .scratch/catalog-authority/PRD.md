@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-Implementation status: in progress (ticket 01 resolved)
+Implementation status: in progress (tickets 01-02 resolved)
 
 ## Purpose
 

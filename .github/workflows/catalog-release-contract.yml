@@ -1,0 +1,33 @@
+name: Catalog Release contract
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out complete Runner history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Install Python 3.9
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.9"
+      - name: Install the Runner
+        run: python -m pip install -e .
+      - name: Exercise manifest, tag, asset, and offline-bundle verification
+        run: python -m unittest tests/test_catalog_release.py -v
+      - name: Exercise frozen source validation compatibility
+        run: python -m unittest tests/test_source_validation_cli.py -v
+      - name: Exercise build and certification compatibility
+        run: >-
+          python -m unittest
+          tests/test_artifact_builder_cli.py
+          tests/test_artifact_certification_cli.py
+          -v

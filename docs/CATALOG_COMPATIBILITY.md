@@ -5,6 +5,9 @@ and an independently maintained Team Template. The Runner publishes the release;
 a Template Release copies the complete compatibility coordinates below into its
 compatibility claim without weakening or replacing any value.
 
+See [CATALOG_RELEASE.md](CATALOG_RELEASE.md) for the publication, clean-clone
+verification, offline reproduction, and correction procedure.
+
 ## Compatibility coordinates
 
 The claim is a JSON object with exactly these required coordinates:
