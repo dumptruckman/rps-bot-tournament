@@ -326,23 +326,26 @@ readiness gate, not as a competitive timeout.
 
 ### Repository and Language Environment boundary
 
-- This repository owns the generic Language Environment contract, source
-  validator, builder orchestration, conformance runner, Bot Artifact store,
-  container executor, organizer commands, and Tournament integration.
-- A separate shared template/submission repository is the source of truth for the
-  event Language Environment catalog, Team templates, organizer-owned build
-  recipes and wrappers, participant convenience commands, and the thin GitHub
-  Actions validation workflow.
-- Creation and population of that companion repository is a separately tracked
-  deliverable. This PRD defines the contract it must consume and produce.
-- Both repositories identify the core tooling and Language Environment catalog
-  by immutable version or commit. There is no duplicated mutable copy of an
-  official template or build recipe.
+- This repository is the sole authority for the Language Environment Catalog,
+  Team Source schema, source validator, organizer wrapper and Seed Adapter,
+  runtimes, build recipe, readiness contract, entrypoint, conformance fixtures
+  and runner, builder orchestration, Bot Artifact store, container executor,
+  organizer commands, and Tournament integration.
+- A separate Team Template repository owns only participant-facing Team
+  Templates, participant convenience commands, and Advisory Validation workflow.
+  It claims compatibility with an exact immutable Catalog Release and does not
+  supply organizer-owned assets to this repository.
+- This repository never fetches, imports, or tests the Team Template repository.
+  The repositories meet only through the immutable compatibility interface in
+  `docs/CATALOG_COMPATIBILITY.md`.
+- This boundary supersedes the earlier split-authority wording in this PRD. ADR
+  0005 records the accepted decision; there is no duplicated mutable copy of an
+  organizer-owned catalog asset.
 - A Language Environment is a versioned organizer-owned package containing a
-  descriptor, Team-editable source schema, template, platform-specific pinned
-  base-image digests, networkless build recipe, fixed entrypoint,
-  protocol-version-1 wrapper, Seed Adapter, readiness behavior, example strategy,
-  and conformance fixtures.
+  descriptor, Team Source schema, platform-specific pinned base-image digests,
+  networkless build recipe, fixed entrypoint, protocol-version-1 wrapper, Seed
+  Adapter, readiness behavior, and conformance fixtures. Participant-facing
+  starter content belongs to a Team Template, not the Language Environment.
 - Python is the only required Language Environment in this PRD. The extension
   contract must be capable of representing Rust, C#, Java, Clojure,
   JavaScript/TypeScript, Ruby, Go, Dart, and Kotlin without changes to Tournament

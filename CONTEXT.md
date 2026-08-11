@@ -123,6 +123,48 @@ The immutable builder-produced description of a Bot Artifact's identity,
 language, organizer-owned wrapper, runtime, and launch contract.
 _Avoid_: Tournament roster, submission form, organizer configuration
 
+**Language Environment**:
+A versioned, organizer-owned adapter package in the Language Environment Catalog
+that defines the Team Source schema, wrapper, Seed Adapter, pinned runtimes,
+networkless build recipe, readiness contract, entrypoint, and conformance
+fixtures for one supported language.
+_Avoid_: Team Template, participant repository, runtime image
+
+**Team Template**:
+A participant-facing starter project, maintained outside this repository, that
+adapts one Language Environment for Team coding and claims compatibility with
+one exact Catalog Release.
+_Avoid_: Language Environment, catalog fixture, official wrapper
+
+**Team Source**:
+The participant-authored strategy files and approved resources presented at the
+Runner's validated local source-directory boundary under one Language
+Environment's Team Source schema.
+_Avoid_: Team Template, Bot Artifact, organizer wrapper, source repository
+
+**Template Release**:
+An immutable publication of a Team Template that records its own identity and
+an exact Catalog Release compatibility claim.
+_Avoid_: Catalog Release, mutable branch, latest template
+
+**Catalog Release**:
+An immutable publication of the Runner-owned Language Environment Catalog and
+its assets, identified by an exact Runner commit, package version, catalog path
+and content identity, and offline bundle identity.
+_Avoid_: Team Template release, catalog branch, latest catalog
+
+**Advisory Validation**:
+A compatibility check performed before organizer acceptance, such as Team-local
+or CI validation, that provides feedback but cannot authorize a Bot Artifact for
+a Tournament.
+_Avoid_: Final Validation, official certification, roster acceptance
+
+**Final Validation**:
+The organizer-controlled, authoritative validation of selected Team Source
+against the exact Catalog Release and official target platform; only its result
+can authorize the resulting Bot Artifact for a Tournament roster.
+_Avoid_: Advisory Validation, CI check, Team-built image
+
 **Competition Record**:
 The canonical deterministic account of Tournament configuration, competitive
 activity, rulings, standings, and outcome.
