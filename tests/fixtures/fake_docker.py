@@ -14,7 +14,7 @@ LOG = STATE / "calls.jsonl"
 
 def log(command: str, **details: object) -> None:
     record = json.dumps(
-        {"command": command, "time_ns": time.monotonic_ns(), **details},
+        {"command": command, "wall_time_ns": time.time_ns(), **details},
         sort_keys=True,
     )
     descriptor = os.open(LOG, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)

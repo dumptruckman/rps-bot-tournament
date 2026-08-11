@@ -151,13 +151,6 @@ class RuntimeNeutralBotSessionTests(unittest.TestCase):
         self.assertEqual(result["score"], {"a": 1, "b": 0, "draws": 1})
         self.assertEqual(result["moves"], {"a": "RP", "b": "SP"})
         self.assertTrue(all(session.started for session in harness.sessions))
-        self.assertTrue(all(session.stopped for session in harness.sessions))
-        self.assertTrue(
-            all(session.force_stopped for session in harness.sessions)
-        )
-        self.assertTrue(all(session.finished for session in harness.sessions))
-        self.assertTrue(all(harness.force_stop_observations))
-        self.assertTrue(all(harness.finish_observations))
         self.assertEqual(
             harness.sessions[0].requests,
             [b"0\n-\n-\n", b"1\nR\nS\n"],
@@ -173,6 +166,22 @@ class RuntimeNeutralBotSessionTests(unittest.TestCase):
             )
         )
         self.assertEqual(result["bots"]["a"]["stderr"], "a diagnostic")
+
+    def test_cleanup_completes_each_phase_for_both_bot_positions(self) -> None:
+        harness = SessionHarness({"a": [b"X\n"], "b": [b"S\n"]})
+
+        result = run_match(
+            self.config(rounds=1), session_factory=harness.create
+        )
+
+        self.assertEqual(result["status"], "forfeit")
+        self.assertTrue(all(session.stopped for session in harness.sessions))
+        self.assertTrue(
+            all(session.force_stopped for session in harness.sessions)
+        )
+        self.assertTrue(all(session.finished for session in harness.sessions))
+        self.assertTrue(all(harness.force_stop_observations))
+        self.assertTrue(all(harness.finish_observations))
 
     def test_session_infrastructure_failure_is_not_a_competitive_fault(self) -> None:
         harness = SessionHarness(
