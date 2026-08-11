@@ -82,7 +82,7 @@ def _runtime_records(catalog: Any) -> Dict[str, Dict[str, str]]:
     return records
 
 
-def _verify_immutable_references(catalog: Any) -> None:
+def _verify_immutable_action_references(catalog: Any) -> None:
     workflow_paths = sorted((PROJECT_ROOT / ".github/workflows").glob("*.yml"))
     workflow_paths.extend(
         sorted((PROJECT_ROOT / ".github/workflows").glob("*.yaml"))
@@ -103,6 +103,9 @@ def _verify_immutable_references(catalog: Any) -> None:
                 raise ReleaseError(
                     str(relative_path) + " uses mutable action ref " + repr(reference)
                 )
+
+
+def _verify_python_dependency_policy(catalog: Any) -> None:
     python = catalog.environment("python")
     dependency_path = CATALOG_PATH.parent / python.assets[
         "dependency_definition"
@@ -114,9 +117,19 @@ def _verify_immutable_references(catalog: Any) -> None:
     ]
     if dependency_entries:
         raise ReleaseError("the Python Language Environment must remain standard-library-only")
+
+
+def _verify_python_recipe_policy(catalog: Any) -> None:
+    python = catalog.environment("python")
     recipe_path = CATALOG_PATH.parent / python.assets["recipe"].catalog_path
     if re.search(r"^\s*RUN\s", recipe_path.read_text(), re.MULTILINE | re.IGNORECASE):
         raise ReleaseError("the Python recipe must not perform build-time downloads")
+
+
+def _verify_release_policies(catalog: Any) -> None:
+    _verify_immutable_action_references(catalog)
+    _verify_python_dependency_policy(catalog)
+    _verify_python_recipe_policy(catalog)
 
 
 def _bundle_identity(bundle_path: Path) -> str:
@@ -136,7 +149,7 @@ def _build_manifest(tag: str, bundle_path: Path) -> Dict[str, Any]:
         catalog = load_catalog(CATALOG_PATH)
     except CatalogError as error:
         raise ReleaseError("catalog content verification failed: " + str(error))
-    _verify_immutable_references(catalog)
+    _verify_release_policies(catalog)
     assets = {
         environment_name + "." + asset_name: asset.identity
         for environment_name, environment in sorted(catalog.environments.items())
