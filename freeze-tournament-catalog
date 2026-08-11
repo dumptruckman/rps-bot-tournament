@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from rps_runner.artifact_certification import SUITE_VERSION
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
@@ -23,6 +23,35 @@ CATALOG_PATH = PROJECT_ROOT / CATALOG_RELATIVE_PATH
 FULL_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 FULL_ACTION_REF = re.compile(r"^[0-9a-f]{40}$")
 TAG_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+ORGANIZER_WORKFLOW_TESTS = (
+    "tests/test_prepare_cli.py",
+    "tests/test_source_validation_cli.py",
+    "tests/test_artifact_builder_cli.py",
+    "tests/test_artifact_certification_cli.py",
+    "tests/test_batch_plan_cli.py",
+    "tests/test_tournament_plan_cli.py",
+    "tests/test_tournament_cli.py",
+    "tests/test_rehearsal_cli.py",
+    "tests/test_presentation.py",
+    "tests/test_presentation_cli.py",
+)
+PARTICIPANT_TEMPLATE_ROOTS = (
+    "bots/",
+    "team_source/",
+)
+# Split companion-only names so this command can scan its own source without
+# mistaking the denylist itself for a reverse dependency.
+PARTICIPANT_TEMPLATE_FILES = {
+    "CATALOG_" + "COMPATIBILITY.md",
+    "CROSS_PLATFORM_PROOF.md",
+    "TEAM_GUIDE.md",
+    "core-" + "tool.bundle",
+    "core-" + "tool.lock.json",
+    "materialize-" + "core-tool",
+    "prove-amd64-against-arm64",
+    "release-" + "team-template",
+    "validate-" + "team",
+}
 
 
 class ReleaseError(RuntimeError):
@@ -156,7 +185,7 @@ def _build_manifest(tag: str, bundle_path: Path) -> Dict[str, Any]:
         for asset_name, asset in sorted(environment.assets.items())
     }
     python_conformance = catalog.environment("python").assets["conformance"]
-    return {
+    manifest = {
         "release_format_version": "catalog-release-v1",
         "repository": {"tag": tag},
         "runner": {
@@ -179,6 +208,17 @@ def _build_manifest(tag: str, bundle_path: Path) -> Dict[str, Any]:
         "platform_runtimes": _runtime_records(catalog),
         "offline_bundle": {"identity": _bundle_identity(bundle_path)},
     }
+    manifest["compatibility_coordinates"] = {
+        "format_version": "rps-catalog-compatibility-v1",
+        "runner": manifest["runner"],
+        "catalog": {
+            "path": manifest["catalog"]["path"],
+            "identity": manifest["catalog"]["identity"],
+            "assets": manifest["catalog"]["assets"],
+        },
+        "offline_bundle": manifest["offline_bundle"],
+    }
+    return manifest
 
 
 def _create_release(tag: str, bundle_path: Path) -> Dict[str, Any]:
@@ -261,20 +301,379 @@ def _verify_release(tag: str, bundle_path: Path) -> Dict[str, Any]:
     return recorded
 
 
+def _tracked_paths() -> List[str]:
+    return [
+        path
+        for path in _run("git", "ls-files").splitlines()
+        if path
+    ]
+
+
+def _is_dependency_surface(path: str) -> bool:
+    relative = Path(path)
+    source_suffixes = (
+        ".cfg",
+        ".js",
+        ".json",
+        ".mjs",
+        ".py",
+        ".sh",
+        ".toml",
+        ".yaml",
+        ".yml",
+    )
+    source_roots = (
+        ".github",
+        "language_environments",
+        "rps_runner",
+        "scripts",
+        "tests",
+    )
+    if relative.parts and relative.parts[0] in source_roots:
+        return relative.suffix in source_suffixes or relative.name in (
+            "Dockerfile",
+            "requirements.lock",
+        )
+    return path in (
+        ".gitmodules",
+        "freeze-tournament-catalog",
+        "package.json",
+        "package-lock.json",
+        "playwright.config.js",
+        "pyproject.toml",
+        "setup.cfg",
+    )
+
+
+def _participant_template_paths(paths: List[str]) -> List[str]:
+    participant_paths = []
+    for path in paths:
+        first_part = path.split("/", 1)[0].lower()
+        if (
+            path in PARTICIPANT_TEMPLATE_FILES
+            or any(path.startswith(prefix) for prefix in PARTICIPANT_TEMPLATE_ROOTS)
+            or "template" in first_part
+        ):
+            participant_paths.append(path)
+    return sorted(participant_paths)
+
+
+def _scan_repository_independence() -> Dict[str, Any]:
+    companion_name = "rps-" + "bot-templates"
+    companion_path = PROJECT_ROOT.parent / companion_name
+    if companion_path.exists():
+        raise ReleaseError(
+            "independence proof requires an isolated checkout without the "
+            "companion repository"
+        )
+    tracked_paths = _tracked_paths()
+    participant_paths = _participant_template_paths(tracked_paths)
+    dependency_tokens = (
+        companion_name,
+        "catalog_" + "compatibility",
+        "core-" + "tool.bundle",
+        "core-" + "tool.lock.json",
+        "materialize-" + "core-tool",
+        "release-" + "team-template",
+    )
+    if participant_paths:
+        raise ReleaseError(
+            "participant-facing Team Template paths remain in the Runner: "
+            + ", ".join(participant_paths)
+        )
+    dependency_surfaces = sorted(
+        path for path in tracked_paths if _is_dependency_surface(path)
+    )
+    dependency_matches = []
+    for path in dependency_surfaces:
+        try:
+            source = (PROJECT_ROOT / path).read_text()
+        except (OSError, UnicodeDecodeError) as error:
+            raise ReleaseError(
+                "could not scan dependency surface " + path + ": " + str(error)
+            )
+        lower_source = source.lower()
+        if any(token in lower_source for token in dependency_tokens):
+            dependency_matches.append(path)
+    if dependency_matches:
+        raise ReleaseError(
+            "Runner dependency surfaces reference the companion repository: "
+            + ", ".join(dependency_matches)
+        )
+    return {
+        "companion_repository": "absent",
+        "tracked_path_count": len(tracked_paths),
+        "dependency_surface_count": len(dependency_surfaces),
+        "dependency_surfaces": dependency_surfaces,
+        "dependency_checks": ["checkout", "import", "path", "network"],
+        "dependency_matches": dependency_matches,
+        "participant_template_paths": participant_paths,
+    }
+
+
+def _catalog_content_evidence(tracked_paths: List[str]) -> Dict[str, Any]:
+    forbidden_parts = ("starter", "template", "team_source")
+    catalog = load_catalog(CATALOG_PATH)
+    participant_asset_paths = []
+    declared_paths = {CATALOG_RELATIVE_PATH.name}
+    for environment in catalog.environments.values():
+        for asset in environment.assets.values():
+            declared_paths.add(asset.catalog_path)
+            parts = [part.lower() for part in asset.catalog_path.split("/")]
+            if any(
+                forbidden in part
+                for part in parts
+                for forbidden in forbidden_parts
+            ):
+                participant_asset_paths.append(asset.catalog_path)
+    catalog_prefix = CATALOG_RELATIVE_PATH.parent.as_posix() + "/"
+    actual_paths = {
+        path[len(catalog_prefix) :]
+        for path in tracked_paths
+        if path.startswith(catalog_prefix)
+    }
+    unowned_paths = sorted(actual_paths - declared_paths)
+    missing_paths = sorted(declared_paths - actual_paths)
+    if missing_paths:
+        raise ReleaseError(
+            "Catalog Release is missing declared paths: " + ", ".join(missing_paths)
+        )
+    if unowned_paths:
+        raise ReleaseError(
+            "Catalog Release contains undeclared paths: " + ", ".join(unowned_paths)
+        )
+    return {
+        "declared_path_count": len(declared_paths),
+        "participant_template_asset_paths": sorted(participant_asset_paths),
+        "unowned_catalog_paths": unowned_paths,
+    }
+
+
+def _participant_digest_fields(
+    value: Any, prefix: str = "", template_context: bool = False
+) -> List[str]:
+    fields = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = prefix + "." + str(key) if prefix else str(key)
+            child_context = template_context or "template" in str(key).lower()
+            if child_context and isinstance(child, str):
+                if re.search(r"sha256:[0-9a-f]{64}", child):
+                    fields.append(path)
+            fields.extend(_participant_digest_fields(child, path, child_context))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            fields.extend(
+                _participant_digest_fields(
+                    child,
+                    prefix + "[" + str(index) + "]",
+                    template_context,
+                )
+            )
+    return fields
+
+
+def _verify_manifest_schema(manifest: Dict[str, Any]) -> None:
+    expected_fields = {
+        "catalog",
+        "certification_suites",
+        "compatibility_coordinates",
+        "execution_profile",
+        "offline_bundle",
+        "platform_runtimes",
+        "release_format_version",
+        "repository",
+        "runner",
+    }
+    if set(manifest) != expected_fields:
+        raise ReleaseError(
+            "Catalog Release manifest fields do not match the exact schema"
+        )
+    if set(manifest["compatibility_coordinates"]) != {
+        "catalog",
+        "format_version",
+        "offline_bundle",
+        "runner",
+    }:
+        raise ReleaseError(
+            "Catalog Release compatibility fields do not match the exact schema"
+        )
+
+
+def _bundle_tree_evidence(bundle_path: Path) -> Dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="rps-catalog-tree-") as directory:
+        checkout = Path(directory) / "runner"
+        _run("git", "clone", "--quiet", str(bundle_path), str(checkout))
+        paths = [
+            path
+            for path in _run(
+                "git", "ls-tree", "-r", "--name-only", "HEAD", cwd=checkout
+            ).splitlines()
+            if path
+        ]
+        participant_paths = _participant_template_paths(paths)
+        if participant_paths:
+            raise ReleaseError(
+                "offline Runner bundle contains participant-facing Team Template "
+                "paths: "
+                + ", ".join(participant_paths)
+            )
+        fixture_path = checkout / "rps_runner/certification_fixture.py"
+        fixture_identity = _file_identity(
+            fixture_path, "offline Runner bundle internal practice fixtures"
+        )
+    return {
+        "path_count": len(paths),
+        "participant_template_paths": participant_paths,
+        "practice_fixture_identity": fixture_identity,
+    }
+
+
+def _file_identity(path: Path, label: str) -> str:
+    try:
+        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ReleaseError("could not identify " + label + ": " + str(error))
+
+
+def _practice_fixture_evidence(offline_identity: str) -> Dict[str, Any]:
+    fixture_path = PROJECT_ROOT / "rps_runner/certification_fixture.py"
+    fixture_identity = _file_identity(fixture_path, "internal practice fixtures")
+    configuration = configparser.ConfigParser()
+    try:
+        configuration.read(PROJECT_ROOT / "setup.cfg")
+        commands = configuration.get("options.entry_points", "console_scripts")
+    except (OSError, configparser.Error, configparser.NoOptionError) as error:
+        raise ReleaseError(
+            "could not inspect participant-facing commands: " + str(error)
+        )
+    exposed = "certification_fixture" in commands
+    if exposed:
+        raise ReleaseError("internal practice fixtures are exposed as a public command")
+    if offline_identity != fixture_identity:
+        raise ReleaseError(
+            "offline Runner bundle reproduced different internal practice fixtures"
+        )
+    return {
+        "status": "passed",
+        "module": "rps_runner.certification_fixture",
+        "module_identity": fixture_identity,
+        "offline_module_identity": offline_identity,
+        "offline_reproducible": True,
+        "participant_command_exposed": exposed,
+    }
+
+
+def _run_organizer_workflows(bundle_path: Path) -> Dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="rps-catalog-workflows-") as directory:
+        checkout = Path(directory) / "runner"
+        _run("git", "clone", "--quiet", str(bundle_path), str(checkout))
+        completed = subprocess.run(
+            [sys.executable, "-m", "unittest", *ORGANIZER_WORKFLOW_TESTS, "-v"],
+            cwd=checkout,
+            stdout=sys.stderr,
+            stderr=sys.stderr,
+        )
+    if completed.returncode != 0:
+        raise ReleaseError("one or more official organizer workflow suites failed")
+    return {
+        "checkout_source": "offline_bundle",
+        "status": "passed",
+        "test_files": list(ORGANIZER_WORKFLOW_TESTS),
+    }
+
+
+def _require_external_output(path: Path, label: str) -> None:
+    try:
+        path.relative_to(PROJECT_ROOT)
+    except ValueError:
+        return
+    raise ReleaseError(label + " must be written outside the Runner checkout")
+
+
+def _prove_independence(
+    tag: str, bundle_path: Path, evidence_path: Path
+) -> Dict[str, Any]:
+    _require_clean_repository()
+    _require_external_output(bundle_path, "offline Runner bundle")
+    _require_external_output(evidence_path, "independence evidence")
+    if evidence_path.exists():
+        raise ReleaseError("independence evidence destination already exists")
+    repository_scan = _scan_repository_independence()
+    created = _create_release(tag, bundle_path)
+    verified = _verify_release(tag, bundle_path)
+    if created != verified:
+        raise ReleaseError("created and verified Catalog Release manifests differ")
+    _verify_manifest_schema(verified)
+    catalog_content = _catalog_content_evidence(_tracked_paths())
+    participant_asset_paths = catalog_content["participant_template_asset_paths"]
+    if participant_asset_paths:
+        raise ReleaseError(
+            "Catalog Release contains participant-facing Team Template assets: "
+            + ", ".join(participant_asset_paths)
+        )
+    participant_digest_fields = _participant_digest_fields(verified)
+    if participant_digest_fields:
+        raise ReleaseError(
+            "Catalog Release contains Team Template digest fields: "
+            + ", ".join(participant_digest_fields)
+        )
+    bundle_tree = _bundle_tree_evidence(bundle_path)
+    workflows = _run_organizer_workflows(bundle_path)
+    evidence = {
+        "evidence_format_version": "runner-catalog-independence-v1",
+        "status": "passed",
+        "compatibility_coordinates": verified["compatibility_coordinates"],
+        "catalog_release": {
+            "manifest": verified,
+            "participant_template_asset_paths": participant_asset_paths,
+            "participant_template_digest_fields": participant_digest_fields,
+            "unowned_catalog_paths": catalog_content["unowned_catalog_paths"],
+            "declared_catalog_path_count": catalog_content[
+                "declared_path_count"
+            ],
+            "participant_template_paths": bundle_tree[
+                "participant_template_paths"
+            ],
+            "offline_bundle_current_path_count": bundle_tree["path_count"],
+        },
+        "repository_scan": repository_scan,
+        "internal_practice_fixtures": _practice_fixture_evidence(
+            bundle_tree["practice_fixture_identity"]
+        ),
+        "organizer_workflows": workflows,
+    }
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    return evidence
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Create or verify an immutable Runner-owned Catalog Release"
+        description="Create, verify, or prove an immutable Runner-owned Catalog Release"
     )
-    parser.add_argument("command", choices=("create", "verify"))
+    parser.add_argument("command", choices=("create", "verify", "prove"))
     parser.add_argument("tag")
     parser.add_argument("--bundle", required=True, type=Path)
+    parser.add_argument("--evidence", type=Path)
     arguments = parser.parse_args()
     try:
         bundle_path = arguments.bundle.expanduser().resolve()
         if arguments.command == "create":
+            if arguments.evidence is not None:
+                raise ReleaseError("--evidence is only valid with the prove command")
             manifest = _create_release(arguments.tag, bundle_path)
-        else:
+        elif arguments.command == "verify":
+            if arguments.evidence is not None:
+                raise ReleaseError("--evidence is only valid with the prove command")
             manifest = _verify_release(arguments.tag, bundle_path)
+        else:
+            if arguments.evidence is None:
+                raise ReleaseError("the prove command requires --evidence")
+            evidence_path = arguments.evidence.expanduser().resolve()
+            manifest = _prove_independence(
+                arguments.tag, bundle_path, evidence_path
+            )
     except ReleaseError as error:
         print("Catalog Release failure: " + str(error), file=sys.stderr)
         return 1

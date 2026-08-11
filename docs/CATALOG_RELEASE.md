@@ -25,6 +25,10 @@ execution profile identity. It then bundles the exact commit and its required
 history, records the bundle digest in the manifest, and creates the annotated
 tag. Existing bundle destinations and tag names are rejected.
 
+The manifest's `compatibility_coordinates` object is the exact, copy-ready
+interface required by a companion Template Release. Do not reconstruct or
+partially copy it from other manifest fields.
+
 Publish the exact commit, annotated tag, and bundle together. Do not recreate
 the bundle after publication: its bytes are part of the Catalog Release
 identity.
@@ -53,6 +57,39 @@ An organizer can materialize the same Runner checkout while offline:
 ```text
 git clone rps-runner-catalog-v1.bundle rps-tournament-offline
 ```
+
+## Retain the independence proof
+
+For a release intended for publication, run the integrated proof instead of the
+standalone `create` command. Run it from a clean clone whose parent directory
+does not contain the companion repository. The tag must be unused; the bundle
+and evidence destinations must be outside the checkout and must not already
+exist:
+
+```text
+./freeze-tournament-catalog prove catalog-v1 \
+  --bundle ../rps-runner-catalog-v1.bundle \
+  --evidence ../rps-runner-catalog-v1-independence.json
+```
+
+The proof creates and verifies the annotated Catalog Release and reproduces its
+checkout from the offline bundle. It scans active Python, JavaScript, shell,
+catalog workflow, package/configuration, test, and GitHub workflow surfaces for
+a checkout, import, path, or network dependency on the companion repository.
+It also requires the catalog tree to contain only `catalog.json` and the exact
+asset paths declared under the catalog's closed set of organizer-owned roles.
+Participant-facing starter paths, participant assets or digests in the Catalog
+Release, and a public command for the packaged internal certification fixtures
+are rejected.
+
+It then runs the public preparation, source-validation, Bot Artifact build,
+Final Validation, batch planning, Tournament planning and execution, rehearsal,
+and presentation suites from a fresh checkout materialized from the offline
+bundle. The resulting
+`runner-catalog-independence-v1` evidence embeds the annotated tag manifest and
+its exact `compatibility_coordinates`, records the internal fixture identity,
+and lists every workflow suite that passed. Retain the JSON evidence beside
+the exact bundle. CI retains both as one 90-day artifact for every commit.
 
 ## Corrections and replacement versions
 

@@ -135,6 +135,19 @@ class CatalogReleaseTests(unittest.TestCase):
             manifest["offline_bundle"]["identity"],
             r"^rps-runner-offline-bundle-v1@sha256:[0-9a-f]{64}$",
         )
+        self.assertEqual(
+            manifest["compatibility_coordinates"],
+            {
+                "format_version": "rps-catalog-compatibility-v1",
+                "runner": manifest["runner"],
+                "catalog": {
+                    "path": manifest["catalog"]["path"],
+                    "identity": manifest["catalog"]["identity"],
+                    "assets": manifest["catalog"]["assets"],
+                },
+                "offline_bundle": manifest["offline_bundle"],
+            },
+        )
 
     def test_create_rejects_a_mutable_ci_action_reference(self) -> None:
         workflow = self.repository / ".github/workflows/python-39-compatibility.yml"
@@ -271,6 +284,291 @@ class CatalogReleaseTests(unittest.TestCase):
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("Catalog Release failure", completed.stderr)
+
+    def test_ci_retains_the_integrated_independence_proof(self) -> None:
+        workflow = (
+            PROJECT_ROOT / ".github/workflows/catalog-release-contract.yml"
+        ).read_text()
+
+        self.assertIn("./freeze-tournament-catalog prove", workflow)
+        self.assertIn("catalog-independence-evidence.json", workflow)
+        self.assertRegex(
+            workflow,
+            r"uses: actions/upload-artifact@[0-9a-f]{40}",
+        )
+        self.assertIn("retention-days: 90", workflow)
+
+
+class CatalogIndependenceProofTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.root = Path(self.temporary_directory.name)
+        self.repository = self.root / "runner"
+        self.bundle = self.root / "catalog-release.bundle"
+        self.evidence = self.root / "catalog-independence.json"
+        shutil.copytree(
+            PROJECT_ROOT,
+            self.repository,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                ".venv",
+                ".scratch",
+                "node_modules",
+                "__pycache__",
+                "*.pyc",
+            ),
+        )
+        self._git("init", "--quiet")
+        self._git("config", "user.email", "catalog-proof@example.invalid")
+        self._git("config", "user.name", "Catalog Independence Proof")
+        self._git("add", ".")
+        self._git(
+            "commit", "--quiet", "--no-gpg-sign", "-m", "catalog proof checkout"
+        )
+
+    def _git(self, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=self.repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def _prove(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                str(self.repository / COMMAND.name),
+                "prove",
+                "catalog-proof-v1",
+                "--bundle",
+                str(self.bundle),
+                "--evidence",
+                str(self.evidence),
+            ],
+            cwd=self.repository,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+    def test_clean_isolated_checkout_retains_complete_independence_evidence(
+        self,
+    ) -> None:
+        unrelated_checkout = (
+            self.repository / ".github/workflows/unrelated-checkout.yml"
+        )
+        unrelated_checkout.write_text(
+            "steps:\n"
+            "  - uses: actions/checkout@"
+            "11bd71901bbe5b1630ceea73d27597364c9af683\n"
+            "    with:\n"
+            "      repository: example/unrelated-tools\n"
+        )
+        self._git("add", ".")
+        self._git(
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "add unrelated external checkout",
+        )
+
+        completed = self._prove()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        evidence = json.loads(self.evidence.read_text())
+        self.assertEqual(
+            evidence["evidence_format_version"],
+            "runner-catalog-independence-v1",
+        )
+        self.assertEqual(evidence["status"], "passed")
+        self.assertEqual(
+            evidence["compatibility_coordinates"],
+            evidence["catalog_release"]["manifest"][
+                "compatibility_coordinates"
+            ],
+        )
+        self.assertEqual(
+            evidence["compatibility_coordinates"]["catalog"]["identity"],
+            evidence["catalog_release"]["manifest"]["catalog"]["identity"],
+        )
+        self.assertEqual(
+            evidence["repository_scan"]["companion_repository"], "absent"
+        )
+        self.assertEqual(
+            evidence["repository_scan"]["dependency_matches"], []
+        )
+        for scanned_path in (
+            ".github/workflows/unrelated-checkout.yml",
+            "language_environments/catalog-v1/python/workflow.yml",
+            "rps_runner/presentation/assets/app.js",
+            "tests/browser/presentation.spec.js",
+        ):
+            with self.subTest(scanned_path=scanned_path):
+                self.assertIn(
+                    scanned_path,
+                    evidence["repository_scan"]["dependency_surfaces"],
+                )
+        self.assertEqual(
+            evidence["catalog_release"]["participant_template_asset_paths"], []
+        )
+        self.assertEqual(
+            evidence["catalog_release"]["unowned_catalog_paths"], []
+        )
+        self.assertEqual(
+            evidence["catalog_release"]["participant_template_paths"], []
+        )
+        self.assertEqual(
+            evidence["catalog_release"]["participant_template_digest_fields"],
+            [],
+        )
+        self.assertEqual(evidence["organizer_workflows"]["status"], "passed")
+        self.assertEqual(
+            evidence["organizer_workflows"]["checkout_source"],
+            "offline_bundle",
+        )
+        self.assertEqual(
+            set(evidence["organizer_workflows"]["test_files"]),
+            {
+                "tests/test_prepare_cli.py",
+                "tests/test_source_validation_cli.py",
+                "tests/test_artifact_builder_cli.py",
+                "tests/test_artifact_certification_cli.py",
+                "tests/test_batch_plan_cli.py",
+                "tests/test_tournament_plan_cli.py",
+                "tests/test_tournament_cli.py",
+                "tests/test_rehearsal_cli.py",
+                "tests/test_presentation.py",
+                "tests/test_presentation_cli.py",
+            },
+        )
+        self.assertEqual(
+            evidence["internal_practice_fixtures"]["participant_command_exposed"],
+            False,
+        )
+        self.assertRegex(
+            evidence["internal_practice_fixtures"]["module_identity"],
+            r"^sha256:[0-9a-f]{64}$",
+        )
+        self.assertEqual(
+            evidence["internal_practice_fixtures"]["offline_module_identity"],
+            evidence["internal_practice_fixtures"]["module_identity"],
+        )
+        self.assertEqual(
+            evidence["internal_practice_fixtures"]["offline_reproducible"],
+            True,
+        )
+        self.assertEqual(json.loads(completed.stdout), evidence)
+
+    def test_proof_rejects_a_companion_checkout_or_active_dependency(self) -> None:
+        companion_name = "rps-" + "bot-templates"
+        companion = self.root / companion_name
+        companion.mkdir()
+
+        completed = self._prove()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("without the companion repository", completed.stderr)
+        self.assertFalse(self.bundle.exists())
+        companion.rmdir()
+
+        workflow = self.repository / ".github/workflows/companion.yml"
+        workflow.write_text(
+            "steps:\n"
+            "  - uses: actions/checkout@"
+            "11bd71901bbe5b1630ceea73d27597364c9af683\n"
+            "    with:\n"
+            "      repository: example/"
+            + companion_name
+            + "\n"
+        )
+        self._git("add", ".")
+        self._git(
+            "commit", "--quiet", "--no-gpg-sign", "-m", "add reverse dependency"
+        )
+
+        completed = self._prove()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("dependency surfaces", completed.stderr)
+        self.assertIn(".github/workflows/companion.yml", completed.stderr)
+        self.assertFalse(self.bundle.exists())
+
+    def test_proof_rejects_participant_template_paths_in_the_runner(self) -> None:
+        participant_source = self.repository / "team_source/strategy.py"
+        participant_source.parent.mkdir()
+        participant_source.write_text(
+            "def choose_move(turn, my_history, opponent_history, rng):\n"
+            "    return 'R'\n"
+        )
+        self._git("add", ".")
+        self._git(
+            "commit", "--quiet", "--no-gpg-sign", "-m", "add participant starter"
+        )
+
+        completed = self._prove()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("Team Template paths remain", completed.stderr)
+        self.assertIn("team_source/strategy.py", completed.stderr)
+        self.assertFalse(self.bundle.exists())
+
+    def test_proof_rejects_an_undeclared_file_in_the_catalog_tree(self) -> None:
+        participant_source = (
+            self.repository
+            / "language_environments/catalog-v1/python/starter-strategy.py"
+        )
+        participant_source.write_text("def choose_move():\n    return 'R'\n")
+        self._git("add", ".")
+        self._git(
+            "commit", "--quiet", "--no-gpg-sign", "-m", "add undeclared starter"
+        )
+
+        completed = self._prove()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("undeclared paths", completed.stderr)
+        self.assertIn("python/starter-strategy.py", completed.stderr)
+
+    def test_proof_rejects_a_companion_module_import_without_a_repo_path(
+        self,
+    ) -> None:
+        companion_module = "catalog_" + "compatibility"
+        injected = self.repository / "rps_runner/reverse_dependency.py"
+        injected.write_text("import " + companion_module + "\n")
+        self._git("add", ".")
+        self._git(
+            "commit", "--quiet", "--no-gpg-sign", "-m", "add reverse import"
+        )
+
+        completed = self._prove()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("dependency surfaces", completed.stderr)
+        self.assertIn("rps_runner/reverse_dependency.py", completed.stderr)
+
+    def test_proof_rejects_a_neutral_path_submodule_of_the_companion(self) -> None:
+        companion_name = "rps-" + "bot-templates"
+        modules = self.repository / ".gitmodules"
+        modules.write_text(
+            '[submodule "vendor/adapter"]\n'
+            "  path = vendor/adapter\n"
+            "  url = ../"
+            + companion_name
+            + "\n"
+        )
+        self._git("add", ".")
+        self._git(
+            "commit", "--quiet", "--no-gpg-sign", "-m", "add reverse submodule"
+        )
+
+        completed = self._prove()
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("dependency surfaces", completed.stderr)
+        self.assertIn(".gitmodules", completed.stderr)
 
 
 if __name__ == "__main__":

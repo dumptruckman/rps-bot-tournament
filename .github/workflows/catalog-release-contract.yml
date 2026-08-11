@@ -31,3 +31,22 @@ jobs:
           tests/test_artifact_builder_cli.py
           tests/test_artifact_certification_cli.py
           -v
+      - name: Configure the disposable proof release identity
+        run: |
+          git config user.email catalog-proof@example.invalid
+          git config user.name "Catalog Independence Proof"
+      - name: Prove the isolated Runner catalog release
+        run: >-
+          ./freeze-tournament-catalog prove
+          catalog-independence-${{ github.sha }}
+          --bundle ${{ runner.temp }}/rps-runner-catalog.bundle
+          --evidence ${{ runner.temp }}/catalog-independence-evidence.json
+      - name: Retain the release bundle and independence evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: catalog-independence-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/rps-runner-catalog.bundle
+            ${{ runner.temp }}/catalog-independence-evidence.json
+          if-no-files-found: error
+          retention-days: 90

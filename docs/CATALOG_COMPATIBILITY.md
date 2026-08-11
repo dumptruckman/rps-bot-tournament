@@ -5,6 +5,11 @@ and an independently maintained Team Template. The Runner publishes the release;
 a Template Release copies the complete compatibility coordinates below into its
 compatibility claim without weakening or replacing any value.
 
+The annotated Catalog Release tag manifest and retained catalog-independence
+evidence both expose this object verbatim as `compatibility_coordinates`. That
+object, not a hand-built projection of nearby release fields, is the companion
+repository's lock-update input.
+
 See [CATALOG_RELEASE.md](CATALOG_RELEASE.md) for the publication, clean-clone
 verification, offline reproduction, and correction procedure.
 
