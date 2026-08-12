@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -73,6 +75,18 @@ class RustLanguageEnvironmentTests(unittest.TestCase):
             with self.assertRaisesRegex(SourceValidationError, "forbidden_paths"):
                 validate_source(source, self.environment)
 
+    def test_accepts_rust_character_and_byte_literals_before_the_contract(self) -> None:
+        for declaration in ("const ROCK: char = 'R';", "const ROCK: u8 = b'R';"):
+            with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as name:
+                source = Path(name)
+                (source / "strategy.rs").write_text(
+                    declaration
+                    + "\npub fn choose_move(_turn: usize, _my_history: &str, "
+                    "_opponent_history: &str, _rng: &mut RpsRandom) -> &'static str "
+                    "{ \"R\" }\n"
+                )
+                validate_source(source, self.environment)
+
     def test_rejects_wrapper_responsibilities_and_contract_decoys(self) -> None:
         cases = {
             "missing": "pub const MOVE: &str = \"R\";\n",
@@ -109,6 +123,42 @@ class RustLanguageEnvironmentTests(unittest.TestCase):
             ],
         )
         self.assertFalse(adapter["system_randomness"])
+
+    @unittest.skipUnless(shutil.which("rustc"), "rustc is required to execute seed vectors")
+    def test_rust_seed_adapter_executes_published_golden_vectors(self) -> None:
+        conformance = json.loads(self.environment.assets["conformance"].content)
+        vectors = conformance["seed_adapter"]["golden_vectors"]
+        wrapper = self.environment.assets["wrapper"].content.decode()
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / "wrapper.rs").write_text(wrapper)
+            (root / "strategy.rs").write_text(
+                "pub fn choose_move(_turn: usize, _my_history: &str, "
+                "_opponent_history: &str, _rng: &mut RpsRandom) -> &'static str "
+                "{ \"R\" }\n"
+            )
+            cases = ",".join(item["seed"] for item in vectors)
+            (root / "vectors.rs").write_text(
+                "mod wrapper { include!(\"wrapper.rs\"); }\n"
+                "fn main() { for seed in [" + cases + "] { "
+                "let mut rng = wrapper::RpsRandom::new(seed); "
+                "println!(\"{} {} {}\", rng.next_u64(), rng.next_u64(), "
+                "rng.next_u64()); } }\n"
+            )
+            executable = root / "vectors"
+            subprocess.run(
+                [shutil.which("rustc"), "--edition=2024", str(root / "vectors.rs"), "-o", str(executable)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            completed = subprocess.run(
+                [str(executable)], check=True, capture_output=True, text=True
+            )
+        self.assertEqual(
+            completed.stdout.splitlines(),
+            [" ".join(item["first_uint64"]) for item in vectors],
+        )
 
     def test_networkless_recipe_has_fixed_entrypoint_and_no_crate_resolution(self) -> None:
         recipe = self.environment.assets["recipe"].content.decode()

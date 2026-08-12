@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "ee723cf29a716d606e584956621943fb81c989af71589370afdf53752ecc994c",
+            "67c9817d0e8b61b6d4a3844230fe4e316f0b2a18d4e88483f6c6be3a67a55ca7",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -199,7 +199,7 @@ class CatalogReleaseTests(unittest.TestCase):
                 "csharp": "csharp-artifact-conformance-v1@sha256:"
                 "a1715ef34a2bfef92976a30ac490d498e913cbf2ae0ad4f1a8b4ae8235b98c6f",
                 "rust": "rust-artifact-conformance-v1@sha256:"
-                "7172f4efce0ce634878b82d2360da54ba4815099c036eebd3b2d324c0e0dffc7",
+                "b39ff8f5359aad15abefb7c6f4b592d95f1e0fac7eca69a2ff3ac7f8f163ef79",
                 "python": "python-artifact-conformance-v1@sha256:"
                 "0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057",
                 "typescript": "typescript-artifact-conformance-v1@sha256:"

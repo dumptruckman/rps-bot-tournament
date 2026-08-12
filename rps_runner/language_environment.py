@@ -984,10 +984,44 @@ def _validate_rust_strategy_contract(files: Sequence[SourceFile]) -> None:
 def _rust_significant_source(source: str) -> str:
     """Blank Rust comments and literals while retaining lifetime identifiers."""
 
-    without_lifetime_quotes = re.sub(r"'(?=[A-Za-z_])", " ", source)
+    characters = list(source)
+    for index, character in enumerate(source):
+        if character != "'" or index + 1 >= len(source):
+            continue
+        if not (source[index + 1].isalpha() or source[index + 1] == "_"):
+            continue
+        if _rust_character_literal_end(source, index) is None:
+            characters[index] = " "
+    without_lifetime_quotes = "".join(characters)
     return _c_like_significant_source(
         without_lifetime_quotes, raw_delimiters=('r#"', 'r"')
     )
+
+
+def _rust_character_literal_end(source: str, quote_index: int) -> Optional[int]:
+    """Return the exclusive end of a Rust character literal, if present."""
+
+    cursor = quote_index + 1
+    if cursor >= len(source) or source[cursor] in "'\r\n":
+        return None
+    if source[cursor] == "\\":
+        cursor += 1
+        if cursor >= len(source) or source[cursor] in "\r\n":
+            return None
+        if source[cursor] == "x":
+            cursor += 3
+        elif source[cursor] == "u" and source[cursor + 1 : cursor + 2] == "{":
+            closing_brace = source.find("}", cursor + 2)
+            if closing_brace == -1:
+                return None
+            cursor = closing_brace + 1
+        else:
+            cursor += 1
+    else:
+        cursor += 1
+    if cursor < len(source) and source[cursor] == "'":
+        return cursor + 1
+    return None
 
 
 def _validate_python_function_contract(files: Sequence[SourceFile]) -> None:
