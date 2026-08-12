@@ -110,6 +110,7 @@ class FakeBatchPipeline:
             "authority": "canonical",
             **candidate_manifest,
             "language": "python",
+            "environment": "python",
             "profile": "docker-execution-v1",
             "validation_identity": validation_identity,
             "identities": {

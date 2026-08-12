@@ -84,6 +84,17 @@ class CatalogAsset:
 
 
 @dataclass(frozen=True)
+class CatalogImage:
+    version: str
+    reference: str
+    digest: str
+
+    @property
+    def identity(self) -> str:
+        return self.version + "@" + self.digest
+
+
+@dataclass(frozen=True)
 class LanguageEnvironment:
     name: str
     language: str
@@ -94,6 +105,23 @@ class LanguageEnvironment:
     descriptor_version: str
     descriptor_identity: str
     assets: Mapping[str, CatalogAsset]
+
+    def platform_images(self, platform: str) -> tuple[CatalogImage, CatalogImage]:
+        try:
+            definition = json.loads(self.assets["base_runtime"].content)
+            selected = definition["platforms"][platform]
+            build = selected.get("build_toolchain", selected)
+            execution = selected.get("execution_runtime", selected)
+            return (
+                _catalog_image(build, self.name + " " + platform + " build toolchain"),
+                _catalog_image(
+                    execution, self.name + " " + platform + " execution runtime"
+                ),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise CatalogError(
+                self.name + " has no complete image definitions for " + platform
+            ) from error
 
 
 @dataclass(frozen=True)
@@ -116,22 +144,6 @@ class LanguageEnvironmentCatalog:
                 "available environments: " + choices
             )
 
-    def environment_for_language(self, language: str) -> LanguageEnvironment:
-        matches = [
-            environment
-            for environment in self.environments.values()
-            if environment.language == language
-        ]
-        if len(matches) != 1:
-            raise CatalogError(
-                "language "
-                + repr(language)
-                + " must identify exactly one Language Environment; found "
-                + str(len(matches))
-            )
-        return matches[0]
-
-
 @dataclass(frozen=True)
 class FrozenSourceBundle:
     path: Path
@@ -139,6 +151,26 @@ class FrozenSourceBundle:
     manifest: Mapping[str, Any]
     environment: LanguageEnvironment
     files: Sequence[SourceFile]
+
+
+def _catalog_image(value: Any, location: str) -> CatalogImage:
+    if not isinstance(value, dict):
+        raise CatalogError(location + " must be an image record")
+    version = value.get("version")
+    reference = value.get("image")
+    if not isinstance(version, str) or not version:
+        raise CatalogError(location + ".version must be a non-empty string")
+    if not isinstance(reference, str) or "@" not in reference:
+        raise CatalogError(location + ".image must be pinned by digest")
+    digest = reference.rsplit("@", 1)[1]
+    if (
+        not digest.startswith("sha256:")
+        or len(digest) != 71
+        or any(character not in "0123456789abcdef" for character in digest[7:])
+        or ":latest" in reference.lower()
+    ):
+        raise CatalogError(location + ".image must use a full immutable sha256 digest")
+    return CatalogImage(version, reference, digest)
 
 
 def _require_mapping(value: Any, location: str) -> Mapping[str, Any]:

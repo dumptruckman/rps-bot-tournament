@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,6 +18,9 @@ from rps_runner.artifact_store import (
     preserve_artifact_set,
     resolve_artifact,
 )
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
+from rps_runner.tournament.retained_artifacts import canonical_artifact_identity
+from rps_runner.tournament_cli import main as tournament_main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -111,10 +115,79 @@ class SecondExecutableEnvironmentDockerTests(unittest.TestCase):
                 str(candidate_manifest["artifact_digest"]),
                 platform,
             )
+            resources = dict(INITIAL_EXECUTION_PROFILE.as_mapping())
+            resources.pop("version")
+            resources.pop("recommended_match_parallelism")
+            certified = result["manifest"]
+            plan = {
+                "tournament_plan_format_version": "tournament-plan-v1",
+                "status": "draft",
+                "tournament_seed": 8675309,
+                "execution": {"mode": "step", "parallelism": 1},
+                "catalog": {
+                    "version": catalog.version,
+                    "identity": catalog.identity,
+                },
+                "execution_profile": {
+                    "version": INITIAL_EXECUTION_PROFILE.version,
+                    "identity": INITIAL_EXECUTION_PROFILE.identity,
+                },
+                "global_resources": resources,
+                "artifact_store": {
+                    "index_identity": index["integrity"]["index_identity"]
+                },
+                "teams": [
+                    {
+                        "team_id": "shell-team-" + str(ordinal),
+                        "display_name": "Shell Team " + str(ordinal),
+                        "roster_ready": True,
+                        "selected_source": {
+                            "source_digest": certified["source_digest"]
+                        },
+                        "bot_artifact_manifest": certified,
+                        "canonical_artifact_identity": canonical_artifact_identity(
+                            certified
+                        ),
+                        "artifact_store_reference": {
+                            "index_identity": index["integrity"]["index_identity"],
+                            "artifact_digest": certified["artifact_digest"],
+                            "platform": platform,
+                        },
+                    }
+                    for ordinal in range(4)
+                ],
+            }
+            plan_path = root / "tournament-plan.json"
+            plan_path.write_text(json.dumps(plan))
+            tournament = root / "tournament"
+            exit_code = tournament_main(
+                [
+                    "plan",
+                    "--plan",
+                    str(plan_path),
+                    "--catalog",
+                    str(CATALOG),
+                    "--artifact-store",
+                    str(store),
+                    "--directory",
+                    str(tournament),
+                    "--tournament-id",
+                    "internal-shell-proof",
+                ],
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            )
+            tournament_manifest_exists = (tournament / "manifest.json").is_file()
+            tournament_record_exists = any(
+                (tournament / "records").glob("*.json")
+            )
 
         self.assertEqual(result["manifest"]["language"], "shell-fixture")
         self.assertEqual(result["report"]["status"], "passed")
         self.assertEqual(restored, candidate_manifest["image"]["local_image_id"])
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(tournament_manifest_exists)
+        self.assertTrue(tournament_record_exists)
         self.assertRegex(
             index["integrity"]["index_identity"],
             r"^artifact-set-index-v1@sha256:[0-9a-f]{64}$",

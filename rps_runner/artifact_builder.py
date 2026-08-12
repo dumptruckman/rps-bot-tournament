@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 import uuid
 
 from rps_runner.language_environment import (
+    CatalogImage,
     FrozenSourceBundle,
     LanguageEnvironmentCatalog,
     load_frozen_source_bundle,
@@ -82,17 +83,8 @@ def _read_json(content: bytes, description: str) -> Mapping[str, Any]:
     return value
 
 
-def _image_identity(value: object, description: str) -> RuntimeIdentity:
-    if not isinstance(value, dict):
-        raise ArtifactBuildFailure(description + " identity is missing")
-    reference = value.get("image")
-    version = value.get("version")
-    if not isinstance(reference, str) or "@" not in reference:
-        raise ArtifactBuildFailure(description + " is not referenced by immutable digest")
-    digest = reference.rsplit("@", 1)[1]
-    if not _DIGEST.fullmatch(digest) or not isinstance(version, str) or not version:
-        raise ArtifactBuildFailure(description + " identity is invalid or mutable")
-    return RuntimeIdentity(reference, digest, version + "@" + digest)
+def _runtime_identity(image: CatalogImage) -> RuntimeIdentity:
+    return RuntimeIdentity(image.reference, image.digest, image.identity)
 
 
 def _build_and_runtime_for(
@@ -104,22 +96,11 @@ def _build_and_runtime_for(
             + repr(platform)
             + " is unsupported; expected linux/amd64 or linux/arm64"
         )
-    data = _read_json(
-        bundle.environment.assets["base_runtime"].content,
-        "organizer-owned base runtime definition",
-    )
-    platforms = data.get("platforms")
-    if not isinstance(platforms, dict) or not isinstance(platforms.get(platform), dict):
-        raise ArtifactBuildFailure(
-            "target platform " + repr(platform) + " has no pinned base runtime"
-        )
-    selected = platforms[platform]
-    execution_value = selected.get("execution_runtime", selected)
-    build_value = selected.get("build_toolchain", selected)
-    return (
-        _image_identity(build_value, "selected build toolchain"),
-        _image_identity(execution_value, "selected execution runtime"),
-    )
+    try:
+        build, execution = bundle.environment.platform_images(platform)
+    except ValueError as error:
+        raise ArtifactBuildFailure(str(error)) from error
+    return _runtime_identity(build), _runtime_identity(execution)
 
 
 def _entrypoint(bundle: FrozenSourceBundle) -> Sequence[str]:
@@ -387,6 +368,7 @@ def build_artifact_candidate(
             "artifact_digest": artifact_digest,
             "identities": identities,
             "language": bundle.environment.language,
+            "environment": bundle.environment.name,
             "platform": platform,
             "runtime_identity": runtime.identity,
             "build_toolchain_identity": build_toolchain.identity,
@@ -402,6 +384,7 @@ def build_artifact_candidate(
             "runtime": runtime.as_manifest(),
             "build_toolchain": build_toolchain.as_manifest(),
             "language": bundle.environment.language,
+            "environment": bundle.environment.name,
             "platform": platform,
             "entrypoint": list(entrypoint),
             "identities": identities,

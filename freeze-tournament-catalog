@@ -86,22 +86,12 @@ def _require_clean_repository() -> None:
         raise ReleaseError("repository must be clean before freezing or verifying a release")
 
 
-def _immutable_image_record(value: Any, location: str) -> Dict[str, str]:
-    if not isinstance(value, dict):
-        raise ReleaseError(location + " must be a complete image record")
-    reference = value.get("image")
-    version = value.get("version")
-    if not isinstance(reference, str) or "@" not in reference:
-        raise ReleaseError(location + " is not pinned by a full digest")
-    digest = reference.rsplit("@", 1)[1]
-    if (
-        not FULL_DIGEST.fullmatch(digest)
-        or ":latest" in reference.lower()
-        or not isinstance(version, str)
-        or not version
-    ):
-        raise ReleaseError(location + " is mutable or incomplete")
-    return {"version": version, "reference": reference, "digest": digest}
+def _image_record(image: Any) -> Dict[str, str]:
+    return {
+        "version": image.version,
+        "reference": image.reference,
+        "digest": image.digest,
+    }
 
 
 def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
@@ -109,24 +99,15 @@ def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
     for name, environment in sorted(catalog.environments.items()):
         if environment.publication != "production":
             continue
-        try:
-            runtime_catalog = json.loads(environment.assets["base_runtime"].content)
-            platforms = runtime_catalog["platforms"]
-        except (KeyError, TypeError, json.JSONDecodeError) as error:
-            raise ReleaseError(name + " has no complete platform runtime catalog") from error
-        if set(platforms) != {"linux/amd64", "linux/arm64"}:
-            raise ReleaseError(name + " must pin linux/amd64 and linux/arm64")
         environment_records: Dict[str, Any] = {}
-        for platform, selected in sorted(platforms.items()):
-            execution = selected.get("execution_runtime", selected)
-            build = selected.get("build_toolchain", selected)
+        for platform in ("linux/amd64", "linux/arm64"):
+            try:
+                build, execution = environment.platform_images(platform)
+            except CatalogError as error:
+                raise ReleaseError(str(error)) from error
             environment_records[platform] = {
-                "build_toolchain": _immutable_image_record(
-                    build, name + " " + platform + " build toolchain"
-                ),
-                "execution_runtime": _immutable_image_record(
-                    execution, name + " " + platform + " execution runtime"
-                ),
+                "build_toolchain": _image_record(build),
+                "execution_runtime": _image_record(execution),
             }
         records[name] = environment_records
     if not records:

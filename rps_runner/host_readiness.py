@@ -176,34 +176,11 @@ def runtime_references(
             continue
         if environment.contract_only:
             continue
-        asset = environment.assets.get("base_runtime")
-        if asset is None:
-            continue
         try:
-            definition = json.loads(asset.content)
-            selected = definition["platforms"][target_platform]
-            image_values = (
-                (selected.get("build_toolchain"), selected.get("execution_runtime"))
-                if "build_toolchain" in selected or "execution_runtime" in selected
-                else (selected,)
-            )
-        except (json.JSONDecodeError, KeyError, TypeError) as error:
-            raise CatalogError(
-                environment.name
-                + " has no valid base runtime for "
-                + target_platform
-            ) from error
-        for image_value in image_values:
-            reference = image_value.get("image") if isinstance(image_value, dict) else None
-            if (
-                not isinstance(reference, str)
-                or "@" not in reference
-                or _IMMUTABLE_DIGEST.fullmatch(reference.rsplit("@", 1)[1]) is None
-            ):
-                raise CatalogError(
-                    environment.name + " runtime input is not pinned by sha256 digest"
-                )
-            references.append(reference)
+            build, execution = environment.platform_images(target_platform)
+        except CatalogError:
+            raise
+        references.extend((build.reference, execution.reference))
     if not references:
         raise CatalogError("catalog has no base runtime for " + target_platform)
     return sorted(set(references))

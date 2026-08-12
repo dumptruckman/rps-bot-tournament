@@ -178,6 +178,7 @@ class ArtifactBuilderCliTests(unittest.TestCase):
         self.assertRegex(result["build_identity"], r"^build-v1@sha256:[0-9a-f]{64}$")
         self.assertEqual(result["runtime_digest"], result["runtime"]["digest"])
         self.assertEqual(result["language"], "python")
+        self.assertEqual(result["environment"], "python")
         self.assertEqual(result["platform"], "linux/amd64")
         self.assertEqual(
             set(result["identities"]),
@@ -255,6 +256,7 @@ class ArtifactBuilderCliTests(unittest.TestCase):
         )
 
         self.assertEqual(result["language"], "shell-fixture")
+        self.assertEqual(result["environment"], "internal-shell")
         self.assertEqual(result["entrypoint"], ["/bin/sh", "/opt/rps/wrapper.sh"])
         self.assertNotEqual(
             result["build_toolchain"]["reference"], result["runtime"]["reference"]

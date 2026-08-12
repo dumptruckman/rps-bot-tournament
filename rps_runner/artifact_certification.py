@@ -39,7 +39,6 @@ _CONFORMANCE_EXECUTION_LOCK = threading.RLock()
 CERTIFICATION_FORMAT_VERSION = "bot-artifact-certification-v1"
 MANIFEST_FORMAT_VERSION = "bot-artifact-manifest-v1"
 REPORT_FORMAT_VERSION = "validation-report-v1"
-SUITE_VERSION = "python-artifact-conformance-v1"
 CORE_TOOL_VERSION = "rps-core-tool-v1"
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IDENTITY = re.compile(r"^[^@]+@sha256:[0-9a-f]{64}$")
@@ -150,13 +149,16 @@ def _mapping(value: object, field: str) -> Mapping[str, Any]:
 def _verify_candidate_identities(
     manifest: Mapping[str, Any], catalog: LanguageEnvironmentCatalog, inputs: CertificationInputs
 ) -> None:
-    language = manifest.get("language")
-    if not isinstance(language, str):
-        raise CertificationFailure("candidate language is missing")
+    environment_name = manifest.get("environment")
+    if not isinstance(environment_name, str):
+        raise CertificationFailure("candidate Language Environment is missing")
     try:
-        environment = catalog.environment_for_language(language)
+        environment = catalog.environment(environment_name)
     except ValueError as error:
         raise CertificationFailure(str(error)) from error
+    language = manifest.get("language")
+    if language != environment.language:
+        raise CertificationFailure("candidate language does not match its environment")
     if manifest.get("platform") != inputs.platform:
         raise CertificationFailure(
             "wrong-platform candidate: manifest says "
@@ -254,6 +256,7 @@ def _verify_candidate_identities(
         "artifact_digest": artifact_digest,
         "identities": identities,
         "language": language,
+        "environment": environment.name,
         "platform": inputs.platform,
         "runtime_identity": runtime_identity,
         "build_toolchain_identity": build_toolchain["identity"],
@@ -272,8 +275,7 @@ def _verify_frozen_source(
     catalog: LanguageEnvironmentCatalog,
 ) -> None:
     bundle = load_frozen_source_bundle(candidate, catalog)
-    language = candidate_manifest.get("language")
-    if bundle.environment.language != language:
+    if bundle.environment.name != candidate_manifest.get("environment"):
         raise CertificationFailure("candidate source uses the wrong Language Environment")
     if bundle.manifest.get("source_digest") != candidate_manifest.get("source_digest"):
         raise CertificationFailure(
@@ -360,7 +362,6 @@ def _conformance_match_request(
 
 
 def _conformance_definition(
-    catalog: LanguageEnvironmentCatalog,
     environment: LanguageEnvironment,
 ) -> Mapping[str, Any]:
     asset = environment.assets["conformance"]
@@ -376,7 +377,7 @@ def _conformance_definition(
 def _practice_sources(
     catalog: LanguageEnvironmentCatalog, environment: LanguageEnvironment
 ) -> Mapping[str, Any]:
-    practices = _conformance_definition(catalog, environment).get("practice_artifacts")
+    practices = _conformance_definition(environment).get("practice_artifacts")
     expected = {"fixed-move", "random", "copycat", "protocol-test"}
     if (
         not isinstance(practices, dict)
@@ -394,7 +395,7 @@ def _diagnostic_fixture_report(
     catalog: LanguageEnvironmentCatalog,
     environment: LanguageEnvironment,
 ) -> Mapping[str, Mapping[str, str]]:
-    fixtures = _conformance_definition(catalog, environment).get("diagnostic_fixtures")
+    fixtures = _conformance_definition(environment).get("diagnostic_fixtures")
     expected = {
         "syntax-build": "source syntax or networkless Docker build failed",
         "import-time": "strategy import exited before wrapper readiness",
@@ -419,7 +420,7 @@ def _diagnostic_fixture_report(
 def _fixture_sources(
     catalog: LanguageEnvironmentCatalog, environment: LanguageEnvironment
 ) -> Mapping[str, Any]:
-    sources = _conformance_definition(catalog, environment).get("fixture_sources")
+    sources = _conformance_definition(environment).get("fixture_sources")
     expected = set(_diagnostic_fixture_report(catalog, environment))
     if (
         not isinstance(sources, dict)
@@ -467,7 +468,7 @@ def _build_diagnostic_artifacts(
     work: Path,
 ) -> Mapping[str, Mapping[str, Any]]:
     sources = _fixture_sources(catalog, environment)
-    definition = _conformance_definition(catalog, environment)
+    definition = _conformance_definition(environment)
     syntax_source = work / "syntax-build-source"
     syntax_source.mkdir()
     _write_conformance_source(syntax_source, environment, sources["syntax-build"])
@@ -761,7 +762,7 @@ def _run_smoke_matches_exclusively(
     retain_practice_images: bool = False,
 ) -> Mapping[str, Any]:
     digest = str(manifest["artifact_digest"])
-    environment = catalog.environment_for_language(str(manifest["language"]))
+    environment = catalog.environment(str(manifest["environment"]))
     reference = str(_mapping(manifest["retention"], "retention")["local_image_id"])
     with tempfile.TemporaryDirectory(prefix="rps-conformance-") as work_name:
         work = Path(work_name)
@@ -854,9 +855,9 @@ def _run_smoke_matches_exclusively(
                 diagnostic_candidates,
                 practice_candidates["fixed-move"],
                 namespace=namespace,
-                accepted_faults=_conformance_definition(
-                    catalog, environment
-                ).get("accepted_faults"),
+                accepted_faults=_conformance_definition(environment).get(
+                    "accepted_faults"
+                ),
             )
             return {
                 "attempts": 2,
@@ -895,7 +896,7 @@ def certify_artifact_candidate(
     if destination.exists() or destination.is_symlink():
         raise CertificationFailure("output destination already exists and will not be replaced")
     candidate_manifest = _candidate_manifest(candidate)
-    environment = catalog.environment_for_language(str(candidate_manifest.get("language")))
+    environment = catalog.environment(str(candidate_manifest.get("environment")))
     _verify_candidate_identities(candidate_manifest, catalog, inputs)
     _verify_frozen_source(candidate, candidate_manifest, catalog)
     _verify_image(candidate_manifest, inputs)
@@ -907,8 +908,8 @@ def certify_artifact_candidate(
     )
     diagnostic_fixtures = smoke["diagnostic_fixtures"]
     candidate_identities = _mapping(candidate_manifest["identities"], "identities")
-    definition = _conformance_definition(catalog, environment)
-    suite_version = definition.get("suite_version", SUITE_VERSION)
+    definition = _conformance_definition(environment)
+    suite_version = definition.get("suite_version")
     if not isinstance(suite_version, str) or not suite_version:
         raise CertificationFailure("conformance suite version is invalid")
     identities = {
@@ -983,6 +984,7 @@ def certify_artifact_candidate(
         "runtime": candidate_manifest["runtime"],
         "build_toolchain": candidate_manifest["build_toolchain"],
         "language": candidate_manifest["language"],
+        "environment": candidate_manifest["environment"],
         "platform": inputs.platform,
         "profile": inputs.profile,
         "entrypoint": candidate_manifest["entrypoint"],

@@ -98,6 +98,7 @@ def validate_bot_artifact_manifest(
             "runtime",
             "build_toolchain",
             "language",
+            "environment",
             "platform",
             "profile",
             "entrypoint",
@@ -120,9 +121,11 @@ def validate_bot_artifact_manifest(
         if manifest.get(field) != expected:
             raise ValueError(location + "." + field + " is invalid")
     try:
-        environment = catalog.environment_for_language(str(manifest.get("language")))
+        environment = catalog.environment(str(manifest.get("environment")))
     except ValueError as error:
-        raise ValueError(location + " language is not in the catalog: " + str(error)) from error
+        raise ValueError(location + " environment is not in the catalog: " + str(error)) from error
+    if manifest.get("language") != environment.language:
+        raise ValueError(location + " language does not match its environment")
     for field in ("artifact_digest", "source_digest", "runtime_digest"):
         if not isinstance(manifest.get(field), str) or _DIGEST.fullmatch(
             str(manifest.get(field))
@@ -181,13 +184,11 @@ def validate_bot_artifact_manifest(
             raise ValueError(location + " missing " + field + " identity")
     runtime = _object(manifest.get("runtime"), location + ".runtime")
     _exact_fields(runtime, {"identity", "reference", "digest"}, location + ".runtime")
-    runtime_definitions = json.loads(environment.assets["base_runtime"].content)
-    pinned_platform = runtime_definitions["platforms"]["linux/arm64"]
-    pinned = pinned_platform.get("execution_runtime", pinned_platform)
-    runtime_digest = pinned["image"].rsplit("@", 1)[1]
+    pinned_build, pinned_runtime = environment.platform_images("linux/arm64")
+    runtime_digest = pinned_runtime.digest
     if runtime != {
-        "identity": pinned["version"] + "@" + runtime_digest,
-        "reference": pinned["image"],
+        "identity": pinned_runtime.identity,
+        "reference": pinned_runtime.reference,
         "digest": runtime_digest,
     } or manifest["runtime_digest"] != runtime_digest:
         raise ValueError(location + " runtime does not match the pinned catalog")
@@ -201,11 +202,10 @@ def validate_bot_artifact_manifest(
         {"identity", "reference", "digest"},
         location + ".build_toolchain",
     )
-    pinned_build = pinned_platform.get("build_toolchain", pinned_platform)
-    build_digest = pinned_build["image"].rsplit("@", 1)[1]
+    build_digest = pinned_build.digest
     if build_toolchain != {
-        "identity": pinned_build["version"] + "@" + build_digest,
-        "reference": pinned_build["image"],
+        "identity": pinned_build.identity,
+        "reference": pinned_build.reference,
         "digest": build_digest,
     }:
         raise ValueError(location + " build toolchain does not match the pinned catalog")

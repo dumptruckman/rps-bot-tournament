@@ -134,6 +134,7 @@ class TournamentPlanCliTests(unittest.TestCase):
                 "identity": pinned["version"] + "@" + runtime_digest,
             },
             "language": "python",
+            "environment": "python",
             "platform": "linux/arm64",
             "profile": INITIAL_EXECUTION_PROFILE.version,
             "entrypoint": json.loads(environment.assets["entrypoint"].content)[

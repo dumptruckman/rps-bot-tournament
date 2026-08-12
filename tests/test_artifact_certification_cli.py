@@ -58,6 +58,7 @@ class ArtifactCertificationCliTests(unittest.TestCase):
                 "identity": "python-runtime-v1@sha256:" + "4" * 64,
             },
             "language": "python",
+            "environment": "python",
             "platform": platform,
             "entrypoint": ["python3", "-I", "/opt/rps/wrapper.py"],
             "identities": {
@@ -390,6 +391,7 @@ class ArtifactCertificationCliTests(unittest.TestCase):
         catalog = load_catalog(CATALOG)
         environment = catalog.environment("internal-shell")
         manifest["language"] = environment.language
+        manifest["environment"] = environment.name
         manifest["entrypoint"] = ["/bin/sh", "/opt/rps/wrapper.sh"]
         manifest["identities"].update(
             {
