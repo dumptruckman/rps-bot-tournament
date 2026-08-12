@@ -1,0 +1,44 @@
+{
+  "accepted_faults": {
+    "import-time": ["unexpected_exit"],
+    "memory": ["resource_oom", "unexpected_exit", "timeout"]
+  },
+  "contract": "choose-move-contract-v1",
+  "diagnostic_fixtures": [
+    "syntax-build", "import-time", "nondeterministic", "protocol-fault",
+    "slow-response", "memory", "process", "filesystem", "premature-output"
+  ],
+  "fixture_sources": {
+    "filesystem": "use std::fs;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let limited = fs::write(\"/tmp/conformance-fill\", vec![b'x'; 32 * 1024 * 1024]).is_err(); let _ = fs::remove_file(\"/tmp/conformance-fill\"); if limited { \"R\" } else { \"X\" } }\n",
+    "import-time": "extern \"C\" fn fail_at_startup() { std::process::abort(); }\n#[used]\n#[unsafe(link_section = \".init_array\")]\nstatic INITIALIZER: extern \"C\" fn() = fail_at_startup;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { \"R\" }\n",
+    "memory": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut retained = vec![0_u8; 512 * 1024 * 1024]; for index in (0..retained.len()).step_by(4096) { retained[index] = index as u8; } std::mem::forget(retained); \"R\" }\n",
+    "nondeterministic": "use std::fs::File;\nuse std::io::Read;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut byte = [0_u8]; File::open(\"/dev/urandom\").and_then(|mut file| file.read_exact(&mut byte)).unwrap(); [\"R\", \"P\", \"S\"][(byte[0] as usize) % 3] }\n",
+    "premature-output": "extern \"C\" fn output_at_startup() { println!(\"R\"); }\n#[used]\n#[unsafe(link_section = \".init_array\")]\nstatic INITIALIZER: extern \"C\" fn() = output_at_startup;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { \"R\" }\n",
+    "process": "use std::process::{Child, Command};\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut children: Vec<Child> = Vec::new(); let mut limited = false; for _ in 0..60 { match Command::new(\"/bin/sleep\").arg(\"60\").spawn() { Ok(child) => children.push(child), Err(_) => { limited = true; break; } } } for child in &mut children { let _ = child.kill(); let _ = child.wait(); } if limited { \"R\" } else { \"X\" } }\n",
+    "protocol-fault": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { \"X\" }\n",
+    "slow-response": "use std::time::Duration;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { std::thread::sleep(Duration::from_millis(200)); \"R\" }\n",
+    "syntax-build": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { this is not valid Rust \"R\" }\n"
+  },
+  "practice_artifacts": {
+    "copycat": "pub fn choose_move(_turn: usize, _my_history: &str, opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { match opponent_history.as_bytes().last() { Some(b'P') => \"P\", Some(b'S') => \"S\", _ => \"R\" } }\n",
+    "fixed-move": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { \"R\" }\n",
+    "protocol-test": "pub fn choose_move(turn: usize, my_history: &str, opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { if turn != my_history.len() || my_history.len() != opponent_history.len() || !my_history.bytes().chain(opponent_history.bytes()).all(|value| matches!(value, b'R' | b'P' | b'S')) { return \"X\"; } [\"R\", \"P\", \"S\"][turn % 3] }\n",
+    "random": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, rng: &mut RpsRandom) -> &'static str { [\"R\", \"P\", \"S\"][rng.next_usize(3)] }\n"
+  },
+  "seed_adapter": {
+    "algorithm": "SplitMix64(seed)",
+    "golden_vectors": [
+      {"seed": "0", "first_uint64": ["16294208416658607535", "7960286522194355700", "487617019471545679"]},
+      {"seed": "1", "first_uint64": ["10451216379200822465", "13757245211066428519", "17911839290282890590"]},
+      {"seed": "9223372036854775807", "first_uint64": ["3055647633038352039", "17441316833444690247", "17011665146503905680"]},
+      {"seed": "18446744073709551615", "first_uint64": ["16490336266968443936", "16834447057089888969", "4048727598324417001"]}
+    ],
+    "system_randomness": false,
+    "version": "rust-splitmix64-seed-adapter-v1"
+  },
+  "source_path": "strategy.rs",
+  "suite_version": "rust-artifact-conformance-v1",
+  "syntax_diagnostic": "Docker build failed",
+  "syntax_stage": "build",
+  "version": "rust-conformance-v1"
+}

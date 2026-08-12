@@ -30,6 +30,7 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_multi_language_environment.py",
     "tests/test_csharp_language_environment.py",
     "tests/test_java_language_environment.py",
+    "tests/test_rust_language_environment.py",
     "tests/test_typescript_language_environment.py",
     "tests/test_batch_plan_cli.py",
     "tests/test_tournament_plan_cli.py",
@@ -280,6 +281,17 @@ def _verify_go_runtime_policy(catalog: Any) -> None:
     _verify_stable_runtime_policy(catalog, "go", "go_version")
 
 
+def _verify_rust_release_policy(catalog: Any) -> None:
+    _verify_stable_runtime_policy(catalog, "rust", "rust_version")
+    _verify_standard_library_dependency_policy(catalog, "rust", "Rust")
+    _verify_networkless_recipe_policy(
+        catalog,
+        "rust",
+        "Rust",
+        ("cargo fetch", "cargo install", "crates.io", "curl ", "wget "),
+    )
+
+
 def _verify_java_runtime_policy(catalog: Any) -> None:
     _verify_stable_runtime_policy(
         catalog,
@@ -385,6 +397,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_python_recipe_policy(catalog)
     _verify_python_runtime_policy(catalog)
     _verify_go_runtime_policy(catalog)
+    _verify_rust_release_policy(catalog)
     _verify_java_runtime_policy(catalog)
     _verify_java_dependency_policy(catalog)
     _verify_csharp_release_policy(catalog)

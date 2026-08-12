@@ -933,6 +933,63 @@ def _validate_typescript_strategy_contract(files: Sequence[SourceFile]) -> None:
         )
 
 
+def _validate_rust_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "strategy.rs")
+    sources = []
+    for item in files:
+        if not item.path.endswith(".rs"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Rust Team Source must be UTF-8: " + str(error),
+            )
+        significant = _rust_significant_source(source)
+        sources.append((item, significant))
+        if re.search(r"\bfn\s+main\s*\(", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned main function",
+            )
+        if re.search(r"\b(?:struct|enum|type|trait)\s+RpsRandom\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned RpsRandom type",
+            )
+
+    strategy = _rust_significant_source(source_file.content.decode("utf-8"))
+    signature = re.compile(
+        r"\bpub\s+fn\s+choose_move\s*\(\s*_?turn\s*:\s*usize\s*,\s*"
+        r"_?my_history\s*:\s*&str\s*,\s*_?opponent_history\s*:\s*&str\s*,\s*"
+        r"_?rng\s*:\s*&mut\s+RpsRandom\s*\)\s*->\s*&\s*static\s+str\s*\{"
+    )
+    bindings = sum(
+        len(re.findall(r"\b(?:fn|const|static|struct|enum|type|trait)\s+choose_move\b", value))
+        for _, value in sources
+    )
+    if bindings != 1 or not signature.search(strategy):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one pub fn choose_move(turn: usize, my_history: &str, "
+            "opponent_history: &str, rng: &mut RpsRandom) -> &'static str function",
+        )
+
+
+def _rust_significant_source(source: str) -> str:
+    """Blank Rust comments and literals while retaining lifetime identifiers."""
+
+    without_lifetime_quotes = re.sub(r"'(?=[A-Za-z_])", " ", source)
+    return _c_like_significant_source(
+        without_lifetime_quotes, raw_delimiters=('r#"', 'r"')
+    )
+
+
 def _validate_python_function_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.py")
     try:
@@ -1055,6 +1112,7 @@ _PARTICIPANT_CONTRACT_VALIDATORS = {
     "csharp-strategy-contract-v1": _validate_csharp_strategy_contract,
     "go-strategy-contract-v1": _validate_go_strategy_contract,
     "java-strategy-contract-v1": _validate_java_strategy_contract,
+    "rust-strategy-contract-v1": _validate_rust_strategy_contract,
     "typescript-strategy-contract-v1": _validate_typescript_strategy_contract,
     "none-v1": _validate_no_static_contract,
     "single-unconditional-function-v1": _validate_python_function_contract,

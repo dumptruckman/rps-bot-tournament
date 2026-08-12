@@ -208,6 +208,113 @@
         "version": "csharp-source-schema-v1"
       }
     },
+    "rust": {
+      "assets": {
+        "base_runtime": {
+          "path": "rust/runtimes.json",
+          "sha256": "sha256:eb86bd0c699e24020447e941f36d8f1908efc394529573307cfa40a0e55c2cc6",
+          "version": "rust-runtime-v1"
+        },
+        "build_toolchain": {
+          "path": "rust/runtimes.json",
+          "sha256": "sha256:eb86bd0c699e24020447e941f36d8f1908efc394529573307cfa40a0e55c2cc6",
+          "version": "rust-build-toolchain-v1"
+        },
+        "build_target": {
+          "path": "rust/Dockerfile",
+          "sha256": "sha256:c76430e5837e2721476cd1c2e027cffcedbeaa0b13ece9da10050f4e84c7e402",
+          "version": "rust-build-target-v1"
+        },
+        "conformance": {
+          "path": "rust/conformance.json",
+          "sha256": "sha256:ccb75307f2e4fd8283bf243ddae4f2761e2a7efb596eb52a02b4faad89eaeff1",
+          "version": "rust-conformance-v1"
+        },
+        "dependency_definition": {
+          "path": "rust/dependencies.lock",
+          "sha256": "sha256:059c097404299f00bf5a9b26bec0831f8aaad0b6867913255f6fda0d747300cc",
+          "version": "rust-dependencies-v1"
+        },
+        "entrypoint": {
+          "path": "rust/entrypoint.json",
+          "sha256": "sha256:20eea82924a1bb765e76ae621aa86fae717456d1194291cdb0f99982e4fdbbda",
+          "version": "rust-entrypoint-v1"
+        },
+        "platform": {
+          "path": "rust/runtimes.json",
+          "sha256": "sha256:eb86bd0c699e24020447e941f36d8f1908efc394529573307cfa40a0e55c2cc6",
+          "version": "rust-oci-platforms-v1"
+        },
+        "readiness": {
+          "path": "rust/readiness.json",
+          "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458",
+          "version": "wrapper-readiness-v1"
+        },
+        "recipe": {
+          "path": "rust/Dockerfile",
+          "sha256": "sha256:c76430e5837e2721476cd1c2e027cffcedbeaa0b13ece9da10050f4e84c7e402",
+          "version": "rust-build-recipe-v1"
+        },
+        "workflow": {
+          "path": "rust/workflow.yml",
+          "sha256": "sha256:1324de81cde7816814ddf1f2aa0f1c12e52b77d76a430baec09db0fca9169af8",
+          "version": "source-validation-workflow-v1"
+        },
+        "wrapper": {
+          "path": "rust/wrapper.rs",
+          "sha256": "sha256:ca713ed638f7ba6220cdf70da320aa45acd061e07746aadda4451b31d960b1ab",
+          "version": "rust-wrapper-v1"
+        }
+      },
+      "contract_only": false,
+      "descriptor_version": "rust-language-environment-v1",
+      "language": "rust",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "choose_move",
+        "signature": "pub fn choose_move(turn: usize, my_history: &str, opponent_history: &str, rng: &mut RpsRandom) -> &'static str",
+        "static_validation": "rust-strategy-contract-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": [
+          "*.rs",
+          "resources/*.csv",
+          "resources/*.json",
+          "resources/*.txt",
+          "resources/**/*.csv",
+          "resources/**/*.json",
+          "resources/**/*.txt"
+        ],
+        "forbidden_paths": [
+          ".cargo",
+          ".git",
+          ".github",
+          ".hg",
+          ".gitlab-ci.yml",
+          ".svn",
+          "Cargo.lock",
+          "Cargo.toml",
+          "Dockerfile",
+          "Justfile",
+          "Makefile",
+          "compose.yml",
+          "docker-compose.yml",
+          "entrypoint.sh",
+          "rust-toolchain",
+          "rust-toolchain.toml",
+          "target",
+          "wrapper.rs"
+        ],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": [
+          "strategy.rs"
+        ],
+        "version": "rust-source-schema-v1"
+      }
+    },
     "typescript": {
       "assets": {
         "base_runtime": {"path": "typescript/runtimes.json", "sha256": "sha256:e3eb05b29af82bbc272ccc7630c283e86fdfb0846deb0a3dccf7628a67912847", "version": "typescript-runtime-v1"},
