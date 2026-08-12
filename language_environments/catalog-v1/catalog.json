@@ -174,6 +174,40 @@
         "version": "java-source-schema-v1"
       }
     },
+    "typescript": {
+      "assets": {
+        "base_runtime": {"path": "typescript/runtimes.json", "sha256": "sha256:e3eb05b29af82bbc272ccc7630c283e86fdfb0846deb0a3dccf7628a67912847", "version": "typescript-runtime-v1"},
+        "build_toolchain": {"path": "typescript/runtimes.json", "sha256": "sha256:e3eb05b29af82bbc272ccc7630c283e86fdfb0846deb0a3dccf7628a67912847", "version": "typescript-build-toolchain-v1"},
+        "build_target": {"path": "typescript/Dockerfile", "sha256": "sha256:233e3544f4db6d99c51dde9fa3970a6fcf865b87b679a7369356ee1801dc3bf4", "version": "typescript-build-target-v1"},
+        "conformance": {"path": "typescript/conformance.json", "sha256": "sha256:dddd1c15d1d0f2bf87677f71bb4fc18b7f72965a213121ef0d226914efbeb9ed", "version": "typescript-conformance-v1"},
+        "dependency_definition": {"path": "typescript/typescript-6.0.3.tgz", "sha256": "sha256:33cd0ee1beaa8c9e9d15a9da836c62ddea4c34a42d7c2d349dbc80d94165d22a", "version": "typescript-compiler-package-v1"},
+        "entrypoint": {"path": "typescript/entrypoint.json", "sha256": "sha256:47d2bc6d6e9288f88defffc0a6d02bdf854cb1cafd6e823f1782170ae0f962ab", "version": "typescript-entrypoint-v1"},
+        "platform": {"path": "typescript/runtimes.json", "sha256": "sha256:e3eb05b29af82bbc272ccc7630c283e86fdfb0846deb0a3dccf7628a67912847", "version": "typescript-oci-platforms-v1"},
+        "readiness": {"path": "typescript/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "typescript/Dockerfile", "sha256": "sha256:233e3544f4db6d99c51dde9fa3970a6fcf865b87b679a7369356ee1801dc3bf4", "version": "typescript-build-recipe-v1"},
+        "workflow": {"path": "typescript/workflow.yml", "sha256": "sha256:27b6b945599f6ab930a2f5bd7116d6e78d0e2097b52dc0e00210a7b7e7257dfd", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "typescript/RpsWrapper.ts", "sha256": "sha256:7c44b23c148b39cf7a53e8c1802fa0f05bbcf29d13ae740a06f8a31cfda2791d", "version": "typescript-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "typescript-language-environment-v1",
+      "language": "typescript",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "chooseMove",
+        "signature": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string",
+        "static_validation": "typescript-strategy-contract-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": ["*.ts", "resources/*.csv", "resources/*.json", "resources/*.txt", "resources/**/*.csv", "resources/**/*.json", "resources/**/*.txt"],
+        "forbidden_paths": [".git", ".github", ".hg", ".gitlab-ci.yml", ".svn", "Dockerfile", "Justfile", "Makefile", "compose.yml", "docker-compose.yml", "entrypoint.sh", "node_modules", "package-lock.json", "package.json", "pnpm-lock.yaml", "tsconfig.json", "yarn.lock", "RpsWrapper.ts", "rps_wrapper.ts", "wrapper.ts"],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": ["strategy.ts"],
+        "version": "typescript-source-schema-v1"
+      }
+    },
     "internal-shell": {
       "assets": {
         "base_runtime": {"path": "internal-shell/runtimes.json", "sha256": "sha256:c8c91b683287d06ecc407ef4f568c2c4db18223d91541e1f67343138e028b62c", "version": "internal-shell-runtime-v1"},

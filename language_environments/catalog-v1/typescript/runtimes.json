@@ -1,0 +1,37 @@
+{
+  "selection": {
+    "policy": "latest-upstream-supported-lts",
+    "node_version": "24.19.0",
+    "node_lts_release": "24",
+    "typescript_version": "6.0.3",
+    "rationale": "Node.js 24.19.0 is the latest release on the newest upstream-supported LTS line; TypeScript 6.0.3 is the latest compatible stable compiler.",
+    "selected_on": "2026-08-12",
+    "upstream_node_release": "https://nodejs.org/en/download/archive/v24",
+    "upstream_typescript_release": "https://github.com/microsoft/TypeScript/releases/tag/v6.0.3"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {
+        "image": "docker.io/library/node@sha256:65932751ed4073ed02f5c04e494e4b2572a891b7dbea0568a863dc80341bf848",
+        "typescript": {"package": "typescript-6.0.3.tgz", "sha256": "sha256:33cd0ee1beaa8c9e9d15a9da836c62ddea4c34a42d7c2d349dbc80d94165d22a", "version": "6.0.3"},
+        "version": "linux-amd64-node-24.19.0-typescript-6.0.3-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/node@sha256:65932751ed4073ed02f5c04e494e4b2572a891b7dbea0568a863dc80341bf848",
+        "version": "linux-amd64-node-24.19.0-execution-runtime-v1"
+      }
+    },
+    "linux/arm64": {
+      "build_toolchain": {
+        "image": "docker.io/library/node@sha256:c133efe216ffb6e785ed9a8be55a29fcb86775e8008ae0a9f0ed6af4f175bb03",
+        "typescript": {"package": "typescript-6.0.3.tgz", "sha256": "sha256:33cd0ee1beaa8c9e9d15a9da836c62ddea4c34a42d7c2d349dbc80d94165d22a", "version": "6.0.3"},
+        "version": "linux-arm64-node-24.19.0-typescript-6.0.3-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/node@sha256:c133efe216ffb6e785ed9a8be55a29fcb86775e8008ae0a9f0ed6af4f175bb03",
+        "version": "linux-arm64-node-24.19.0-execution-runtime-v1"
+      }
+    }
+  },
+  "version": "typescript-runtime-v1"
+}

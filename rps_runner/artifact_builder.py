@@ -294,6 +294,10 @@ def build_artifact_candidate(
         (organizer / "organizer" / wrapper.path.name).write_bytes(
             bundle.environment.assets["wrapper"].content
         )
+        dependencies = bundle.environment.assets["dependency_definition"]
+        (organizer / "organizer" / dependencies.path.name).write_bytes(
+            dependencies.content
+        )
         recipe = organizer / "Dockerfile"
         recipe.write_bytes(bundle.environment.assets["recipe"].content)
         iid_file = work / "image-id"

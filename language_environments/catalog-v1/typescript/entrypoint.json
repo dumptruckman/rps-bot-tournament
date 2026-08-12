@@ -1,0 +1,4 @@
+{
+  "argv": ["/usr/local/bin/node", "/opt/rps/dist/RpsWrapper.js"],
+  "version": "typescript-entrypoint-v1"
+}

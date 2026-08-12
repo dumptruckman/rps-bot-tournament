@@ -823,6 +823,54 @@ def _java_significant_source(source: str) -> str:
     return _c_like_significant_source(source, raw_delimiters=('"""',))
 
 
+def _validate_typescript_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "strategy.ts")
+    sources = []
+    for item in files:
+        if not item.path.endswith(".ts"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "TypeScript Team Source must be UTF-8: " + str(error),
+            )
+        significant = _c_like_significant_source(source, raw_delimiters=("`",))
+        sources.append((item, significant))
+        if re.search(r"\bprocess\s*\.\s*(?:stdin|stdout|stderr)\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not redefine organizer-owned wrapper I/O "
+                "responsibilities",
+            )
+
+    strategy_source = _c_like_significant_source(
+        source_file.content.decode("utf-8"), raw_delimiters=("`",)
+    )
+    signature = re.compile(
+        r"\bexport\s+function\s+chooseMove\s*\(\s*"
+        r"turn\s*:\s*number\s*,\s*myHistory\s*:\s*string\s*,\s*"
+        r"opponentHistory\s*:\s*string\s*,\s*rng\s*:\s*\{\s*"
+        r"nextInt\s*\(\s*(?:limit|upperExclusive)\s*:\s*number\s*\)\s*:\s*number\s*"
+        r"\}\s*\)\s*:\s*string\s*\{"
+    )
+    bindings = sum(
+        len(re.findall(r"\b(?:function|const|let|var|class)\s+chooseMove\b", value))
+        for _, value in sources
+    )
+    if bindings != 1 or not signature.search(strategy_source):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one exported chooseMove(turn: number, myHistory: string, "
+            "opponentHistory: string, rng: { nextInt(limit: number): number }): "
+            "string function",
+        )
+
+
 def _validate_python_function_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.py")
     try:
@@ -944,6 +992,7 @@ def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
 _PARTICIPANT_CONTRACT_VALIDATORS = {
     "go-strategy-contract-v1": _validate_go_strategy_contract,
     "java-strategy-contract-v1": _validate_java_strategy_contract,
+    "typescript-strategy-contract-v1": _validate_typescript_strategy_contract,
     "none-v1": _validate_no_static_contract,
     "single-unconditional-function-v1": _validate_python_function_contract,
 }

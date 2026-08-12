@@ -29,6 +29,7 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_artifact_certification_cli.py",
     "tests/test_multi_language_environment.py",
     "tests/test_java_language_environment.py",
+    "tests/test_typescript_language_environment.py",
     "tests/test_batch_plan_cli.py",
     "tests/test_tournament_plan_cli.py",
     "tests/test_tournament_cli.py",
@@ -122,6 +123,10 @@ def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
     return records
 
 
+def _language_display_name(language: str) -> str:
+    return "TypeScript" if language == "typescript" else language.title()
+
+
 def _certification_suites(catalog: Any) -> Dict[str, str]:
     suites: Dict[str, str] = {}
     for name, environment in sorted(catalog.environments.items()):
@@ -210,7 +215,7 @@ def _verify_stable_runtime_policy(
     additional_selection_fields: Sequence[str] = (),
 ) -> None:
     environment = catalog.environment(environment_name)
-    shown_name = environment_name.title()
+    shown_name = _language_display_name(environment_name)
     try:
         definition = json.loads(environment.assets["base_runtime"].content)
         selection = definition["selection"]
@@ -290,6 +295,52 @@ def _verify_java_dependency_policy(catalog: Any) -> None:
     )
 
 
+def _verify_typescript_release_policy(catalog: Any) -> None:
+    environment = catalog.environment("typescript")
+    try:
+        definition = json.loads(environment.assets["base_runtime"].content)
+        selection = definition["selection"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReleaseError(
+            "the TypeScript runtime must record its LTS and compiler selection"
+        ) from error
+    if set(selection) != {
+        "policy", "node_version", "node_lts_release", "typescript_version",
+        "rationale", "selected_on", "upstream_node_release",
+        "upstream_typescript_release",
+    } or selection["policy"] != "latest-upstream-supported-lts":
+        raise ReleaseError("the TypeScript runtime selection rationale is incomplete")
+    dependency = environment.assets["dependency_definition"]
+    for platform in ("linux/amd64", "linux/arm64"):
+        try:
+            selected = definition["platforms"][platform]
+            compiler = selected["build_toolchain"]["typescript"]
+        except (KeyError, TypeError) as error:
+            raise ReleaseError(
+                "the TypeScript runtime is missing immutable inputs for " + platform
+            ) from error
+        if set(selected) != {"build_toolchain", "execution_runtime"}:
+            raise ReleaseError("the TypeScript runtime coordinates are incomplete")
+        if set(selected["build_toolchain"]) != {"image", "typescript", "version"}:
+            raise ReleaseError("the TypeScript build toolchain coordinate is incomplete")
+        if set(selected["execution_runtime"]) != {"image", "version"}:
+            raise ReleaseError("the TypeScript execution runtime coordinate is incomplete")
+        if (
+            compiler.get("version") != selection["typescript_version"]
+            or compiler.get("sha256") != dependency.digest
+            or compiler.get("package") != dependency.path.name
+            or selection["node_version"] not in selected["build_toolchain"]["version"]
+            or selection["node_version"] not in selected["execution_runtime"]["version"]
+        ):
+            raise ReleaseError("the TypeScript compiler or Node.js identity is incomplete")
+    _verify_networkless_recipe_policy(
+        catalog,
+        "typescript",
+        "TypeScript",
+        ("npm install", "npm ci", "npx ", "curl ", "wget "),
+    )
+
+
 def _verify_release_policies(catalog: Any) -> None:
     _verify_immutable_action_references(catalog)
     _verify_python_dependency_policy(catalog)
@@ -298,6 +349,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_go_runtime_policy(catalog)
     _verify_java_runtime_policy(catalog)
     _verify_java_dependency_policy(catalog)
+    _verify_typescript_release_policy(catalog)
 
 
 def _bundle_identity(bundle_path: Path) -> str:
@@ -745,7 +797,7 @@ def _write_release_notes(
             for platform, values in sorted(runtime["platforms"].items())
         }
         notes += (
-            "\n## " + language.title() + " Team Template build toolchains\n\n"
+            "\n## " + _language_display_name(language) + " Team Template build toolchains\n\n"
             + str(selection.get("rationale", "Pinned production runtime."))
             + " Selected on " + str(selection.get("selected_on", "catalog preparation"))
             + "; upstream release: " + str(selection.get("upstream_release", "recorded in catalog"))

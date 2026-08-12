@@ -1,0 +1,41 @@
+{
+  "accepted_faults": {
+    "import-time": ["unexpected_exit"],
+    "memory": ["resource_oom", "unexpected_exit"],
+    "process": ["timeout"]
+  },
+  "contract": "choose-move-contract-v1",
+  "diagnostic_fixtures": ["syntax-build", "import-time", "nondeterministic", "protocol-fault", "slow-response", "memory", "process", "filesystem", "premature-output"],
+  "fixture_sources": {
+    "filesystem": "declare const require: (name: string) => any;\nconst limitEnforced = (() => { try { const fs = require('fs'); fs.writeFileSync('/tmp/conformance-fill', 'x'.repeat(32 * 1024 * 1024)); fs.unlinkSync('/tmp/conformance-fill'); return false; } catch { return true; } })();\nexport function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return limitEnforced ? 'R' : 'X'; }\n",
+    "import-time": "throw new Error('conformance initialization fixture');\nexport function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return 'R'; }\n",
+    "memory": "let retained: Uint8Array; export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { retained = new Uint8Array(512 * 1024 * 1024); for (let i = 0; i < retained.length; i += 4096) retained[i] = i; return 'R'; }\n",
+    "nondeterministic": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return ['R', 'P', 'S'][Math.floor(Math.random() * 3)]; }\n",
+    "premature-output": "console.log('R');\nexport function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return 'R'; }\n",
+    "process": "declare const require: (name: string) => any;\nexport function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { for (let i = 0; i < 60; i++) { const child = require('child_process').spawn('/bin/sleep', ['60']); child.on('error', () => {}); } while (true) {} }\n",
+    "protocol-fault": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return 'X'; }\n",
+    "slow-response": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { const until = Date.now() + 200; while (Date.now() < until) {} return 'R'; }\n",
+    "syntax-build": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return doesNotExist; }\n"
+  },
+  "practice_artifacts": {
+    "copycat": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return opponentHistory.length === 0 ? 'R' : opponentHistory.at(-1)!; }\n",
+    "fixed-move": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return 'R'; }\n",
+    "protocol-test": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { if (turn !== myHistory.length || myHistory.length !== opponentHistory.length || !/^[RPS]*$/.test(myHistory + opponentHistory)) return 'X'; return ['R', 'P', 'S'][turn % 3]; }\n",
+    "random": "export function chooseMove(turn: number, myHistory: string, opponentHistory: string, rng: { nextInt(limit: number): number }): string { return ['R', 'P', 'S'][rng.nextInt(3)]; }\n"
+  },
+  "seed_adapter": {
+    "algorithm": "SplitMix64 seeded from the unsigned decimal RPS_SEED",
+    "golden_vectors": [
+      {"seed": "0", "first_uint64": ["16294208416658607535", "7960286522194355700", "487617019471545679"]},
+      {"seed": "1", "first_uint64": ["10451216379200822465", "13757245211066428519", "17911839290282890590"]},
+      {"seed": "9223372036854775807", "first_uint64": ["3055647633038352039", "17441316833444690247", "17011665146503905680"]},
+      {"seed": "18446744073709551615", "first_uint64": ["16490336266968443936", "16834447057089888969", "4048727598324417001"]}
+    ],
+    "system_randomness": false,
+    "version": "typescript-splitmix64-seed-adapter-v1"
+  },
+  "source_path": "strategy.ts",
+  "syntax_diagnostic": "error TS",
+  "syntax_stage": "build",
+  "suite_version": "typescript-artifact-conformance-v1"
+}
