@@ -39,8 +39,8 @@ Release without lowering the acceptance bar used by required languages.
 
 ## Answer
 
-Rust 1.97.1 is published in the independently verified `catalog-v11` release at
-Runner commit `61b755ea85617e00ba638979708bec7afd69de5f`. The catalog pins exact
+Rust 1.97.1 is published in the independently verified `catalog-v12` release at
+Runner commit `5e2dae30f5cc99393047ae91a59679825555e90e`. The catalog pins exact
 official Linux/AMD64 and Linux/ARM64 image manifests, uses a networkless direct
 `rustc` build with no external crates, and owns the source contract, wrapper,
 entrypoint, readiness, dependency policy, seed vectors, and conformance assets.
@@ -48,5 +48,5 @@ entrypoint, readiness, dependency policy, seed vectors, and conformance assets.
 The focused Docker acceptance suite passed complete Advisory Validation on
 Linux/AMD64 and Final Validation on Linux/ARM64, including diagnostics,
 practice artifacts, and a mixed-language match. The isolated release proof then
-passed all 149 official organizer workflow tests and confirmed the Runner has no
+passed all 151 official organizer workflow tests and confirmed the Runner has no
 dependency on the Team Template repository.
