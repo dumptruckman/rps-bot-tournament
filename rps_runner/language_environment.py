@@ -823,6 +823,68 @@ def _java_significant_source(source: str) -> str:
     return _c_like_significant_source(source, raw_delimiters=('"""',))
 
 
+def _validate_csharp_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "Strategy.cs")
+    sources = []
+    for item in files:
+        if not item.path.endswith(".cs"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "C# Team Source must be UTF-8: " + str(error),
+            )
+        significant = _c_like_significant_source(source, raw_delimiters=('"""',))
+        sources.append((item, significant))
+        if re.search(r"\bnamespace\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "C# Team Source must use the organizer-owned global namespace",
+            )
+        if re.search(r"\b(?:class|record|struct)\s+(?:Program|RpsWrapper|RpsRandom)\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define organizer-owned wrapper types",
+            )
+        if re.search(r"\bstatic\s+void\s+Main\s*\(", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned Main method",
+            )
+
+    strategy = _c_like_significant_source(
+        source_file.content.decode("utf-8"), raw_delimiters=('"""',)
+    )
+    if len(re.findall(r"\bpublic\s+static\s+class\s+Strategy\b", strategy)) != 1:
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "Strategy.cs must define exactly one public static Strategy class",
+        )
+    signature = re.compile(
+        r"\bpublic\s+static\s+string\s+ChooseMove\s*\(\s*"
+        r"int\s+turn\s*,\s*string\s+myHistory\s*,\s*"
+        r"string\s+opponentHistory\s*,\s*RpsRandom\s+rng\s*\)\s*(?:=>|\{)"
+    )
+    bindings = sum(
+        len(re.findall(r"\b(?:class|record|struct|string)\s+ChooseMove\b", value))
+        for _, value in sources
+    )
+    if bindings != 1 or not signature.search(strategy):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one public static string ChooseMove(int turn, string "
+            "myHistory, string opponentHistory, RpsRandom rng) method",
+        )
+
+
 def _validate_typescript_strategy_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.ts")
     sources = []
@@ -990,6 +1052,7 @@ def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
 
 
 _PARTICIPANT_CONTRACT_VALIDATORS = {
+    "csharp-strategy-contract-v1": _validate_csharp_strategy_contract,
     "go-strategy-contract-v1": _validate_go_strategy_contract,
     "java-strategy-contract-v1": _validate_java_strategy_contract,
     "typescript-strategy-contract-v1": _validate_typescript_strategy_contract,

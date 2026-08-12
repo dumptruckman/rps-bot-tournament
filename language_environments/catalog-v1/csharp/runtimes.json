@@ -1,0 +1,35 @@
+{
+  "selection": {
+    "policy": "latest-upstream-supported-lts",
+    "dotnet_release": "10",
+    "sdk_version": "10.0.302",
+    "runtime_version": "10.0.10",
+    "csharp_version": "14",
+    "rationale": ".NET 10 is the latest upstream-supported LTS line; SDK 10.0.302 and runtime 10.0.10 were the latest servicing releases available when selected.",
+    "selected_on": "2026-08-12",
+    "upstream_release": "https://dotnet.microsoft.com/download/dotnet/10.0"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {
+        "image": "mcr.microsoft.com/dotnet/sdk@sha256:7a91ccecc26d71bf7688c627a6b5eae2e27bb2cd1e37e8abe738348904245692",
+        "version": "linux-amd64-dotnet-sdk-10.0.302-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "mcr.microsoft.com/dotnet/runtime@sha256:4d3f0fed221262600ace6384e809d7954a2d77266bc2f08193f763c5702bedce",
+        "version": "linux-amd64-dotnet-runtime-10.0.10-execution-runtime-v1"
+      }
+    },
+    "linux/arm64": {
+      "build_toolchain": {
+        "image": "mcr.microsoft.com/dotnet/sdk@sha256:683d16913974bf1311381ccd6d6aba55213f313501c39ef964b0458f44c0c4bc",
+        "version": "linux-arm64-dotnet-sdk-10.0.302-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "mcr.microsoft.com/dotnet/runtime@sha256:9c6a00c4c4f36b64f9d1bef6226fff9b219ceca3f75ede924d06649710a3ebba",
+        "version": "linux-arm64-dotnet-runtime-10.0.10-execution-runtime-v1"
+      }
+    }
+  },
+  "version": "csharp-runtime-v1"
+}

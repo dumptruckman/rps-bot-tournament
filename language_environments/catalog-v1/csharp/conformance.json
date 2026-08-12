@@ -1,0 +1,43 @@
+{
+  "accepted_faults": {
+    "import-time": ["unexpected_exit"],
+    "memory": ["resource_oom", "unexpected_exit", "timeout"]
+  },
+  "contract": "choose-move-contract-v1",
+  "diagnostic_fixtures": [
+    "syntax-build", "import-time", "nondeterministic", "protocol-fault",
+    "slow-response", "memory", "process", "filesystem", "premature-output"
+  ],
+  "fixture_sources": {
+    "filesystem": "using System;\nusing System.IO;\npublic static class Strategy { static readonly bool Limited = Probe(); static bool Probe() { try { File.WriteAllBytes(\"/tmp/conformance-fill\", new byte[32 * 1024 * 1024]); File.Delete(\"/tmp/conformance-fill\"); return false; } catch { return true; } } public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => Limited ? \"R\" : \"X\"; }\n",
+    "import-time": "using System;\npublic static class Strategy { static Strategy() { throw new InvalidOperationException(\"conformance initialization fixture\"); } public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => \"R\"; }\n",
+    "memory": "public static class Strategy { static byte[]? retained; public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) { retained = new byte[512 * 1024 * 1024]; for (int i = 0; i < retained.Length; i += 4096) retained[i] = (byte)i; return \"R\"; } }\n",
+    "nondeterministic": "using System.Security.Cryptography;\npublic static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => new[] { \"R\", \"P\", \"S\" }[RandomNumberGenerator.GetInt32(3)]; }\n",
+    "premature-output": "using System;\npublic static class Strategy { static Strategy() { Console.WriteLine(\"R\"); } public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => \"R\"; }\n",
+    "process": "using System;\nusing System.Collections.Generic;\nusing System.Diagnostics;\npublic static class Strategy { static readonly bool Limited = Probe(); static bool Probe() { var children = new List<Process>(); try { for (int i = 0; i < 60; i++) children.Add(Process.Start(\"/bin/sleep\", \"60\")!); return false; } catch { return true; } finally { foreach (var child in children) try { child.Kill(); } catch {} } } public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => Limited ? \"R\" : \"X\"; }\n",
+    "protocol-fault": "public static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => \"X\"; }\n",
+    "slow-response": "using System.Threading;\npublic static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) { Thread.Sleep(200); return \"R\"; } }\n",
+    "syntax-build": "public static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) { this is not valid C# return \"R\"; } }\n"
+  },
+  "practice_artifacts": {
+    "copycat": "public static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => opponentHistory.Length == 0 ? \"R\" : opponentHistory[^1].ToString(); }\n",
+    "fixed-move": "public static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => \"R\"; }\n",
+    "protocol-test": "using System.Text.RegularExpressions;\npublic static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) { if (turn != myHistory.Length || myHistory.Length != opponentHistory.Length) return \"X\"; if (!Regex.IsMatch(myHistory + opponentHistory, \"^[RPS]*$\")) return \"X\"; return new[] { \"R\", \"P\", \"S\" }[turn % 3]; } }\n",
+    "random": "public static class Strategy { public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng) => new[] { \"R\", \"P\", \"S\" }[rng.NextInt(3)]; }\n"
+  },
+  "seed_adapter": {
+    "algorithm": "SplitMix64 seeded from the unsigned decimal RPS_SEED",
+    "golden_vectors": [
+      {"seed": "0", "first_uint64": ["16294208416658607535", "7960286522194355700", "487617019471545679"]},
+      {"seed": "1", "first_uint64": ["10451216379200822465", "13757245211066428519", "17911839290282890590"]},
+      {"seed": "9223372036854775807", "first_uint64": ["3055647633038352039", "17441316833444690247", "17011665146503905680"]},
+      {"seed": "18446744073709551615", "first_uint64": ["16490336266968443936", "16834447057089888969", "4048727598324417001"]}
+    ],
+    "system_randomness": false,
+    "version": "csharp-splitmix64-seed-adapter-v1"
+  },
+  "source_path": "Strategy.cs",
+  "syntax_diagnostic": "error CS",
+  "syntax_stage": "build",
+  "suite_version": "csharp-artifact-conformance-v1"
+}

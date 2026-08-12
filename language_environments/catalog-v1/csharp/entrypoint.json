@@ -1,0 +1,4 @@
+{
+  "argv": ["/usr/bin/dotnet", "/opt/rps/RpsBot.dll"],
+  "version": "csharp-entrypoint-v1"
+}

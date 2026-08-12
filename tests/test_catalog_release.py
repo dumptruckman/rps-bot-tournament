@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "c092fe676e170446d60c512d1e27daf32fc5c515b2ec889a5c1aec9df54e288d",
+            "d105931abfa77b3e0dc67bf6f6b71e2fc0b0cede4b99ae05decd9b7c54688231",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -125,6 +125,17 @@ class CatalogReleaseTests(unittest.TestCase):
                 "java.recipe",
                 "java.workflow",
                 "java.wrapper",
+                "csharp.base_runtime",
+                "csharp.build_toolchain",
+                "csharp.build_target",
+                "csharp.conformance",
+                "csharp.dependency_definition",
+                "csharp.entrypoint",
+                "csharp.platform",
+                "csharp.readiness",
+                "csharp.recipe",
+                "csharp.workflow",
+                "csharp.wrapper",
                 "typescript.base_runtime",
                 "typescript.build_toolchain",
                 "typescript.build_target",
@@ -174,6 +185,8 @@ class CatalogReleaseTests(unittest.TestCase):
                 "d791f1719d0becbcb1b36bf4f94a006484637d8762685d9b7471ca1f8f39c1e8",
                 "java": "java-artifact-conformance-v1@sha256:"
                 "f29543b7644c0a65dc46ed3c88e5215b5177a2434f156f27130e81c613d4aa3f",
+                "csharp": "csharp-artifact-conformance-v1@sha256:"
+                "a1715ef34a2bfef92976a30ac490d498e913cbf2ae0ad4f1a8b4ae8235b98c6f",
                 "python": "python-artifact-conformance-v1@sha256:"
                 "0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057",
                 "typescript": "typescript-artifact-conformance-v1@sha256:"
@@ -182,7 +195,7 @@ class CatalogReleaseTests(unittest.TestCase):
         )
         self.assertEqual(
             set(manifest["platform_runtimes"]),
-            {"go", "java", "python", "typescript"},
+            {"csharp", "go", "java", "python", "typescript"},
         )
         python_runtimes = manifest["platform_runtimes"]["python"]
         self.assertEqual(
@@ -195,6 +208,10 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["platform_runtimes"]["java"]["selection"]["policy"],
             "latest-upstream-supported-lts",
+        )
+        self.assertEqual(
+            manifest["platform_runtimes"]["csharp"]["selection"]["sdk_version"],
+            "10.0.302",
         )
         for platform in ("linux/amd64", "linux/arm64"):
             runtime = python_runtimes["platforms"][platform]
@@ -367,6 +384,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertIn("catalog-independence-evidence.json", workflow)
         self.assertIn("catalog-release-notes.md", workflow)
         self.assertIn("JavaLanguageEnvironmentDockerTests", workflow)
+        self.assertIn("CSharpLanguageEnvironmentDockerTests", workflow)
         self.assertIn("RPS_DOCKER_PLATFORM: linux/amd64", workflow)
         self.assertRegex(
             workflow,
@@ -484,8 +502,9 @@ class CatalogIndependenceProofTests(unittest.TestCase):
         self.assertIn("## Python Team Template build toolchains", notes)
         self.assertIn("## Go Team Template build toolchains", notes)
         self.assertIn("## Java Team Template build toolchains", notes)
+        self.assertIn("## C# Team Template build toolchains", notes)
         self.assertIn("## TypeScript Team Template build toolchains", notes)
-        for language in ("go", "java", "python", "typescript"):
+        for language in ("csharp", "go", "java", "python", "typescript"):
             for platform in ("linux/amd64", "linux/arm64"):
                 build = manifest["platform_runtimes"][language]["platforms"][platform][
                     "build_toolchain"
@@ -536,6 +555,7 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 "tests/test_artifact_builder_cli.py",
                 "tests/test_artifact_certification_cli.py",
                 "tests/test_multi_language_environment.py",
+                "tests/test_csharp_language_environment.py",
                 "tests/test_java_language_environment.py",
                 "tests/test_typescript_language_environment.py",
                 "tests/test_batch_plan_cli.py",

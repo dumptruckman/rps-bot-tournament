@@ -174,6 +174,40 @@
         "version": "java-source-schema-v1"
       }
     },
+    "csharp": {
+      "assets": {
+        "base_runtime": {"path": "csharp/runtimes.json", "sha256": "sha256:ed45f9845c468ab0c121e11db2782700dbdb5b2cac3f88047caa1c7e5a09c79f", "version": "csharp-runtime-v1"},
+        "build_toolchain": {"path": "csharp/runtimes.json", "sha256": "sha256:ed45f9845c468ab0c121e11db2782700dbdb5b2cac3f88047caa1c7e5a09c79f", "version": "csharp-build-toolchain-v1"},
+        "build_target": {"path": "csharp/Dockerfile", "sha256": "sha256:7654969a9e92c355e41a9710884a8a95ba8ce465d37792b312af26ddaa42f1ed", "version": "csharp-build-target-v1"},
+        "conformance": {"path": "csharp/conformance.json", "sha256": "sha256:a1715ef34a2bfef92976a30ac490d498e913cbf2ae0ad4f1a8b4ae8235b98c6f", "version": "csharp-conformance-v1"},
+        "dependency_definition": {"path": "csharp/RpsBot.runtimeconfig.json", "sha256": "sha256:6413e1e7988a6e9df20a9c8e6ee60b729892f37c0b83e009f80c15a67c63a139", "version": "csharp-runtime-config-v1"},
+        "entrypoint": {"path": "csharp/entrypoint.json", "sha256": "sha256:48a41a172878403001e190b8d323d7e076514cec90da45cf8e082049693b55db", "version": "csharp-entrypoint-v1"},
+        "platform": {"path": "csharp/runtimes.json", "sha256": "sha256:ed45f9845c468ab0c121e11db2782700dbdb5b2cac3f88047caa1c7e5a09c79f", "version": "csharp-oci-platforms-v1"},
+        "readiness": {"path": "csharp/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "csharp/Dockerfile", "sha256": "sha256:7654969a9e92c355e41a9710884a8a95ba8ce465d37792b312af26ddaa42f1ed", "version": "csharp-build-recipe-v1"},
+        "workflow": {"path": "csharp/workflow.yml", "sha256": "sha256:78ccccf3ae3b478e895d88746988a090aac5909372c7ce61b79f3af42c54b6a9", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "csharp/RpsWrapper.cs", "sha256": "sha256:4eff87ce1fb7a09f08da2cfca7c39ab13b7049fedb4b8cd3efc86124c8e70f8a", "version": "csharp-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "csharp-language-environment-v1",
+      "language": "csharp",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "Strategy.ChooseMove",
+        "signature": "public static string ChooseMove(int turn, string myHistory, string opponentHistory, RpsRandom rng)",
+        "static_validation": "csharp-strategy-contract-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": ["*.cs", "resources/*.csv", "resources/*.json", "resources/*.txt", "resources/**/*.csv", "resources/**/*.json", "resources/**/*.txt"],
+        "forbidden_paths": [".git", ".github", ".hg", ".gitlab-ci.yml", ".svn", "Dockerfile", "Justfile", "Makefile", "compose.yml", "docker-compose.yml", "entrypoint.sh", "bin", "obj", "packages", "NuGet.Config", "packages.lock.json", "RpsBot.csproj", "RpsWrapper.cs", "RpsRandom.cs", "Program.cs"],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": ["Strategy.cs"],
+        "version": "csharp-source-schema-v1"
+      }
+    },
     "typescript": {
       "assets": {
         "base_runtime": {"path": "typescript/runtimes.json", "sha256": "sha256:e3eb05b29af82bbc272ccc7630c283e86fdfb0846deb0a3dccf7628a67912847", "version": "typescript-runtime-v1"},

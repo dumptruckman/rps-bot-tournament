@@ -33,12 +33,16 @@ jobs:
           -v
       - name: Exercise Java catalog and Seed Adapter contracts
         run: python -m unittest tests.test_java_language_environment.JavaLanguageEnvironmentTests -v
+      - name: Exercise C# catalog and Seed Adapter contracts
+        run: python -m unittest tests.test_csharp_language_environment.CSharpLanguageEnvironmentTests -v
       - name: Prepare exact internal-fixture images
         run: |
           docker pull --platform linux/amd64 docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4
           docker pull --platform linux/amd64 docker.io/library/busybox@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f
           docker pull --platform linux/amd64 docker.io/library/eclipse-temurin@sha256:78e1c29a95bd36513e7d67eb730b699c6e6f46ef975e35e937c66eb726539609
           docker pull --platform linux/amd64 docker.io/library/eclipse-temurin@sha256:c650e8097620a27a61f476d2a269e02078dc9f316136ecd9821dedd98b89e719
+          docker pull --platform linux/amd64 mcr.microsoft.com/dotnet/sdk@sha256:7a91ccecc26d71bf7688c627a6b5eae2e27bb2cd1e37e8abe738348904245692
+          docker pull --platform linux/amd64 mcr.microsoft.com/dotnet/runtime@sha256:4d3f0fed221262600ace6384e809d7954a2d77266bc2f08193f763c5702bedce
       - name: Prove the second executable Language Environment
         env:
           RPS_RUN_DOCKER_INTEGRATION: "1"
@@ -51,6 +55,14 @@ jobs:
         run: >-
           python -m unittest
           tests.test_java_language_environment.JavaLanguageEnvironmentDockerTests
+          -v
+      - name: Prove C# Linux/AMD64 Advisory Validation
+        env:
+          RPS_RUN_DOCKER_INTEGRATION: "1"
+          RPS_DOCKER_PLATFORM: linux/amd64
+        run: >-
+          python -m unittest
+          tests.test_csharp_language_environment.CSharpLanguageEnvironmentDockerTests
           -v
       - name: Configure the disposable proof release identity
         run: |

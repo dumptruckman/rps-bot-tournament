@@ -28,6 +28,7 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_artifact_builder_cli.py",
     "tests/test_artifact_certification_cli.py",
     "tests/test_multi_language_environment.py",
+    "tests/test_csharp_language_environment.py",
     "tests/test_java_language_environment.py",
     "tests/test_typescript_language_environment.py",
     "tests/test_batch_plan_cli.py",
@@ -124,7 +125,8 @@ def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
 
 
 def _language_display_name(language: str) -> str:
-    return "TypeScript" if language == "typescript" else language.title()
+    names = {"csharp": "C#", "typescript": "TypeScript"}
+    return names.get(language, language.title())
 
 
 def _certification_suites(catalog: Any) -> Dict[str, str]:
@@ -341,6 +343,42 @@ def _verify_typescript_release_policy(catalog: Any) -> None:
     )
 
 
+def _verify_csharp_release_policy(catalog: Any) -> None:
+    environment = catalog.environment("csharp")
+    try:
+        definition = json.loads(environment.assets["base_runtime"].content)
+        selection = definition["selection"]
+        runtime_config = json.loads(
+            environment.assets["dependency_definition"].content
+        )
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReleaseError("the C# release inputs are incomplete") from error
+    if set(selection) != {
+        "policy", "dotnet_release", "sdk_version", "runtime_version",
+        "csharp_version", "rationale", "selected_on", "upstream_release",
+    } or selection["policy"] != "latest-upstream-supported-lts":
+        raise ReleaseError("the C# runtime selection rationale is incomplete")
+    if runtime_config.get("runtimeOptions", {}).get("framework") != {
+        "name": "Microsoft.NETCore.App",
+        "version": selection["runtime_version"],
+    }:
+        raise ReleaseError("the C# runtime configuration is not pinned")
+    for platform in ("linux/amd64", "linux/arm64"):
+        try:
+            selected = definition["platforms"][platform]
+        except (KeyError, TypeError) as error:
+            raise ReleaseError("the C# runtime is missing " + platform) from error
+        if set(selected) != {"build_toolchain", "execution_runtime"}:
+            raise ReleaseError("the C# runtime coordinates are incomplete")
+        if selection["sdk_version"] not in selected["build_toolchain"]["version"]:
+            raise ReleaseError("the C# SDK coordinate is incomplete")
+        if selection["runtime_version"] not in selected["execution_runtime"]["version"]:
+            raise ReleaseError("the C# runtime coordinate is incomplete")
+    _verify_networkless_recipe_policy(
+        catalog, "csharp", "C#", ("dotnet restore", "nuget", "curl ", "wget ")
+    )
+
+
 def _verify_release_policies(catalog: Any) -> None:
     _verify_immutable_action_references(catalog)
     _verify_python_dependency_policy(catalog)
@@ -349,6 +387,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_go_runtime_policy(catalog)
     _verify_java_runtime_policy(catalog)
     _verify_java_dependency_policy(catalog)
+    _verify_csharp_release_policy(catalog)
     _verify_typescript_release_policy(catalog)
 
 
