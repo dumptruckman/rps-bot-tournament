@@ -94,15 +94,15 @@ class SourceValidationCliTests(unittest.TestCase):
         self.assertEqual(first["environment"], "python")
         self.assertEqual(first["participant_contract"]["callable"], "choose_move")
         expected_versions = {
-                "base_runtime": "python-runtime-v1",
-                "build_toolchain": "python-build-toolchain-v1",
+                "base_runtime": "python-runtime-v2",
+                "build_toolchain": "python-build-toolchain-v2",
                 "build_target": "python-build-target-v1",
                 "catalog": "rps-language-environment-catalog-v1",
                 "conformance": "python-conformance-v1",
                 "dependency_definition": "python-dependencies-v1",
-                "descriptor": "python-language-environment-v1",
+                "descriptor": "python-language-environment-v2",
                 "entrypoint": "python-entrypoint-v1",
-                "platform": "oci-platforms-v1",
+                "platform": "python-oci-platforms-v2",
                 "readiness": "wrapper-readiness-v1",
                 "recipe": "python-build-recipe-v1",
                 "source_schema": "python-source-schema-v1",

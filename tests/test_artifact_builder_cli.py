@@ -331,6 +331,8 @@ class ArtifactBuilderCliTests(unittest.TestCase):
                 "FAKE_DOCKER_LOG": str(self.docker_log),
                 "FAKE_DOCKER_MODE": "success",
                 "FAKE_RUNTIME_DIGEST": runtime_data["platforms"]["linux/amd64"][
+                    "execution_runtime"
+                ][
                     "image"
                 ].split("@", 1)[1],
             }

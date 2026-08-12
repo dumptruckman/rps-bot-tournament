@@ -1,13 +1,32 @@
 {
+  "selection": {
+    "policy": "latest-upstream-supported-stable",
+    "python_version": "3.14.6",
+    "rationale": "Python does not designate a general LTS release; 3.14.6 was the latest stable upstream release when selected.",
+    "selected_on": "2026-08-11",
+    "upstream_release": "https://www.python.org/downloads/release/python-3146/"
+  },
   "platforms": {
     "linux/amd64": {
-      "image": "docker.io/library/python@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f",
-      "version": "linux-amd64-python-runtime-v1"
+      "build_toolchain": {
+        "image": "docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4",
+        "version": "linux-amd64-python-3.14.6-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4",
+        "version": "linux-amd64-python-3.14.6-execution-runtime-v1"
+      }
     },
     "linux/arm64": {
-      "image": "docker.io/library/python@sha256:8c5de2243cba89f49a93e05cacb78e27058bcaa69c148baac127005da03af39e",
-      "version": "linux-arm64-python-runtime-v1"
+      "build_toolchain": {
+        "image": "docker.io/library/python@sha256:1609c3e634a6ad5b4759f67e34c246640d41858fffde69876245fd26afd632b7",
+        "version": "linux-arm64-python-3.14.6-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/python@sha256:1609c3e634a6ad5b4759f67e34c246640d41858fffde69876245fd26afd632b7",
+        "version": "linux-arm64-python-3.14.6-execution-runtime-v1"
+      }
     }
   },
-  "version": "python-runtime-v1"
+  "version": "python-runtime-v2"
 }

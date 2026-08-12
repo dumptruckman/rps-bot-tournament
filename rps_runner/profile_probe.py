@@ -97,19 +97,15 @@ def _run(
 
 def _runtime_reference(catalog_path: Path, target_platform: str) -> tuple[str, str]:
     catalog = load_catalog(catalog_path)
-    asset = catalog.environment("python").assets["base_runtime"]
     try:
-        definition = json.loads(asset.content)
-        selected = definition["platforms"][target_platform]
-        reference = selected["image"]
-        version = selected["version"]
-    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        _, runtime = catalog.environment("python").platform_images(target_platform)
+    except CatalogError as error:
         raise ProfileProbeFailure(
             "catalog has no valid Python runtime for " + target_platform
         ) from error
-    if not isinstance(reference, str) or "@sha256:" not in reference:
+    if "@sha256:" not in runtime.reference:
         raise ProfileProbeFailure("Python runtime reference is not immutable")
-    return reference, str(version) + "@" + reference.rsplit("@", 1)[1]
+    return runtime.reference, runtime.identity
 
 
 def measure_python_runtime(

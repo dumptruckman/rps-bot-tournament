@@ -33,7 +33,7 @@ jobs:
           -v
       - name: Prepare exact internal-fixture images
         run: |
-          docker pull --platform linux/amd64 docker.io/library/python@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f
+          docker pull --platform linux/amd64 docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4
           docker pull --platform linux/amd64 docker.io/library/busybox@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f
       - name: Prove the second executable Language Environment
         env:
@@ -50,6 +50,7 @@ jobs:
           catalog-independence-${{ github.sha }}
           --bundle ${{ runner.temp }}/rps-runner-catalog.bundle
           --evidence ${{ runner.temp }}/catalog-independence-evidence.json
+          --release-notes ${{ runner.temp }}/catalog-release-notes.md
       - name: Retain the release bundle and independence evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -57,5 +58,6 @@ jobs:
           path: |
             ${{ runner.temp }}/rps-runner-catalog.bundle
             ${{ runner.temp }}/catalog-independence-evidence.json
+            ${{ runner.temp }}/catalog-release-notes.md
           if-no-files-found: error
           retention-days: 90

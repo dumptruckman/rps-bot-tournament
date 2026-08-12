@@ -84,20 +84,20 @@
     },
     "python": {
       "assets": {
-        "base_runtime": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "python-runtime-v1"},
-        "build_toolchain": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "python-build-toolchain-v1"},
+        "base_runtime": {"path": "python/runtimes.json", "sha256": "sha256:e2e019156dba04246ee8e2d15765dc32af21f6c710828f56f7bc6536d62312b9", "version": "python-runtime-v2"},
+        "build_toolchain": {"path": "python/runtimes.json", "sha256": "sha256:e2e019156dba04246ee8e2d15765dc32af21f6c710828f56f7bc6536d62312b9", "version": "python-build-toolchain-v2"},
         "build_target": {"path": "python/Dockerfile", "sha256": "sha256:8b805ad8a1541971fce3322a25d67dfc6f6e758d0f85033ab50c8974baf69696", "version": "python-build-target-v1"},
         "conformance": {"path": "python/conformance.json", "sha256": "sha256:0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057", "version": "python-conformance-v1"},
         "dependency_definition": {"path": "python/requirements.lock", "sha256": "sha256:9f8c394be1f741a5351379bab966dec8e813ce017cb4e640d1f100e40e461f5f", "version": "python-dependencies-v1"},
         "entrypoint": {"path": "python/entrypoint.json", "sha256": "sha256:e663e70bb05c143591a06d352e325cb181136c5910fe62717056b0ed3fcb1e08", "version": "python-entrypoint-v1"},
-        "platform": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "oci-platforms-v1"},
+        "platform": {"path": "python/runtimes.json", "sha256": "sha256:e2e019156dba04246ee8e2d15765dc32af21f6c710828f56f7bc6536d62312b9", "version": "python-oci-platforms-v2"},
         "readiness": {"path": "python/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
         "recipe": {"path": "python/Dockerfile", "sha256": "sha256:8b805ad8a1541971fce3322a25d67dfc6f6e758d0f85033ab50c8974baf69696", "version": "python-build-recipe-v1"},
         "workflow": {"path": "python/workflow.yml", "sha256": "sha256:a66d958d1eaf7ed7b36ecc3aa0192dd28a67a172ef810d42575a8c73b14ce6f4", "version": "source-validation-workflow-v1"},
         "wrapper": {"path": "python/wrapper.py", "sha256": "sha256:a82ae2481ad47d0697f318ccf09c5e8bd9597efbbca12f31366fc61d811baed7", "version": "python-wrapper-v2"}
       },
       "contract_only": false,
-      "descriptor_version": "python-language-environment-v1",
+      "descriptor_version": "python-language-environment-v2",
       "language": "python",
       "publication": "production",
       "participant_contract": {

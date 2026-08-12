@@ -71,7 +71,8 @@ exist:
 ```text
 ./freeze-tournament-catalog prove catalog-v1 \
   --bundle ../rps-runner-catalog-v1.bundle \
-  --evidence ../rps-runner-catalog-v1-independence.json
+  --evidence ../rps-runner-catalog-v1-independence.json \
+  --release-notes ../rps-runner-catalog-v1-release-notes.md
 ```
 
 The proof creates and verifies the annotated Catalog Release and reproduces its
@@ -91,7 +92,11 @@ bundle. The resulting
 `runner-catalog-independence-v1` evidence embeds the annotated tag manifest and
 its exact `compatibility_coordinates`, records the internal fixture identity,
 and lists every workflow suite that passed. Retain the JSON evidence beside
-the exact bundle. CI retains both as one 90-day artifact for every commit.
+the exact bundle. The generated release notes reproduce those complete,
+copy-ready compatibility coordinates and the per-platform Python build-toolchain
+coordinates required by a companion Template Release's Docker check. They do
+not publish or transfer the Runner-owned recipe or wrapper. CI retains the
+bundle, evidence, and release notes as one 90-day artifact for every commit.
 
 ## Corrections and replacement versions
 

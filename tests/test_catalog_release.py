@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "922de3a340cc051354d20f472c4d65158e87dbdae310603584c391082f5bce71",
+            "bec500361e5e5d9526d6342bac34b5ace37557496884924c1d1d41fa00a9c2cb",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -144,7 +144,16 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             set(manifest["platform_runtimes"]), {"python"}
         )
-        for runtime in manifest["platform_runtimes"]["python"].values():
+        python_runtimes = manifest["platform_runtimes"]["python"]
+        self.assertEqual(
+            python_runtimes["selection"]["policy"],
+            "latest-upstream-supported-stable",
+        )
+        self.assertEqual(
+            python_runtimes["selection"]["python_version"], "3.14.6"
+        )
+        for platform in ("linux/amd64", "linux/arm64"):
+            runtime = python_runtimes["platforms"][platform]
             self.assertRegex(
                 runtime["build_toolchain"]["digest"], r"^sha256:[0-9a-f]{64}$"
             )
@@ -312,6 +321,7 @@ class CatalogReleaseTests(unittest.TestCase):
 
         self.assertIn("./freeze-tournament-catalog prove", workflow)
         self.assertIn("catalog-independence-evidence.json", workflow)
+        self.assertIn("catalog-release-notes.md", workflow)
         self.assertRegex(
             workflow,
             r"uses: actions/upload-artifact@[0-9a-f]{40}",
@@ -327,6 +337,7 @@ class CatalogIndependenceProofTests(unittest.TestCase):
         self.repository = self.root / "runner"
         self.bundle = self.root / "catalog-release.bundle"
         self.evidence = self.root / "catalog-independence.json"
+        self.release_notes = self.root / "catalog-release.md"
         shutil.copytree(
             PROJECT_ROOT,
             self.repository,
@@ -366,6 +377,8 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 str(self.bundle),
                 "--evidence",
                 str(self.evidence),
+                "--release-notes",
+                str(self.release_notes),
             ],
             cwd=self.repository,
             capture_output=True,
@@ -414,6 +427,22 @@ class CatalogIndependenceProofTests(unittest.TestCase):
             evidence["compatibility_coordinates"]["catalog"]["identity"],
             evidence["catalog_release"]["manifest"]["catalog"]["identity"],
         )
+        manifest = evidence["catalog_release"]["manifest"]
+        notes = self.release_notes.read_text()
+        self.assertIn("# Catalog Release catalog-proof-v1", notes)
+        self.assertIn("## Compatibility coordinates", notes)
+        self.assertIn(
+            json.dumps(manifest["compatibility_coordinates"], indent=2, sort_keys=True),
+            notes,
+        )
+        self.assertIn("## Python Team Template build toolchains", notes)
+        for platform in ("linux/amd64", "linux/arm64"):
+            build = manifest["platform_runtimes"]["python"]["platforms"][platform][
+                "build_toolchain"
+            ]
+            self.assertIn(platform, notes)
+            self.assertIn(build["reference"], notes)
+            self.assertIn(build["version"], notes)
         self.assertEqual(
             evidence["repository_scan"]["companion_repository"], "absent"
         )

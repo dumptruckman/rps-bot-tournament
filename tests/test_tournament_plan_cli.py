@@ -113,7 +113,10 @@ class TournamentPlanCliTests(unittest.TestCase):
             environment.assets["base_runtime"].content
         )
         pinned = runtime_definitions["platforms"]["linux/arm64"]
-        runtime_digest = pinned["image"].rsplit("@", 1)[1]
+        runtime = pinned["execution_runtime"]
+        build_toolchain = pinned["build_toolchain"]
+        runtime_digest = runtime["image"].rsplit("@", 1)[1]
+        build_toolchain_digest = build_toolchain["image"].rsplit("@", 1)[1]
         artifact_digest = self.digest(character)
         source_digest = self.digest(str(ordinal + 1))
         manifest = {
@@ -124,14 +127,16 @@ class TournamentPlanCliTests(unittest.TestCase):
             "source_digest": source_digest,
             "runtime_digest": runtime_digest,
             "runtime": {
-                "reference": pinned["image"],
+                "reference": runtime["image"],
                 "digest": runtime_digest,
-                "identity": pinned["version"] + "@" + runtime_digest,
+                "identity": runtime["version"] + "@" + runtime_digest,
             },
             "build_toolchain": {
-                "reference": pinned["image"],
-                "digest": runtime_digest,
-                "identity": pinned["version"] + "@" + runtime_digest,
+                "reference": build_toolchain["image"],
+                "digest": build_toolchain_digest,
+                "identity": (
+                    build_toolchain["version"] + "@" + build_toolchain_digest
+                ),
             },
             "language": "python",
             "environment": "python",
@@ -145,8 +150,10 @@ class TournamentPlanCliTests(unittest.TestCase):
             "identities": {
                 "source": source_digest,
                 "image": artifact_digest,
-                "runtime": pinned["version"] + "@" + runtime_digest,
-                "build_toolchain": pinned["version"] + "@" + runtime_digest,
+                "runtime": runtime["version"] + "@" + runtime_digest,
+                "build_toolchain": (
+                    build_toolchain["version"] + "@" + build_toolchain_digest
+                ),
                 "build_toolchain_definition": environment.assets[
                     "build_toolchain"
                 ].identity,

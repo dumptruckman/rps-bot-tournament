@@ -41,7 +41,9 @@ class ExecutionProfileTests(unittest.TestCase):
         self, run: mock.Mock
     ) -> None:
         runtime = json.loads((CATALOG.parent / "python" / "runtimes.json").read_text())
-        reference = runtime["platforms"]["linux/arm64"]["image"]
+        reference = runtime["platforms"]["linux/arm64"]["execution_runtime"][
+            "image"
+        ]
         run.side_effect = [
             subprocess.CompletedProcess(
                 ["docker", "info"], 0, stdout="linux/aarch64\n", stderr=""

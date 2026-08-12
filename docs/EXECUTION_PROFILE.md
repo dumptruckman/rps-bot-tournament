@@ -46,18 +46,19 @@ workload, holds eight additional threads, opens 24 additional files, and writes
 and resource controls. Before launch it compares the Docker server architecture
 to the requested platform and rejects emulation.
 
-On 2026-08-09, the native Linux/ARM64 lane passed using Python 3.13.14 and the
+On 2026-08-11, the native Linux/ARM64 lane passed using Python 3.14.6 and the
 pinned ARM64 runtime digest
-`sha256:8c5de2243cba89f49a93e05cacb78e27058bcaa69c148baac127005da03af39e`.
-The probe observed 391.531 ms container/runtime startup, 29,745,152 bytes peak
-RSS, 57.211 ms fixed-workload CPU time, nine peak threads, 29 peak open files,
+`sha256:1609c3e634a6ad5b4759f67e34c246640d41858fffde69876245fd26afd632b7`.
+The probe observed 391.836 ms container/runtime startup, 29,270,016 bytes peak
+RSS, 48.859 ms fixed-workload CPU time, nine peak threads, 29 peak open files,
 one visible PID, and 1,048,576 temporary bytes. The same lane then passed the
 real networkless build, image-identity, readiness, protocol, determinism,
-isolation, resource, stream, signal, and lifecycle certification suite.
+diagnostic, isolation, resource, stream, signal, lifecycle, and practice-Match
+certification suite.
 
 AMD64 evidence is produced by the `Native AMD64 portability` GitHub workflow on
 a native `ubuntu-latest` runner. It uses only `linux/amd64`, the pinned digest
-`sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f`,
+`sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4`,
 and `github-advisory` certification. The local organizer lane uses only
 `linux/arm64` and `organizer-final` certification:
 

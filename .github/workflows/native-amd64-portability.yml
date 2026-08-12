@@ -21,7 +21,7 @@ jobs:
       - name: Cache the pinned AMD64 Python runtime
         run: >-
           docker pull --platform linux/amd64
-          docker.io/library/python@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f
+          docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4
       - name: Prove the native AMD64 build and execution path
         run: scripts/ratify-native-platform.sh linux/amd64 build/native-amd64-evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

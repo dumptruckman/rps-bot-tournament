@@ -99,13 +99,19 @@ def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
     for name, environment in sorted(catalog.environments.items()):
         if environment.publication != "production":
             continue
-        environment_records: Dict[str, Any] = {}
+        try:
+            definition = json.loads(environment.assets["base_runtime"].content)
+        except (json.JSONDecodeError, TypeError) as error:
+            raise ReleaseError(name + " runtime definition is not valid JSON") from error
+        environment_records: Dict[str, Any] = {"platforms": {}}
+        if "selection" in definition:
+            environment_records["selection"] = definition["selection"]
         for platform in ("linux/amd64", "linux/arm64"):
             try:
                 build, execution = environment.platform_images(platform)
             except CatalogError as error:
                 raise ReleaseError(str(error)) from error
-            environment_records[platform] = {
+            environment_records["platforms"][platform] = {
                 "build_toolchain": _image_record(build),
                 "execution_runtime": _image_record(execution),
             }
@@ -175,10 +181,55 @@ def _verify_python_recipe_policy(catalog: Any) -> None:
         raise ReleaseError("the Python recipe must not perform build-time downloads")
 
 
+def _verify_python_runtime_policy(catalog: Any) -> None:
+    python = catalog.environment("python")
+    try:
+        definition = json.loads(python.assets["base_runtime"].content)
+        selection = definition["selection"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReleaseError("the Python runtime must record its stable-release selection") from error
+    expected_selection_fields = {
+        "policy",
+        "python_version",
+        "rationale",
+        "selected_on",
+        "upstream_release",
+    }
+    if not isinstance(selection, dict) or set(selection) != expected_selection_fields:
+        raise ReleaseError("the Python runtime selection rationale is incomplete")
+    if selection["policy"] != "latest-upstream-supported-stable":
+        raise ReleaseError("the Python runtime must select the latest upstream stable release")
+    for field in expected_selection_fields - {"policy"}:
+        if not isinstance(selection[field], str) or not selection[field]:
+            raise ReleaseError("the Python runtime selection rationale is incomplete")
+    for platform in ("linux/amd64", "linux/arm64"):
+        try:
+            selected = definition["platforms"][platform]
+        except (KeyError, TypeError) as error:
+            raise ReleaseError("the Python runtime is missing " + platform) from error
+        if not isinstance(selected, dict) or set(selected) != {
+            "build_toolchain",
+            "execution_runtime",
+        }:
+            raise ReleaseError(
+                "the Python runtime must publish explicit build and execution coordinates for "
+                + platform
+            )
+        for role in ("build_toolchain", "execution_runtime"):
+            image = selected[role]
+            if not isinstance(image, dict) or set(image) != {"image", "version"}:
+                raise ReleaseError("the Python " + role + " coordinate is incomplete")
+            if selection["python_version"] not in image["version"]:
+                raise ReleaseError(
+                    "the Python " + role + " version does not identify the selected release"
+                )
+
+
 def _verify_release_policies(catalog: Any) -> None:
     _verify_immutable_action_references(catalog)
     _verify_python_dependency_policy(catalog)
     _verify_python_recipe_policy(catalog)
+    _verify_python_runtime_policy(catalog)
 
 
 def _bundle_identity(bundle_path: Path) -> str:
@@ -608,14 +659,52 @@ def _require_external_output(path: Path, label: str) -> None:
     raise ReleaseError(label + " must be written outside the Runner checkout")
 
 
+def _write_release_notes(
+    path: Path, tag: str, manifest: Dict[str, Any]
+) -> None:
+    python = manifest["platform_runtimes"]["python"]
+    build_toolchains = {
+        platform: values["build_toolchain"]
+        for platform, values in sorted(python["platforms"].items())
+    }
+    selection = python["selection"]
+    notes = (
+        "# Catalog Release "
+        + tag
+        + "\n\n"
+        + selection["rationale"]
+        + " Selected on "
+        + selection["selected_on"]
+        + "; upstream release: "
+        + selection["upstream_release"]
+        + ".\n\n"
+        + "## Compatibility coordinates\n\n"
+        + "Copy this complete object into the corresponding Template Release claim.\n\n"
+        + "```json\n"
+        + json.dumps(manifest["compatibility_coordinates"], indent=2, sort_keys=True)
+        + "\n```\n\n"
+        + "## Python Team Template build toolchains\n\n"
+        + "Use the coordinate for the Docker check's target platform. These are "
+        + "consumer inputs only; the official recipe and wrapper remain Runner-owned.\n\n"
+        + "```json\n"
+        + json.dumps(build_toolchains, indent=2, sort_keys=True)
+        + "\n```\n"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(notes)
+
+
 def _prove_independence(
-    tag: str, bundle_path: Path, evidence_path: Path
+    tag: str, bundle_path: Path, evidence_path: Path, release_notes_path: Path
 ) -> Dict[str, Any]:
     _require_clean_repository()
     _require_external_output(bundle_path, "offline Runner bundle")
     _require_external_output(evidence_path, "independence evidence")
+    _require_external_output(release_notes_path, "release notes")
     if evidence_path.exists():
         raise ReleaseError("independence evidence destination already exists")
+    if release_notes_path.exists():
+        raise ReleaseError("release notes destination already exists")
     repository_scan = _scan_repository_independence()
     created = _create_release(tag, bundle_path)
     verified = _verify_release(tag, bundle_path)
@@ -662,6 +751,7 @@ def _prove_independence(
     }
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    _write_release_notes(release_notes_path, tag, verified)
     return evidence
 
 
@@ -673,23 +763,31 @@ def main() -> int:
     parser.add_argument("tag")
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--release-notes", type=Path)
     arguments = parser.parse_args()
     try:
         bundle_path = arguments.bundle.expanduser().resolve()
         if arguments.command == "create":
-            if arguments.evidence is not None:
-                raise ReleaseError("--evidence is only valid with the prove command")
+            if arguments.evidence is not None or arguments.release_notes is not None:
+                raise ReleaseError(
+                    "--evidence and --release-notes are only valid with the prove command"
+                )
             manifest = _create_release(arguments.tag, bundle_path)
         elif arguments.command == "verify":
-            if arguments.evidence is not None:
-                raise ReleaseError("--evidence is only valid with the prove command")
+            if arguments.evidence is not None or arguments.release_notes is not None:
+                raise ReleaseError(
+                    "--evidence and --release-notes are only valid with the prove command"
+                )
             manifest = _verify_release(arguments.tag, bundle_path)
         else:
-            if arguments.evidence is None:
-                raise ReleaseError("the prove command requires --evidence")
+            if arguments.evidence is None or arguments.release_notes is None:
+                raise ReleaseError(
+                    "the prove command requires --evidence and --release-notes"
+                )
             evidence_path = arguments.evidence.expanduser().resolve()
+            release_notes_path = arguments.release_notes.expanduser().resolve()
             manifest = _prove_independence(
-                arguments.tag, bundle_path, evidence_path
+                arguments.tag, bundle_path, evidence_path, release_notes_path
             )
     except ReleaseError as error:
         print("Catalog Release failure: " + str(error), file=sys.stderr)

@@ -71,11 +71,105 @@ class SecondExecutableEnvironmentTests(unittest.TestCase):
                 )
 
 
+class PythonRuntimeContractTests(unittest.TestCase):
+    def test_python_selects_the_latest_stable_release_with_a_recorded_rationale(
+        self,
+    ) -> None:
+        catalog = load_catalog(CATALOG)
+        environment = catalog.environment("python")
+        runtimes = json.loads(environment.assets["base_runtime"].content)
+
+        self.assertEqual(
+            runtimes["selection"],
+            {
+                "policy": "latest-upstream-supported-stable",
+                "python_version": "3.14.6",
+                "rationale": (
+                    "Python does not designate a general LTS release; 3.14.6 was "
+                    "the latest stable upstream release when selected."
+                ),
+                "selected_on": "2026-08-11",
+                "upstream_release": "https://www.python.org/downloads/release/python-3146/",
+            },
+        )
+
+    def test_python_publishes_explicit_immutable_build_and_runtime_coordinates(
+        self,
+    ) -> None:
+        catalog = load_catalog(CATALOG)
+        environment = catalog.environment("python")
+        runtimes = json.loads(environment.assets["base_runtime"].content)
+
+        self.assertEqual(set(runtimes["platforms"]), {"linux/amd64", "linux/arm64"})
+        expected_digests = {
+            "linux/amd64": (
+                "sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4"
+            ),
+            "linux/arm64": (
+                "sha256:1609c3e634a6ad5b4759f67e34c246640d41858fffde69876245fd26afd632b7"
+            ),
+        }
+        for platform_name, platform in runtimes["platforms"].items():
+            self.assertEqual(
+                set(platform), {"build_toolchain", "execution_runtime"}
+            )
+            for role in ("build_toolchain", "execution_runtime"):
+                coordinate = platform[role]
+                self.assertEqual(
+                    coordinate["image"],
+                    "docker.io/library/python@" + expected_digests[platform_name],
+                )
+                self.assertIn("python-3.14.6", coordinate["version"])
+                self.assertNotRegex(coordinate["image"], r":(?:latest|3\.14)(?:@|$)")
+
+
 @unittest.skipUnless(
     os.environ.get("RPS_RUN_DOCKER_INTEGRATION") == "1",
     "set RPS_RUN_DOCKER_INTEGRATION=1 after preparing pinned Docker runtimes",
 )
 class SecondExecutableEnvironmentDockerTests(unittest.TestCase):
+    def test_python_passes_build_and_complete_conformance(self) -> None:
+        catalog = load_catalog(CATALOG)
+        platform = os.environ.get("RPS_DOCKER_PLATFORM", "linux/amd64")
+        mode = "organizer-final" if platform == "linux/arm64" else "github-advisory"
+
+        with tempfile.TemporaryDirectory() as temporary_name:
+            root = Path(temporary_name)
+            source = root / "source"
+            source.mkdir()
+            (source / "strategy.py").write_text(
+                "def choose_move(turn, my_history, opponent_history, rng):\n"
+                "    return rng.choice(('R', 'P', 'S'))\n"
+            )
+            bundle = root / "bundle"
+            environment = catalog.environment("python")
+            freeze_source_bundle(source, bundle, catalog, environment)
+            candidate = root / "candidate"
+            try:
+                manifest = build_artifact_candidate(
+                    bundle, candidate, catalog, platform
+                )
+            except ArtifactBuildFailure as error:
+                self.fail(str(error) + "\n" + error.diagnostics)
+            result = certify_artifact_candidate(
+                candidate,
+                root / "certification",
+                catalog,
+                CertificationInputs(mode, platform, "docker-execution-v1"),
+            )
+
+        self.assertEqual(manifest["language"], "python")
+        self.assertEqual(result["report"]["status"], "passed")
+        self.assertEqual(
+            result["report"]["checks"]["networkless_build"],
+            "passed-by-verified-current-builder-record",
+        )
+        self.assertTrue(result["report"]["smoke_match"]["same_seed_repeated"])
+        self.assertEqual(
+            set(result["report"]["smoke_match"]["practice_artifacts"]),
+            {"copycat", "fixed-move", "protocol-test", "random"},
+        )
+
     def test_internal_shell_passes_build_certification_and_retention(self) -> None:
         catalog = load_catalog(CATALOG)
         environment = catalog.environment("internal-shell")
