@@ -212,12 +212,12 @@
       "assets": {
         "base_runtime": {
           "path": "rust/runtimes.json",
-          "sha256": "sha256:eb86bd0c699e24020447e941f36d8f1908efc394529573307cfa40a0e55c2cc6",
+          "sha256": "sha256:a9cdcf7a41d257072284e9de7d2ec2bb9a2c2b72d4bc2f91cc10e778e3c501d2",
           "version": "rust-runtime-v1"
         },
         "build_toolchain": {
           "path": "rust/runtimes.json",
-          "sha256": "sha256:eb86bd0c699e24020447e941f36d8f1908efc394529573307cfa40a0e55c2cc6",
+          "sha256": "sha256:a9cdcf7a41d257072284e9de7d2ec2bb9a2c2b72d4bc2f91cc10e778e3c501d2",
           "version": "rust-build-toolchain-v1"
         },
         "build_target": {
@@ -242,7 +242,7 @@
         },
         "platform": {
           "path": "rust/runtimes.json",
-          "sha256": "sha256:eb86bd0c699e24020447e941f36d8f1908efc394529573307cfa40a0e55c2cc6",
+          "sha256": "sha256:a9cdcf7a41d257072284e9de7d2ec2bb9a2c2b72d4bc2f91cc10e778e3c501d2",
           "version": "rust-oci-platforms-v1"
         },
         "readiness": {

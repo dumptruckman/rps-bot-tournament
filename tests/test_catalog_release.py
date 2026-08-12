@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "ec330bc9b861732b1a0e06f939a149a09607979a8d8495e428c03a87b64ad1bf",
+            "0729810a3615e7614e60b6204c43262752504f9c1b3570bb48404739c92bec96",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),

@@ -1,30 +1,30 @@
 {
   "selection": {
     "policy": "latest-upstream-supported-stable",
-    "rust_version": "1.97.0",
-    "rationale": "Rust does not designate an LTS release; 1.97.0 was the latest stable upstream release when selected.",
+    "rust_version": "1.97.1",
+    "rationale": "Rust does not designate an LTS release; 1.97.1 was the latest stable upstream release when selected.",
     "selected_on": "2026-08-12",
-    "upstream_release": "https://blog.rust-lang.org/2026/07/09/Rust-1.97.0/"
+    "upstream_release": "https://blog.rust-lang.org/2026/07/16/Rust-1.97.1/"
   },
   "platforms": {
     "linux/amd64": {
       "build_toolchain": {
-        "image": "docker.io/library/rust@sha256:f5eca24cc656297fd7228f15d346761bfe22245362f39443ee727504551051ad",
-        "version": "linux-amd64-rust-1.97.0-build-toolchain-v1"
+        "image": "docker.io/library/rust@sha256:408fe88047cef61a2087653b0c5255fa51c0f2d6d94ddedd7a2562a9b91a46f6",
+        "version": "linux-amd64-rust-1.97.1-build-toolchain-v1"
       },
       "execution_runtime": {
-        "image": "docker.io/library/rust@sha256:f5eca24cc656297fd7228f15d346761bfe22245362f39443ee727504551051ad",
-        "version": "linux-amd64-rust-1.97.0-execution-runtime-v1"
+        "image": "docker.io/library/rust@sha256:408fe88047cef61a2087653b0c5255fa51c0f2d6d94ddedd7a2562a9b91a46f6",
+        "version": "linux-amd64-rust-1.97.1-execution-runtime-v1"
       }
     },
     "linux/arm64": {
       "build_toolchain": {
-        "image": "docker.io/library/rust@sha256:33c1e6fcd94f7f64fb747d3388d24607333a4c42f2a2f66359c74b90cbeb88fb",
-        "version": "linux-arm64-rust-1.97.0-build-toolchain-v1"
+        "image": "docker.io/library/rust@sha256:6e957ef098dcc77d33e310261e4ed5843bb108d5c3b5dc2b476cbc8b6caf53fa",
+        "version": "linux-arm64-rust-1.97.1-build-toolchain-v1"
       },
       "execution_runtime": {
-        "image": "docker.io/library/rust@sha256:33c1e6fcd94f7f64fb747d3388d24607333a4c42f2a2f66359c74b90cbeb88fb",
-        "version": "linux-arm64-rust-1.97.0-execution-runtime-v1"
+        "image": "docker.io/library/rust@sha256:6e957ef098dcc77d33e310261e4ed5843bb108d5c3b5dc2b476cbc8b6caf53fa",
+        "version": "linux-arm64-rust-1.97.1-execution-runtime-v1"
       }
     }
   },

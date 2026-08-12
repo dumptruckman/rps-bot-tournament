@@ -31,29 +31,33 @@ class RustLanguageEnvironmentTests(unittest.TestCase):
         self.catalog = load_catalog(CATALOG_PATH)
         self.environment = self.catalog.environment("rust")
 
-    def test_selects_rust_1_97_and_pins_both_supported_platforms(self) -> None:
+    def test_selects_rust_1_97_1_and_pins_both_supported_platforms(self) -> None:
         runtimes = json.loads(self.environment.assets["base_runtime"].content)
         self.assertEqual(
             runtimes["selection"],
             {
                 "policy": "latest-upstream-supported-stable",
-                "rust_version": "1.97.0",
+                "rust_version": "1.97.1",
                 "rationale": (
-                    "Rust does not designate an LTS release; 1.97.0 was the "
+                    "Rust does not designate an LTS release; 1.97.1 was the "
                     "latest stable upstream release when selected."
                 ),
                 "selected_on": "2026-08-12",
-                "upstream_release": "https://blog.rust-lang.org/2026/07/09/Rust-1.97.0/",
+                "upstream_release": "https://blog.rust-lang.org/2026/07/16/Rust-1.97.1/",
             },
         )
-        for platform in ("linux/amd64", "linux/arm64"):
+        expected = {
+            "linux/amd64": "sha256:408fe88047cef61a2087653b0c5255fa51c0f2d6d94ddedd7a2562a9b91a46f6",
+            "linux/arm64": "sha256:6e957ef098dcc77d33e310261e4ed5843bb108d5c3b5dc2b476cbc8b6caf53fa",
+        }
+        for platform, digest in expected.items():
             for role in ("build_toolchain", "execution_runtime"):
                 coordinate = runtimes["platforms"][platform][role]
-                self.assertRegex(
+                self.assertEqual(
                     coordinate["image"],
-                    r"^docker\.io/library/rust@sha256:[0-9a-f]{64}$",
+                    "docker.io/library/rust@" + digest,
                 )
-                self.assertIn("rust-1.97.0", coordinate["version"])
+                self.assertIn("rust-1.97.1", coordinate["version"])
 
     def test_accepts_only_the_rust_strategy_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
