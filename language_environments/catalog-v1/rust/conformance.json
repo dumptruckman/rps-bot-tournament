@@ -1,7 +1,8 @@
 {
   "accepted_faults": {
     "import-time": ["unexpected_exit"],
-    "memory": ["resource_oom", "unexpected_exit", "timeout"]
+    "memory": ["resource_oom", "unexpected_exit", "timeout"],
+    "process": ["timeout"]
   },
   "contract": "choose-move-contract-v1",
   "diagnostic_fixtures": [
@@ -9,12 +10,12 @@
     "slow-response", "memory", "process", "filesystem", "premature-output"
   ],
   "fixture_sources": {
-    "filesystem": "use std::fs;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let limited = fs::write(\"/tmp/conformance-fill\", vec![b'x'; 32 * 1024 * 1024]).is_err(); let _ = fs::remove_file(\"/tmp/conformance-fill\"); if limited { \"R\" } else { \"X\" } }\n",
+    "filesystem": "use std::fs;\nuse std::sync::OnceLock;\nstatic LIMITED: OnceLock<bool> = OnceLock::new();\nfn probe_filesystem_limit() -> bool { let limited = fs::write(\"/tmp/conformance-fill\", vec![120_u8; 32 * 1024 * 1024]).is_err(); let _ = fs::remove_file(\"/tmp/conformance-fill\"); limited }\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { if *LIMITED.get_or_init(probe_filesystem_limit) { \"R\" } else { \"X\" } }\n",
     "import-time": "extern \"C\" fn fail_at_startup() { std::process::abort(); }\n#[used]\n#[unsafe(link_section = \".init_array\")]\nstatic INITIALIZER: extern \"C\" fn() = fail_at_startup;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { \"R\" }\n",
-    "memory": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut retained = vec![0_u8; 512 * 1024 * 1024]; for index in (0..retained.len()).step_by(4096) { retained[index] = index as u8; } std::mem::forget(retained); \"R\" }\n",
+    "memory": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut retained = vec![0_u8; 1024 * 1024 * 1024]; for index in (0..retained.len()).step_by(4096) { unsafe { std::ptr::write_volatile(retained.as_mut_ptr().add(index), 1); } } std::hint::black_box(&retained); std::mem::forget(retained); \"R\" }\n",
     "nondeterministic": "use std::fs::File;\nuse std::io::Read;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut byte = [0_u8]; File::open(\"/dev/urandom\").and_then(|mut file| file.read_exact(&mut byte)).unwrap(); [\"R\", \"P\", \"S\"][(byte[0] as usize) % 3] }\n",
     "premature-output": "extern \"C\" fn output_at_startup() { println!(\"R\"); }\n#[used]\n#[unsafe(link_section = \".init_array\")]\nstatic INITIALIZER: extern \"C\" fn() = output_at_startup;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { \"R\" }\n",
-    "process": "use std::process::{Child, Command};\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut children: Vec<Child> = Vec::new(); let mut limited = false; for _ in 0..60 { match Command::new(\"/bin/sleep\").arg(\"60\").spawn() { Ok(child) => children.push(child), Err(_) => { limited = true; break; } } } for child in &mut children { let _ = child.kill(); let _ = child.wait(); } if limited { \"R\" } else { \"X\" } }\n",
+    "process": "use std::process::Command;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { let mut children = Vec::new(); for _ in 0..80 { match Command::new(\"/bin/sleep\").arg(\"60\").spawn() { Ok(child) => children.push(child), Err(_) => break } } loop { std::hint::spin_loop(); } }\n",
     "protocol-fault": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { \"X\" }\n",
     "slow-response": "use std::time::Duration;\npub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { std::thread::sleep(Duration::from_millis(200)); \"R\" }\n",
     "syntax-build": "pub fn choose_move(_turn: usize, _my_history: &str, _opponent_history: &str, _rng: &mut RpsRandom) -> &'static str { this is not valid Rust \"R\" }\n"

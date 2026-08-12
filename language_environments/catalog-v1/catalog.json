@@ -227,7 +227,7 @@
         },
         "conformance": {
           "path": "rust/conformance.json",
-          "sha256": "sha256:ccb75307f2e4fd8283bf243ddae4f2761e2a7efb596eb52a02b4faad89eaeff1",
+          "sha256": "sha256:7172f4efce0ce634878b82d2360da54ba4815099c036eebd3b2d324c0e0dffc7",
           "version": "rust-conformance-v1"
         },
         "dependency_definition": {
