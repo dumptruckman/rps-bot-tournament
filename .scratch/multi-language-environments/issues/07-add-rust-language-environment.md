@@ -1,6 +1,6 @@
 # Add and publish the optional Rust Language Environment
 
-Status: ready-for-agent
+Status: resolved
 
 Blocked by: 03
 
@@ -15,24 +15,38 @@ Release without lowering the acceptance bar used by required languages.
 
 ## Acceptance criteria
 
-- [ ] Rust selects the latest upstream-supported stable release available when
+- [x] Rust selects the latest upstream-supported stable release available when
   work begins and pins exact Linux/AMD64 and Linux/ARM64 build-toolchain and
   execution-runtime identities.
-- [ ] The Rust toolchain and every required crate are available to the
+- [x] The Rust toolchain and every required crate are available to the
   networkless build without resolving crates.io or another mutable dependency
   source.
-- [ ] The Team Source schema, compilation recipe, fixed entrypoint, wrapper,
+- [x] The Team Source schema, compilation recipe, fixed entrypoint, wrapper,
   readiness contract, and dependency policy are complete and organizer-owned.
-- [ ] The Rust wrapper exposes the common strategy contract and its Seed Adapter
+- [x] The Rust wrapper exposes the common strategy contract and its Seed Adapter
   passes published 64-bit-seed golden vectors.
-- [ ] Equivalent practice and diagnostic fixtures pass or fail with actionable
+- [x] Equivalent practice and diagnostic fixtures pass or fail with actionable
   categories through the shared conformance suite.
-- [ ] Linux/AMD64 Advisory Validation and Linux/ARM64 Final Validation pass the
+- [x] Linux/AMD64 Advisory Validation and Linux/ARM64 Final Validation pass the
   complete build, protocol, readiness, determinism, isolation, resource,
   lifecycle, and practice-Match contract.
-- [ ] Rust Bot Artifacts can participate in mixed-language Tournament plans and
+- [x] Rust Bot Artifacts can participate in mixed-language Tournament plans and
   Matches without language-specific Tournament logic.
-- [ ] A new Catalog Release and offline bundle are independently verified and
+- [x] A new Catalog Release and offline bundle are independently verified and
   expose immutable Rust compatibility and build-toolchain coordinates.
-- [ ] Rust is advertised as supported only after meeting every required-language
+- [x] Rust is advertised as supported only after meeting every required-language
   criterion, and no step reads the Rust Team Template repository.
+
+## Answer
+
+Rust 1.97.1 is published in the independently verified `catalog-v11` release at
+Runner commit `61b755ea85617e00ba638979708bec7afd69de5f`. The catalog pins exact
+official Linux/AMD64 and Linux/ARM64 image manifests, uses a networkless direct
+`rustc` build with no external crates, and owns the source contract, wrapper,
+entrypoint, readiness, dependency policy, seed vectors, and conformance assets.
+
+The focused Docker acceptance suite passed complete Advisory Validation on
+Linux/AMD64 and Final Validation on Linux/ARM64, including diagnostics,
+practice artifacts, and a mixed-language match. The isolated release proof then
+passed all 149 official organizer workflow tests and confirmed the Runner has no
+dependency on the Team Template repository.
