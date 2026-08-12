@@ -521,6 +521,7 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 "tests/test_artifact_builder_cli.py",
                 "tests/test_artifact_certification_cli.py",
                 "tests/test_multi_language_environment.py",
+                "tests/test_java_language_environment.py",
                 "tests/test_batch_plan_cli.py",
                 "tests/test_tournament_plan_cli.py",
                 "tests/test_tournament_cli.py",
