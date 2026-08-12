@@ -1,0 +1,32 @@
+{
+  "selection": {
+    "policy": "latest-upstream-supported-stable",
+    "go_version": "1.26.5",
+    "rationale": "Go does not designate an LTS release; 1.26.5 was the latest stable upstream release when selected.",
+    "selected_on": "2026-08-12",
+    "upstream_release": "https://go.dev/dl/#go1.26.5"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {
+        "image": "docker.io/library/golang@sha256:0d327c83532d3cdeeeebab56ce85962bf09cb89545355b10207c7771b0c3713f",
+        "version": "linux-amd64-go-1.26.5-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/golang@sha256:0d327c83532d3cdeeeebab56ce85962bf09cb89545355b10207c7771b0c3713f",
+        "version": "linux-amd64-go-1.26.5-execution-runtime-v1"
+      }
+    },
+    "linux/arm64": {
+      "build_toolchain": {
+        "image": "docker.io/library/golang@sha256:b1a0cc29a7e13e0595e21087eeb930dc494976b18ba68279bf52c665f3170aa0",
+        "version": "linux-arm64-go-1.26.5-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/golang@sha256:b1a0cc29a7e13e0595e21087eeb930dc494976b18ba68279bf52c665f3170aa0",
+        "version": "linux-arm64-go-1.26.5-execution-runtime-v1"
+      }
+    }
+  },
+  "version": "go-runtime-v1"
+}

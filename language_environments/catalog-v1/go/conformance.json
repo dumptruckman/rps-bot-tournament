@@ -1,0 +1,51 @@
+{
+  "accepted_faults": {
+    "import-time": ["unexpected_exit"],
+    "memory": ["resource_oom", "unexpected_exit"]
+  },
+  "contract": "choose-move-contract-v1",
+  "diagnostic_fixtures": [
+    "syntax-build",
+    "import-time",
+    "nondeterministic",
+    "protocol-fault",
+    "slow-response",
+    "memory",
+    "process",
+    "filesystem",
+    "premature-output"
+  ],
+  "fixture_sources": {
+    "filesystem": "package main\n\nimport (\n  \"bytes\"\n  rand \"math/rand/v2\"\n  \"os\"\n)\n\nfunc probeFilesystemLimit() bool {\n  err := os.WriteFile(\"/tmp/conformance-fill\", bytes.Repeat([]byte{'x'}, 32*1024*1024), 0o600)\n  _ = os.Remove(\"/tmp/conformance-fill\")\n  return err != nil\n}\n\nvar filesystemLimitEnforced = probeFilesystemLimit()\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string {\n  if filesystemLimitEnforced { return \"R\" }\n  return \"X\"\n}\n",
+    "import-time": "package main\n\nimport rand \"math/rand/v2\"\n\nvar _ = func() int { panic(\"conformance initialization fixture\") }()\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string { return \"R\" }\n",
+    "memory": "package main\n\nimport rand \"math/rand/v2\"\n\nvar retained []byte\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string {\n  retained = make([]byte, 512*1024*1024)\n  for index := 0; index < len(retained); index += 4096 { retained[index] = byte(index) }\n  return \"R\"\n}\n",
+    "nondeterministic": "package main\n\nimport (\n  crand \"crypto/rand\"\n  rand \"math/rand/v2\"\n)\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string {\n  value := []byte{0}\n  if _, err := crand.Read(value); err != nil { return \"X\" }\n  return []string{\"R\", \"P\", \"S\"}[int(value[0])%3]\n}\n",
+    "premature-output": "package main\n\nimport (\n  \"fmt\"\n  rand \"math/rand/v2\"\n)\n\nvar _ = func() int { fmt.Println(\"R\"); return 0 }()\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string { return \"R\" }\n",
+    "process": "package main\n\nimport (\n  rand \"math/rand/v2\"\n  \"os/exec\"\n)\n\nfunc probeProcessLimit() bool {\n  children := make([]*exec.Cmd, 0, 60)\n  defer func() { for _, child := range children { _ = child.Process.Kill(); _, _ = child.Process.Wait() } }()\n  for index := 0; index < 60; index++ {\n    child := exec.Command(\"/bin/sleep\", \"60\")\n    if err := child.Start(); err != nil { return true }\n    children = append(children, child)\n  }\n  return false\n}\n\nvar processLimitEnforced = probeProcessLimit()\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string {\n  if processLimitEnforced { return \"R\" }\n  return \"X\"\n}\n",
+    "protocol-fault": "package main\n\nimport rand \"math/rand/v2\"\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string { return \"X\" }\n",
+    "slow-response": "package main\n\nimport (\n  rand \"math/rand/v2\"\n  \"time\"\n)\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string { time.Sleep(200*time.Millisecond); return \"R\" }\n",
+    "syntax-build": "package main\n\nimport rand \"math/rand/v2\"\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string {\n  this is not valid Go\n  return \"R\"\n}\n"
+  },
+  "practice_artifacts": {
+    "copycat": "package main\n\nimport rand \"math/rand/v2\"\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string {\n  if len(opponentHistory) == 0 { return \"R\" }\n  return opponentHistory[len(opponentHistory)-1:]\n}\n",
+    "fixed-move": "package main\n\nimport rand \"math/rand/v2\"\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string { return \"R\" }\n",
+    "protocol-test": "package main\n\nimport rand \"math/rand/v2\"\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string {\n  if turn != len(myHistory) || len(myHistory) != len(opponentHistory) { return \"X\" }\n  for _, move := range myHistory + opponentHistory { if move != 'R' && move != 'P' && move != 'S' { return \"X\" } }\n  return []string{\"R\", \"P\", \"S\"}[turn%3]\n}\n",
+    "random": "package main\n\nimport rand \"math/rand/v2\"\n\nfunc ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string { return []string{\"R\", \"P\", \"S\"}[rng.IntN(3)] }\n"
+  },
+  "seed_adapter": {
+    "algorithm": "math/rand/v2.PCG(seed, seed XOR 0x9e3779b97f4a7c15)",
+    "golden_vectors": [
+      {"seed": 0, "first_uint64": [8526951665006212644, 13293009889659832503, 18260787277176026961]},
+      {"seed": 1, "first_uint64": [9729921568035403839, 567202678178297188, 12608104588819958962]},
+      {"seed": 9223372036854775807, "first_uint64": [15421105985091242257, 9907233703736512638, 17147262756482350429]},
+      {"seed": 18446744073709551615, "first_uint64": [7564132954489565118, 5218201376529462932, 15597715256427447486]}
+    ],
+    "system_randomness": false,
+    "version": "go-pcg-seed-adapter-v1"
+  },
+  "source_path": "strategy.go",
+  "suite_version": "go-artifact-conformance-v1",
+  "syntax_diagnostic": "Docker build failed",
+  "syntax_stage": "build",
+  "version": "go-conformance-v1"
+}

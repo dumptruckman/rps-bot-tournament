@@ -93,9 +93,10 @@ bundle. The resulting
 its exact `compatibility_coordinates`, records the internal fixture identity,
 and lists every workflow suite that passed. Retain the JSON evidence beside
 the exact bundle. The generated release notes reproduce those complete,
-copy-ready compatibility coordinates and the per-platform Python build-toolchain
-coordinates required by a companion Template Release's Docker check. They do
-not publish or transfer the Runner-owned recipe or wrapper. CI retains the
+copy-ready compatibility coordinates and every production Language Environment's
+per-platform build-toolchain coordinates required by companion Template
+Releases' Docker checks. They do not publish or transfer the Runner-owned
+recipes or wrappers. CI retains the
 bundle, evidence, and release notes as one 90-day artifact for every commit.
 
 ## Corrections and replacement versions

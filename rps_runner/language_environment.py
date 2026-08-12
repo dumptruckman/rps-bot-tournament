@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 from typing import Any, BinaryIO, Iterable, Mapping, Sequence
@@ -297,10 +298,7 @@ def _validate_descriptor(
             participant_value, "static_validation", participant_location
         ),
     )
-    if participant_contract.static_validation not in (
-        "none-v1",
-        "single-unconditional-function-v1",
-    ):
+    if participant_contract.static_validation not in _PARTICIPANT_CONTRACT_VALIDATORS:
         raise CatalogError(
             participant_location
             + ".static_validation "
@@ -618,15 +616,126 @@ def validate_source(
 def _validate_participant_contract(
     files: Sequence[SourceFile], environment: LanguageEnvironment
 ) -> None:
-    validators = {
-        "none-v1": _validate_no_static_contract,
-        "single-unconditional-function-v1": _validate_python_function_contract,
-    }
-    validators[environment.participant_contract.static_validation](files)
+    _PARTICIPANT_CONTRACT_VALIDATORS[
+        environment.participant_contract.static_validation
+    ](files)
 
 
 def _validate_no_static_contract(_files: Sequence[SourceFile]) -> None:
     return
+
+
+def _validate_go_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "strategy.go")
+    go_sources = []
+    for item in files:
+        if not item.path.endswith(".go"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Go strategy source must be UTF-8: " + str(error),
+            )
+        significant_source = _go_significant_source(source)
+        go_sources.append((item, significant_source))
+        if not re.search(r"(?m)^\s*package\s+main\s*$", significant_source):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Go strategy files must declare package main",
+            )
+        for reserved in ("init", "main"):
+            if re.search(
+                r"(?m)^\s*func\s+" + reserved + r"\s*\(", significant_source
+            ):
+                raise SourceValidationError(
+                    item.path,
+                    "participant_contract",
+                    "Team Source must not define the organizer-owned "
+                    + reserved
+                    + " function",
+                )
+        if re.search(r"(?m)^\s*//go:", source):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Go compiler directives are not allowed in Team Source",
+            )
+    source = _go_significant_source(source_file.content.decode("utf-8"))
+    signature = re.compile(
+        r"(?m)^\s*func\s+ChooseMove\s*\(\s*turn\s+int\s*,\s*"
+        r"myHistory\s*,\s*opponentHistory\s+string\s*,\s*"
+        r"rng\s+\*rand\.Rand\s*\)\s+string\s*\{"
+    )
+    bindings = sum(len(signature.findall(value)) for _, value in go_sources)
+    if bindings != 1 or not signature.search(source):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one ChooseMove(turn int, myHistory, opponentHistory "
+            "string, rng *rand.Rand) string function",
+        )
+
+
+def _go_significant_source(source: str) -> str:
+    """Blank Go comments and literal contents while preserving line structure."""
+
+    result = list(source)
+    index = 0
+    state = "code"
+    quote = ""
+    while index < len(source):
+        character = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if character == "/" and following == "/":
+                result[index] = result[index + 1] = " "
+                state = "line-comment"
+                index += 2
+                continue
+            if character == "/" and following == "*":
+                result[index] = result[index + 1] = " "
+                state = "block-comment"
+                index += 2
+                continue
+            if character in ('"', "'", "`"):
+                quote = character
+                result[index] = " "
+                state = "raw-string" if character == "`" else "string"
+        elif state == "line-comment":
+            if character == "\n":
+                state = "code"
+            else:
+                result[index] = " "
+        elif state == "block-comment":
+            if character == "*" and following == "/":
+                result[index] = result[index + 1] = " "
+                state = "code"
+                index += 2
+                continue
+            if character != "\n":
+                result[index] = " "
+        elif state == "raw-string":
+            if character == "`":
+                result[index] = " "
+                state = "code"
+            elif character != "\n":
+                result[index] = " "
+        elif state == "string":
+            result[index] = " " if character != "\n" else "\n"
+            if character == "\\":
+                if index + 1 < len(source):
+                    if source[index + 1] != "\n":
+                        result[index + 1] = " "
+                    index += 2
+                    continue
+            elif character == quote:
+                state = "code"
+        index += 1
+    return "".join(result)
 
 
 def _validate_python_function_contract(files: Sequence[SourceFile]) -> None:
@@ -745,6 +854,13 @@ def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
         if _contains_module_named_expression(child, name):
             return True
     return False
+
+
+_PARTICIPANT_CONTRACT_VALIDATORS = {
+    "go-strategy-contract-v1": _validate_go_strategy_contract,
+    "none-v1": _validate_no_static_contract,
+    "single-unconditional-function-v1": _validate_python_function_contract,
+}
 
 
 def source_digest(files: Sequence[SourceFile]) -> str:

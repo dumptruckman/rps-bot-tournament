@@ -593,6 +593,7 @@ def _run_diagnostic_artifacts(
     *,
     namespace: str,
     accepted_faults: Mapping[str, Any] | None = None,
+    syntax_diagnostic: str = "Python source is not valid syntax",
 ) -> Mapping[str, Mapping[str, str]]:
     with _CONFORMANCE_EXECUTION_LOCK:
         return _run_diagnostic_artifacts_exclusively(
@@ -601,6 +602,7 @@ def _run_diagnostic_artifacts(
             fixed_move,
             namespace=namespace,
             accepted_faults=accepted_faults,
+            syntax_diagnostic=syntax_diagnostic,
         )
 
 
@@ -611,12 +613,13 @@ def _run_diagnostic_artifacts_exclusively(
     *,
     namespace: str,
     accepted_faults: Mapping[str, Any] | None = None,
+    syntax_diagnostic: str = "Python source is not valid syntax",
 ) -> Mapping[str, Mapping[str, str]]:
     fixed_digest = str(fixed_move["artifact_digest"])
     reports: dict[str, Mapping[str, str]] = {
         "syntax-build": {
             "status": "passed",
-            "actionable_diagnostic": "Python source is not valid syntax",
+            "actionable_diagnostic": syntax_diagnostic,
         }
     }
     expected_faults = {
@@ -857,6 +860,11 @@ def _run_smoke_matches_exclusively(
                 namespace=namespace,
                 accepted_faults=_conformance_definition(environment).get(
                     "accepted_faults"
+                ),
+                syntax_diagnostic=str(
+                    _conformance_definition(environment).get(
+                        "syntax_diagnostic", "Python source is not valid syntax"
+                    )
                 ),
             )
             return {

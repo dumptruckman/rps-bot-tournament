@@ -181,48 +181,71 @@ def _verify_python_recipe_policy(catalog: Any) -> None:
         raise ReleaseError("the Python recipe must not perform build-time downloads")
 
 
-def _verify_python_runtime_policy(catalog: Any) -> None:
-    python = catalog.environment("python")
+def _verify_stable_runtime_policy(
+    catalog: Any, environment_name: str, version_field: str
+) -> None:
+    environment = catalog.environment(environment_name)
+    shown_name = environment_name.title()
     try:
-        definition = json.loads(python.assets["base_runtime"].content)
+        definition = json.loads(environment.assets["base_runtime"].content)
         selection = definition["selection"]
     except (json.JSONDecodeError, KeyError, TypeError) as error:
-        raise ReleaseError("the Python runtime must record its stable-release selection") from error
+        raise ReleaseError(
+            "the " + shown_name + " runtime must record its stable-release selection"
+        ) from error
     expected_selection_fields = {
         "policy",
-        "python_version",
+        version_field,
         "rationale",
         "selected_on",
         "upstream_release",
     }
     if not isinstance(selection, dict) or set(selection) != expected_selection_fields:
-        raise ReleaseError("the Python runtime selection rationale is incomplete")
+        raise ReleaseError("the " + shown_name + " runtime selection rationale is incomplete")
     if selection["policy"] != "latest-upstream-supported-stable":
-        raise ReleaseError("the Python runtime must select the latest upstream stable release")
+        raise ReleaseError(
+            "the " + shown_name + " runtime must select the latest upstream stable release"
+        )
     for field in expected_selection_fields - {"policy"}:
         if not isinstance(selection[field], str) or not selection[field]:
-            raise ReleaseError("the Python runtime selection rationale is incomplete")
+            raise ReleaseError(
+                "the " + shown_name + " runtime selection rationale is incomplete"
+            )
     for platform in ("linux/amd64", "linux/arm64"):
         try:
             selected = definition["platforms"][platform]
         except (KeyError, TypeError) as error:
-            raise ReleaseError("the Python runtime is missing " + platform) from error
+            raise ReleaseError(
+                "the " + shown_name + " runtime is missing " + platform
+            ) from error
         if not isinstance(selected, dict) or set(selected) != {
             "build_toolchain",
             "execution_runtime",
         }:
             raise ReleaseError(
-                "the Python runtime must publish explicit build and execution coordinates for "
+                "the " + shown_name
+                + " runtime must publish explicit build and execution coordinates for "
                 + platform
             )
         for role in ("build_toolchain", "execution_runtime"):
             image = selected[role]
             if not isinstance(image, dict) or set(image) != {"image", "version"}:
-                raise ReleaseError("the Python " + role + " coordinate is incomplete")
-            if selection["python_version"] not in image["version"]:
                 raise ReleaseError(
-                    "the Python " + role + " version does not identify the selected release"
+                    "the " + shown_name + " " + role + " coordinate is incomplete"
                 )
+            if selection[version_field] not in image["version"]:
+                raise ReleaseError(
+                    "the " + shown_name + " " + role
+                    + " version does not identify the selected release"
+                )
+
+
+def _verify_python_runtime_policy(catalog: Any) -> None:
+    _verify_stable_runtime_policy(catalog, "python", "python_version")
+
+
+def _verify_go_runtime_policy(catalog: Any) -> None:
+    _verify_stable_runtime_policy(catalog, "go", "go_version")
 
 
 def _verify_release_policies(catalog: Any) -> None:
@@ -230,6 +253,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_python_dependency_policy(catalog)
     _verify_python_recipe_policy(catalog)
     _verify_python_runtime_policy(catalog)
+    _verify_go_runtime_policy(catalog)
 
 
 def _bundle_identity(bundle_path: Path) -> str:
@@ -662,34 +686,30 @@ def _require_external_output(path: Path, label: str) -> None:
 def _write_release_notes(
     path: Path, tag: str, manifest: Dict[str, Any]
 ) -> None:
-    python = manifest["platform_runtimes"]["python"]
-    build_toolchains = {
-        platform: values["build_toolchain"]
-        for platform, values in sorted(python["platforms"].items())
-    }
-    selection = python["selection"]
     notes = (
-        "# Catalog Release "
-        + tag
-        + "\n\n"
-        + selection["rationale"]
-        + " Selected on "
-        + selection["selected_on"]
-        + "; upstream release: "
-        + selection["upstream_release"]
-        + ".\n\n"
+        "# Catalog Release " + tag + "\n\n"
         + "## Compatibility coordinates\n\n"
         + "Copy this complete object into the corresponding Template Release claim.\n\n"
         + "```json\n"
         + json.dumps(manifest["compatibility_coordinates"], indent=2, sort_keys=True)
-        + "\n```\n\n"
-        + "## Python Team Template build toolchains\n\n"
-        + "Use the coordinate for the Docker check's target platform. These are "
-        + "consumer inputs only; the official recipe and wrapper remain Runner-owned.\n\n"
-        + "```json\n"
-        + json.dumps(build_toolchains, indent=2, sort_keys=True)
         + "\n```\n"
     )
+    for language, runtime in sorted(manifest["platform_runtimes"].items()):
+        selection = runtime.get("selection", {})
+        build_toolchains = {
+            platform: values["build_toolchain"]
+            for platform, values in sorted(runtime["platforms"].items())
+        }
+        notes += (
+            "\n## " + language.title() + " Team Template build toolchains\n\n"
+            + str(selection.get("rationale", "Pinned production runtime."))
+            + " Selected on " + str(selection.get("selected_on", "catalog preparation"))
+            + "; upstream release: " + str(selection.get("upstream_release", "recorded in catalog"))
+            + ".\n\nUse the coordinate for the Docker check's target platform. These are "
+            + "consumer inputs only; the official recipe and wrapper remain Runner-owned.\n\n"
+            + "```json\n" + json.dumps(build_toolchains, indent=2, sort_keys=True)
+            + "\n```\n"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(notes)
 

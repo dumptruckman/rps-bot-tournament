@@ -48,6 +48,65 @@
         "version": "contract-source-schema-v1"
       }
     },
+    "go": {
+      "assets": {
+        "base_runtime": {"path": "go/runtimes.json", "sha256": "sha256:039edb9cbbb9a92f9b057a443fe9e41cc3b76e4517f8a0f8eabda9e4a3f7e02e", "version": "go-runtime-v1"},
+        "build_toolchain": {"path": "go/runtimes.json", "sha256": "sha256:039edb9cbbb9a92f9b057a443fe9e41cc3b76e4517f8a0f8eabda9e4a3f7e02e", "version": "go-build-toolchain-v1"},
+        "build_target": {"path": "go/Dockerfile", "sha256": "sha256:86890e1d64cbb93ac4dccd6c733079a89c75e6ef397ddb2b0f84a056f863f5fe", "version": "go-build-target-v1"},
+        "conformance": {"path": "go/conformance.json", "sha256": "sha256:d791f1719d0becbcb1b36bf4f94a006484637d8762685d9b7471ca1f8f39c1e8", "version": "go-conformance-v1"},
+        "dependency_definition": {"path": "go/dependencies.lock", "sha256": "sha256:8010915a36472885f580d28ff7d66a5a33383e7099276ace537dcece51c7abbf", "version": "go-dependencies-v1"},
+        "entrypoint": {"path": "go/entrypoint.json", "sha256": "sha256:512c1358a7d100a49c3852fa1971c556e1369271932a78ae8bab79a605c021b8", "version": "go-entrypoint-v1"},
+        "platform": {"path": "go/runtimes.json", "sha256": "sha256:039edb9cbbb9a92f9b057a443fe9e41cc3b76e4517f8a0f8eabda9e4a3f7e02e", "version": "go-oci-platforms-v1"},
+        "readiness": {"path": "go/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "go/Dockerfile", "sha256": "sha256:86890e1d64cbb93ac4dccd6c733079a89c75e6ef397ddb2b0f84a056f863f5fe", "version": "go-build-recipe-v1"},
+        "workflow": {"path": "go/workflow.yml", "sha256": "sha256:990c9a504e5227f198a4d9730baac1c2d8787a2d6c5b9c6516c0f6658feb0143", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "go/wrapper.go", "sha256": "sha256:5c1f6735da04c81a7b9eebc76132f4096ddf914a93a965469f1b22dbf83bc2ce", "version": "go-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "go-language-environment-v1",
+      "language": "go",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "ChooseMove",
+        "signature": "ChooseMove(turn int, myHistory, opponentHistory string, rng *rand.Rand) string",
+        "static_validation": "go-strategy-contract-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": [
+          "*.go",
+          "resources/*.csv",
+          "resources/*.json",
+          "resources/*.txt",
+          "resources/**/*.csv",
+          "resources/**/*.json",
+          "resources/**/*.txt"
+        ],
+        "forbidden_paths": [
+          ".git",
+          ".github",
+          ".hg",
+          ".gitlab-ci.yml",
+          ".svn",
+          "Dockerfile",
+          "Justfile",
+          "Makefile",
+          "compose.yml",
+          "docker-compose.yml",
+          "entrypoint.sh",
+          "go.mod",
+          "go.sum",
+          "vendor",
+          "wrapper.go",
+          "rps_wrapper.go"
+        ],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": ["strategy.go"],
+        "version": "go-source-schema-v1"
+      }
+    },
     "internal-shell": {
       "assets": {
         "base_runtime": {"path": "internal-shell/runtimes.json", "sha256": "sha256:c8c91b683287d06ecc407ef4f568c2c4db18223d91541e1f67343138e028b62c", "version": "internal-shell-runtime-v1"},

@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "bec500361e5e5d9526d6342bac34b5ace37557496884924c1d1d41fa00a9c2cb",
+            "9e78f85567c3ae4152bae4dec378643e3bf5572a0602ab7599b8bb486ce93ee8",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -103,6 +103,17 @@ class CatalogReleaseTests(unittest.TestCase):
                 "contract-fixture.recipe",
                 "contract-fixture.workflow",
                 "contract-fixture.wrapper",
+                "go.base_runtime",
+                "go.build_toolchain",
+                "go.build_target",
+                "go.conformance",
+                "go.dependency_definition",
+                "go.entrypoint",
+                "go.platform",
+                "go.readiness",
+                "go.recipe",
+                "go.workflow",
+                "go.wrapper",
                 "internal-shell.base_runtime",
                 "internal-shell.build_toolchain",
                 "internal-shell.build_target",
@@ -137,12 +148,14 @@ class CatalogReleaseTests(unittest.TestCase):
             {
                 "internal-shell": "internal-shell-artifact-conformance-v1@sha256:"
                 "664168210a06c8e77b15e9166e2ee394ad1f0bff05e7d31e8014361110c94f9e",
+                "go": "go-artifact-conformance-v1@sha256:"
+                "d791f1719d0becbcb1b36bf4f94a006484637d8762685d9b7471ca1f8f39c1e8",
                 "python": "python-artifact-conformance-v1@sha256:"
                 "0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057"
             },
         )
         self.assertEqual(
-            set(manifest["platform_runtimes"]), {"python"}
+            set(manifest["platform_runtimes"]), {"go", "python"}
         )
         python_runtimes = manifest["platform_runtimes"]["python"]
         self.assertEqual(
@@ -436,13 +449,15 @@ class CatalogIndependenceProofTests(unittest.TestCase):
             notes,
         )
         self.assertIn("## Python Team Template build toolchains", notes)
-        for platform in ("linux/amd64", "linux/arm64"):
-            build = manifest["platform_runtimes"]["python"]["platforms"][platform][
-                "build_toolchain"
-            ]
-            self.assertIn(platform, notes)
-            self.assertIn(build["reference"], notes)
-            self.assertIn(build["version"], notes)
+        self.assertIn("## Go Team Template build toolchains", notes)
+        for language in ("go", "python"):
+            for platform in ("linux/amd64", "linux/arm64"):
+                build = manifest["platform_runtimes"][language]["platforms"][platform][
+                    "build_toolchain"
+                ]
+                self.assertIn(platform, notes)
+                self.assertIn(build["reference"], notes)
+                self.assertIn(build["version"], notes)
         self.assertEqual(
             evidence["repository_scan"]["companion_repository"], "absent"
         )
