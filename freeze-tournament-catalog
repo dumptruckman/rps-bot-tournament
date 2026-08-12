@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import CatalogError, load_catalog
@@ -182,7 +182,12 @@ def _verify_python_recipe_policy(catalog: Any) -> None:
 
 
 def _verify_stable_runtime_policy(
-    catalog: Any, environment_name: str, version_field: str
+    catalog: Any,
+    environment_name: str,
+    version_field: str,
+    *,
+    policy: str = "latest-upstream-supported-stable",
+    additional_selection_fields: Sequence[str] = (),
 ) -> None:
     environment = catalog.environment(environment_name)
     shown_name = environment_name.title()
@@ -199,12 +204,12 @@ def _verify_stable_runtime_policy(
         "rationale",
         "selected_on",
         "upstream_release",
-    }
+    } | set(additional_selection_fields)
     if not isinstance(selection, dict) or set(selection) != expected_selection_fields:
         raise ReleaseError("the " + shown_name + " runtime selection rationale is incomplete")
-    if selection["policy"] != "latest-upstream-supported-stable":
+    if selection["policy"] != policy:
         raise ReleaseError(
-            "the " + shown_name + " runtime must select the latest upstream stable release"
+            "the " + shown_name + " runtime must use selection policy " + policy
         )
     for field in expected_selection_fields - {"policy"}:
         if not isinstance(selection[field], str) or not selection[field]:
@@ -248,12 +253,38 @@ def _verify_go_runtime_policy(catalog: Any) -> None:
     _verify_stable_runtime_policy(catalog, "go", "go_version")
 
 
+def _verify_java_runtime_policy(catalog: Any) -> None:
+    _verify_stable_runtime_policy(
+        catalog,
+        "java",
+        "java_version",
+        policy="latest-upstream-supported-lts",
+        additional_selection_fields=("lts_release",),
+    )
+
+
+def _verify_java_dependency_policy(catalog: Any) -> None:
+    environment = catalog.environment("java")
+    dependencies = environment.assets["dependency_definition"].content.decode("utf-8")
+    if any(
+        line.strip() and not line.lstrip().startswith("#")
+        for line in dependencies.splitlines()
+    ):
+        raise ReleaseError("the Java environment must remain standard-library-only")
+    recipe = environment.assets["recipe"].content.decode("utf-8").lower()
+    for downloader in ("curl ", "wget ", "mvn ", "gradle "):
+        if downloader in recipe:
+            raise ReleaseError("the Java recipe must not perform build-time downloads")
+
+
 def _verify_release_policies(catalog: Any) -> None:
     _verify_immutable_action_references(catalog)
     _verify_python_dependency_policy(catalog)
     _verify_python_recipe_policy(catalog)
     _verify_python_runtime_policy(catalog)
     _verify_go_runtime_policy(catalog)
+    _verify_java_runtime_policy(catalog)
+    _verify_java_dependency_policy(catalog)
 
 
 def _bundle_identity(bundle_path: Path) -> str:

@@ -1,0 +1,33 @@
+{
+  "selection": {
+    "policy": "latest-upstream-supported-lts",
+    "java_version": "25.0.3+9",
+    "lts_release": "25",
+    "rationale": "Java 25 is the latest upstream-designated LTS line; Temurin 25.0.3+9 was the latest matching official container build available when selected.",
+    "selected_on": "2026-08-12",
+    "upstream_release": "https://adoptium.net/temurin/releases/?version=25"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {
+        "image": "docker.io/library/eclipse-temurin@sha256:78e1c29a95bd36513e7d67eb730b699c6e6f46ef975e35e937c66eb726539609",
+        "version": "linux-amd64-java-25.0.3+9-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/eclipse-temurin@sha256:c650e8097620a27a61f476d2a269e02078dc9f316136ecd9821dedd98b89e719",
+        "version": "linux-amd64-java-25.0.3+9-execution-runtime-v1"
+      }
+    },
+    "linux/arm64": {
+      "build_toolchain": {
+        "image": "docker.io/library/eclipse-temurin@sha256:9d41aef0f1b800791a4c1e3e2ae52fc36a5b154a9edd08f0ab382b1999401e83",
+        "version": "linux-arm64-java-25.0.3+9-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/eclipse-temurin@sha256:57f9a2046d0ff628c24c0c127bd9d37a57e372064b30fdade9c00683382c1ab3",
+        "version": "linux-arm64-java-25.0.3+9-execution-runtime-v1"
+      }
+    }
+  },
+  "version": "java-runtime-v1"
+}

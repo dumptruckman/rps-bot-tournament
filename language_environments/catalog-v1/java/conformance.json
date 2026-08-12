@@ -1,0 +1,50 @@
+{
+  "accepted_faults": {
+    "import-time": ["unexpected_exit"],
+    "memory": ["resource_oom", "unexpected_exit"]
+  },
+  "contract": "choose-move-contract-v1",
+  "diagnostic_fixtures": [
+    "syntax-build",
+    "import-time",
+    "nondeterministic",
+    "protocol-fault",
+    "slow-response",
+    "memory",
+    "process",
+    "filesystem",
+    "premature-output"
+  ],
+  "fixture_sources": {
+    "filesystem": "import java.nio.file.Files;\nimport java.nio.file.Path;\nimport java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  private static final boolean LIMIT_ENFORCED = probe();\n  private static boolean probe() {\n    try {\n      Files.write(Path.of(\"/tmp/conformance-fill\"), new byte[32 * 1024 * 1024]);\n      Files.deleteIfExists(Path.of(\"/tmp/conformance-fill\"));\n      return false;\n    } catch (Exception error) { return true; }\n  }\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    return LIMIT_ENFORCED ? \"R\" : \"X\";\n  }\n}\n",
+    "import-time": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  private static final int FAILURE = fail();\n  private static int fail() { throw new IllegalStateException(\"conformance initialization fixture\"); }\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) { return \"R\"; }\n}\n",
+    "memory": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  private static byte[] retained;\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    retained = new byte[512 * 1024 * 1024];\n    for (int index = 0; index < retained.length; index += 4096) retained[index] = (byte) index;\n    return \"R\";\n  }\n}\n",
+    "nondeterministic": "import java.security.SecureRandom;\nimport java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    return new String[] {\"R\", \"P\", \"S\"}[new SecureRandom().nextInt(3)];\n  }\n}\n",
+    "premature-output": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  static { System.out.println(\"R\"); }\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) { return \"R\"; }\n}\n",
+    "process": "import java.util.ArrayList;\nimport java.util.List;\nimport java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  private static final boolean LIMIT_ENFORCED = probe();\n  private static boolean probe() {\n    List<Process> children = new ArrayList<>();\n    try {\n      for (int index = 0; index < 60; index++) children.add(new ProcessBuilder(\"/bin/sleep\", \"60\").start());\n      return false;\n    } catch (Exception error) { return true; }\n    finally { for (Process child : children) child.destroyForcibly(); }\n  }\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    return LIMIT_ENFORCED ? \"R\" : \"X\";\n  }\n}\n",
+    "protocol-fault": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) { return \"X\"; }\n}\n",
+    "slow-response": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    try { Thread.sleep(200); } catch (InterruptedException error) { Thread.currentThread().interrupt(); }\n    return \"R\";\n  }\n}\n",
+    "syntax-build": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    this is not valid Java\n    return \"R\";\n  }\n}\n"
+  },
+  "practice_artifacts": {
+    "copycat": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    return opponentHistory.isEmpty() ? \"R\" : opponentHistory.substring(opponentHistory.length() - 1);\n  }\n}\n",
+    "fixed-move": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) { return \"R\"; }\n}\n",
+    "protocol-test": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    if (turn != myHistory.length() || myHistory.length() != opponentHistory.length()) return \"X\";\n    if (!(myHistory + opponentHistory).matches(\"[RPS]*\")) return \"X\";\n    return new String[] {\"R\", \"P\", \"S\"}[turn % 3];\n  }\n}\n",
+    "random": "import java.util.random.RandomGenerator;\n\npublic final class Strategy {\n  public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng) {\n    return new String[] {\"R\", \"P\", \"S\"}[rng.nextInt(3)];\n  }\n}\n"
+  },
+  "seed_adapter": {
+    "algorithm": "new java.util.SplittableRandom(Long.parseUnsignedLong(RPS_SEED))",
+    "golden_vectors": [
+      {"seed": "0", "first_long": [-2152535657050944081, 7960286522194355700, 487617019471545679]},
+      {"seed": "1", "first_long": [-7995527694508729151, -4689498862643123097, -534904783426661026]},
+      {"seed": "9223372036854775807", "first_long": [3055647633038352039, -1005427240264861369, -1435078927205645936]},
+      {"seed": "18446744073709551615", "first_long": [-1956407806741107680, -1612297016619662647, 4048727598324417001]}
+    ],
+    "system_randomness": false,
+    "version": "java-splittable-random-seed-adapter-v1"
+  },
+  "source_path": "Strategy.java",
+  "syntax_diagnostic": "error:",
+  "syntax_stage": "build",
+  "suite_version": "java-artifact-conformance-v1"
+}

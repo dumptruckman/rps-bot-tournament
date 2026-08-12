@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "9e78f85567c3ae4152bae4dec378643e3bf5572a0602ab7599b8bb486ce93ee8",
+            "d8b53526663185af990515ccc09ce02fdd65929b22bf66a4706fb0a00d4b3336",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -114,6 +114,17 @@ class CatalogReleaseTests(unittest.TestCase):
                 "go.recipe",
                 "go.workflow",
                 "go.wrapper",
+                "java.base_runtime",
+                "java.build_toolchain",
+                "java.build_target",
+                "java.conformance",
+                "java.dependency_definition",
+                "java.entrypoint",
+                "java.platform",
+                "java.readiness",
+                "java.recipe",
+                "java.workflow",
+                "java.wrapper",
                 "internal-shell.base_runtime",
                 "internal-shell.build_toolchain",
                 "internal-shell.build_target",
@@ -150,12 +161,14 @@ class CatalogReleaseTests(unittest.TestCase):
                 "664168210a06c8e77b15e9166e2ee394ad1f0bff05e7d31e8014361110c94f9e",
                 "go": "go-artifact-conformance-v1@sha256:"
                 "d791f1719d0becbcb1b36bf4f94a006484637d8762685d9b7471ca1f8f39c1e8",
+                "java": "java-artifact-conformance-v1@sha256:"
+                "f29543b7644c0a65dc46ed3c88e5215b5177a2434f156f27130e81c613d4aa3f",
                 "python": "python-artifact-conformance-v1@sha256:"
                 "0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057"
             },
         )
         self.assertEqual(
-            set(manifest["platform_runtimes"]), {"go", "python"}
+            set(manifest["platform_runtimes"]), {"go", "java", "python"}
         )
         python_runtimes = manifest["platform_runtimes"]["python"]
         self.assertEqual(
@@ -164,6 +177,10 @@ class CatalogReleaseTests(unittest.TestCase):
         )
         self.assertEqual(
             python_runtimes["selection"]["python_version"], "3.14.6"
+        )
+        self.assertEqual(
+            manifest["platform_runtimes"]["java"]["selection"]["policy"],
+            "latest-upstream-supported-lts",
         )
         for platform in ("linux/amd64", "linux/arm64"):
             runtime = python_runtimes["platforms"][platform]
@@ -450,7 +467,8 @@ class CatalogIndependenceProofTests(unittest.TestCase):
         )
         self.assertIn("## Python Team Template build toolchains", notes)
         self.assertIn("## Go Team Template build toolchains", notes)
-        for language in ("go", "python"):
+        self.assertIn("## Java Team Template build toolchains", notes)
+        for language in ("go", "java", "python"):
             for platform in ("linux/amd64", "linux/arm64"):
                 build = manifest["platform_runtimes"][language]["platforms"][platform][
                     "build_toolchain"

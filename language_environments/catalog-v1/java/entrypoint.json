@@ -1,0 +1,4 @@
+{
+  "argv": ["/opt/java/openjdk/bin/java", "-cp", "/opt/rps/classes", "RpsWrapper"],
+  "version": "java-entrypoint-v1"
+}

@@ -738,6 +738,129 @@ def _go_significant_source(source: str) -> str:
     return "".join(result)
 
 
+def _validate_java_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "Strategy.java")
+    java_sources = []
+    for item in files:
+        if not item.path.endswith(".java"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Java strategy source must be UTF-8: " + str(error),
+            )
+        significant_source = _java_significant_source(source)
+        java_sources.append((item, significant_source))
+        if re.search(r"(?m)^\s*package\s+", significant_source):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Java Team Source must use the organizer-owned default package",
+            )
+        if re.search(r"\bclass\s+RpsWrapper\b", significant_source):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned RpsWrapper class",
+            )
+        if re.search(r"\bstatic\s+void\s+main\s*\(", significant_source):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned main method",
+            )
+
+    strategy_source = _java_significant_source(source_file.content.decode("utf-8"))
+    if len(re.findall(r"\bpublic\s+final\s+class\s+Strategy\b", strategy_source)) != 1:
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "Strategy.java must define exactly one public final Strategy class",
+        )
+    signature = re.compile(
+        r"\bpublic\s+static\s+String\s+chooseMove\s*\(\s*"
+        r"int\s+turn\s*,\s*String\s+myHistory\s*,\s*"
+        r"String\s+opponentHistory\s*,\s*RandomGenerator\s+rng\s*\)\s*\{"
+    )
+    bindings = sum(len(signature.findall(value)) for _, value in java_sources)
+    if bindings != 1 or not signature.search(strategy_source):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one public static String chooseMove(int turn, "
+            "String myHistory, String opponentHistory, RandomGenerator rng) method",
+        )
+
+
+def _java_significant_source(source: str) -> str:
+    """Blank Java comments and literal contents while preserving line structure."""
+
+    result = list(source)
+    index = 0
+    state = "code"
+    quote = ""
+    while index < len(source):
+        character = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        third = source[index + 2] if index + 2 < len(source) else ""
+        if state == "code":
+            if character == "/" and following == "/":
+                result[index] = result[index + 1] = " "
+                state = "line-comment"
+                index += 2
+                continue
+            if character == "/" and following == "*":
+                result[index] = result[index + 1] = " "
+                state = "block-comment"
+                index += 2
+                continue
+            if character == '"' and following == '"' and third == '"':
+                result[index] = result[index + 1] = result[index + 2] = " "
+                state = "text-block"
+                index += 3
+                continue
+            if character in ('"', "'"):
+                quote = character
+                result[index] = " "
+                state = "literal"
+        elif state == "line-comment":
+            if character == "\n":
+                state = "code"
+            else:
+                result[index] = " "
+        elif state == "block-comment":
+            if character == "*" and following == "/":
+                result[index] = result[index + 1] = " "
+                state = "code"
+                index += 2
+                continue
+            if character != "\n":
+                result[index] = " "
+        elif state == "text-block":
+            if character == '"' and following == '"' and third == '"':
+                result[index] = result[index + 1] = result[index + 2] = " "
+                state = "code"
+                index += 3
+                continue
+            if character != "\n":
+                result[index] = " "
+        elif state == "literal":
+            result[index] = " " if character != "\n" else "\n"
+            if character == "\\":
+                if index + 1 < len(source):
+                    if source[index + 1] != "\n":
+                        result[index + 1] = " "
+                    index += 2
+                    continue
+            elif character == quote:
+                state = "code"
+        index += 1
+    return "".join(result)
+
+
 def _validate_python_function_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.py")
     try:
@@ -858,6 +981,7 @@ def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
 
 _PARTICIPANT_CONTRACT_VALIDATORS = {
     "go-strategy-contract-v1": _validate_go_strategy_contract,
+    "java-strategy-contract-v1": _validate_java_strategy_contract,
     "none-v1": _validate_no_static_contract,
     "single-unconditional-function-v1": _validate_python_function_contract,
 }

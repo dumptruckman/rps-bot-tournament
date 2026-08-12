@@ -107,6 +107,73 @@
         "version": "go-source-schema-v1"
       }
     },
+    "java": {
+      "assets": {
+        "base_runtime": {"path": "java/runtimes.json", "sha256": "sha256:a1360c05b0c4586227b7c40c34e7df26579308956266639d47cfdfc6ec4121d2", "version": "java-runtime-v1"},
+        "build_toolchain": {"path": "java/runtimes.json", "sha256": "sha256:a1360c05b0c4586227b7c40c34e7df26579308956266639d47cfdfc6ec4121d2", "version": "java-build-toolchain-v1"},
+        "build_target": {"path": "java/Dockerfile", "sha256": "sha256:eeb351cb275b7b1074a5eb94e859fe58e60a804817553a0c3c3ed0ae2c61b0ef", "version": "java-build-target-v1"},
+        "conformance": {"path": "java/conformance.json", "sha256": "sha256:f29543b7644c0a65dc46ed3c88e5215b5177a2434f156f27130e81c613d4aa3f", "version": "java-conformance-v1"},
+        "dependency_definition": {"path": "java/dependencies.lock", "sha256": "sha256:5e8da0523e1ed6dde808a559d5d09dc873b09904a653b0c2fcefec69040734b6", "version": "java-dependencies-v1"},
+        "entrypoint": {"path": "java/entrypoint.json", "sha256": "sha256:0d093fae2bbedb01bffb5ca82e66af9131a153f56338892be571b70b43104044", "version": "java-entrypoint-v1"},
+        "platform": {"path": "java/runtimes.json", "sha256": "sha256:a1360c05b0c4586227b7c40c34e7df26579308956266639d47cfdfc6ec4121d2", "version": "java-oci-platforms-v1"},
+        "readiness": {"path": "java/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "java/Dockerfile", "sha256": "sha256:eeb351cb275b7b1074a5eb94e859fe58e60a804817553a0c3c3ed0ae2c61b0ef", "version": "java-build-recipe-v1"},
+        "workflow": {"path": "java/workflow.yml", "sha256": "sha256:f27c5bf095c5a46ffd10190ee0190d534c3147fee97ce0549f02d9573b06ae58", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "java/RpsWrapper.java", "sha256": "sha256:78b75d21d9b3b6bc5420fc9d927d1d2fbe1987ab4204bc226ba73d5d566b2d2f", "version": "java-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "java-language-environment-v1",
+      "language": "java",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "Strategy.chooseMove",
+        "signature": "public static String chooseMove(int turn, String myHistory, String opponentHistory, RandomGenerator rng)",
+        "static_validation": "java-strategy-contract-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": [
+          "*.java",
+          "resources/*.csv",
+          "resources/*.json",
+          "resources/*.txt",
+          "resources/**/*.csv",
+          "resources/**/*.json",
+          "resources/**/*.txt"
+        ],
+        "forbidden_paths": [
+          ".git",
+          ".github",
+          ".gradle",
+          ".hg",
+          ".gitlab-ci.yml",
+          ".mvn",
+          ".svn",
+          "Dockerfile",
+          "Justfile",
+          "Makefile",
+          "build.gradle",
+          "build.gradle.kts",
+          "compose.yml",
+          "docker-compose.yml",
+          "entrypoint.sh",
+          "gradle",
+          "gradle.properties",
+          "gradlew",
+          "gradlew.bat",
+          "module-info.java",
+          "pom.xml",
+          "settings.gradle",
+          "settings.gradle.kts",
+          "RpsWrapper.java"
+        ],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": ["Strategy.java"],
+        "version": "java-source-schema-v1"
+      }
+    },
     "internal-shell": {
       "assets": {
         "base_runtime": {"path": "internal-shell/runtimes.json", "sha256": "sha256:c8c91b683287d06ecc407ef4f568c2c4db18223d91541e1f67343138e028b62c", "version": "internal-shell-runtime-v1"},
