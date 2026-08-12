@@ -48,8 +48,8 @@ Adapter with published 64-bit golden vectors.
 The complete conformance suite passed Linux/AMD64 Advisory Validation and native
 Linux/ARM64 Final Validation, including build diagnostics, readiness, protocol,
 determinism, isolation, resources, lifecycle, and practice Matches. Java and
-Python Bot Artifacts also completed a mixed-language Match and sealed a
-mixed-language Tournament plan through generic Runner paths. Catalog Release
+Python Bot Artifacts also completed a mixed-language Match and created a
+mixed-language Tournament Manifest through generic Runner paths. Catalog Release
 `catalog-v4` and its offline bundle were independently verified with the Team
 Template repository absent; the complete Python 3.9 suite passed 428 tests with
 7 expected opt-in integration skips.

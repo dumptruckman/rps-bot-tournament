@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "d8b53526663185af990515ccc09ce02fdd65929b22bf66a4706fb0a00d4b3336",
+            "e90ce9d6e5eaad43451a7647ac25fa4623f2daf266f09c29eb3ce180be606801",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -352,6 +352,8 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertIn("./freeze-tournament-catalog prove", workflow)
         self.assertIn("catalog-independence-evidence.json", workflow)
         self.assertIn("catalog-release-notes.md", workflow)
+        self.assertIn("JavaLanguageEnvironmentDockerTests", workflow)
+        self.assertIn("RPS_DOCKER_PLATFORM: linux/amd64", workflow)
         self.assertRegex(
             workflow,
             r"uses: actions/upload-artifact@[0-9a-f]{40}",

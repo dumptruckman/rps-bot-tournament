@@ -28,6 +28,7 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_artifact_builder_cli.py",
     "tests/test_artifact_certification_cli.py",
     "tests/test_multi_language_environment.py",
+    "tests/test_java_language_environment.py",
     "tests/test_batch_plan_cli.py",
     "tests/test_tournament_plan_cli.py",
     "tests/test_tournament_cli.py",
@@ -160,9 +161,11 @@ def _verify_immutable_action_references(catalog: Any) -> None:
                 )
 
 
-def _verify_python_dependency_policy(catalog: Any) -> None:
-    python = catalog.environment("python")
-    dependency_path = CATALOG_PATH.parent / python.assets[
+def _verify_standard_library_dependency_policy(
+    catalog: Any, environment_name: str, display_name: str
+) -> None:
+    environment = catalog.environment(environment_name)
+    dependency_path = CATALOG_PATH.parent / environment.assets[
         "dependency_definition"
     ].catalog_path
     dependency_entries = [
@@ -171,14 +174,31 @@ def _verify_python_dependency_policy(catalog: Any) -> None:
         if line.strip() and not line.lstrip().startswith("#")
     ]
     if dependency_entries:
-        raise ReleaseError("the Python Language Environment must remain standard-library-only")
+        raise ReleaseError(
+            "the " + display_name + " environment must remain standard-library-only"
+        )
+
+
+def _verify_networkless_recipe_policy(
+    catalog: Any,
+    environment_name: str,
+    display_name: str,
+    download_commands: Sequence[str],
+) -> None:
+    environment = catalog.environment(environment_name)
+    recipe = environment.assets["recipe"].content.decode("utf-8").lower()
+    if any(command in recipe for command in download_commands):
+        raise ReleaseError(
+            "the " + display_name + " recipe must not perform build-time downloads"
+        )
+
+
+def _verify_python_dependency_policy(catalog: Any) -> None:
+    _verify_standard_library_dependency_policy(catalog, "python", "Python")
 
 
 def _verify_python_recipe_policy(catalog: Any) -> None:
-    python = catalog.environment("python")
-    recipe_path = CATALOG_PATH.parent / python.assets["recipe"].catalog_path
-    if re.search(r"^\s*RUN\s", recipe_path.read_text(), re.MULTILINE | re.IGNORECASE):
-        raise ReleaseError("the Python recipe must not perform build-time downloads")
+    _verify_networkless_recipe_policy(catalog, "python", "Python", ("run ",))
 
 
 def _verify_stable_runtime_policy(
@@ -264,17 +284,10 @@ def _verify_java_runtime_policy(catalog: Any) -> None:
 
 
 def _verify_java_dependency_policy(catalog: Any) -> None:
-    environment = catalog.environment("java")
-    dependencies = environment.assets["dependency_definition"].content.decode("utf-8")
-    if any(
-        line.strip() and not line.lstrip().startswith("#")
-        for line in dependencies.splitlines()
-    ):
-        raise ReleaseError("the Java environment must remain standard-library-only")
-    recipe = environment.assets["recipe"].content.decode("utf-8").lower()
-    for downloader in ("curl ", "wget ", "mvn ", "gradle "):
-        if downloader in recipe:
-            raise ReleaseError("the Java recipe must not perform build-time downloads")
+    _verify_standard_library_dependency_policy(catalog, "java", "Java")
+    _verify_networkless_recipe_policy(
+        catalog, "java", "Java", ("curl ", "wget ", "mvn ", "gradle ")
+    )
 
 
 def _verify_release_policies(catalog: Any) -> None:

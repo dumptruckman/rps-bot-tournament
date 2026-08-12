@@ -118,7 +118,7 @@
         "platform": {"path": "java/runtimes.json", "sha256": "sha256:a1360c05b0c4586227b7c40c34e7df26579308956266639d47cfdfc6ec4121d2", "version": "java-oci-platforms-v1"},
         "readiness": {"path": "java/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
         "recipe": {"path": "java/Dockerfile", "sha256": "sha256:eeb351cb275b7b1074a5eb94e859fe58e60a804817553a0c3c3ed0ae2c61b0ef", "version": "java-build-recipe-v1"},
-        "workflow": {"path": "java/workflow.yml", "sha256": "sha256:f27c5bf095c5a46ffd10190ee0190d534c3147fee97ce0549f02d9573b06ae58", "version": "source-validation-workflow-v1"},
+        "workflow": {"path": "java/workflow.yml", "sha256": "sha256:d9b654a9b96c4fa81836b4483c50fdbab175e4fb1154e0b21ee3569a5fd16788", "version": "source-validation-workflow-v1"},
         "wrapper": {"path": "java/RpsWrapper.java", "sha256": "sha256:78b75d21d9b3b6bc5420fc9d927d1d2fbe1987ab4204bc226ba73d5d566b2d2f", "version": "java-wrapper-v1"}
       },
       "contract_only": false,

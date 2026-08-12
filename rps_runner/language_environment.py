@@ -683,10 +683,18 @@ def _validate_go_strategy_contract(files: Sequence[SourceFile]) -> None:
 def _go_significant_source(source: str) -> str:
     """Blank Go comments and literal contents while preserving line structure."""
 
+    return _c_like_significant_source(source, raw_delimiters=("`",))
+
+
+def _c_like_significant_source(
+    source: str, *, raw_delimiters: Sequence[str]
+) -> str:
+    """Blank C-like comments and literal contents while preserving line structure."""
+
     result = list(source)
     index = 0
     state = "code"
-    quote = ""
+    delimiter = ""
     while index < len(source):
         character = source[index]
         following = source[index + 1] if index + 1 < len(source) else ""
@@ -701,10 +709,21 @@ def _go_significant_source(source: str) -> str:
                 state = "block-comment"
                 index += 2
                 continue
-            if character in ('"', "'", "`"):
-                quote = character
+            raw_delimiter = next(
+                (value for value in raw_delimiters if source.startswith(value, index)),
+                None,
+            )
+            if raw_delimiter is not None:
+                delimiter = raw_delimiter
+                for offset in range(len(delimiter)):
+                    result[index + offset] = " "
+                state = "raw-string"
+                index += len(delimiter)
+                continue
+            if character in ('"', "'"):
+                delimiter = character
                 result[index] = " "
-                state = "raw-string" if character == "`" else "string"
+                state = "string"
         elif state == "line-comment":
             if character == "\n":
                 state = "code"
@@ -719,9 +738,12 @@ def _go_significant_source(source: str) -> str:
             if character != "\n":
                 result[index] = " "
         elif state == "raw-string":
-            if character == "`":
-                result[index] = " "
+            if source.startswith(delimiter, index):
+                for offset in range(len(delimiter)):
+                    result[index + offset] = " "
                 state = "code"
+                index += len(delimiter)
+                continue
             elif character != "\n":
                 result[index] = " "
         elif state == "string":
@@ -732,7 +754,7 @@ def _go_significant_source(source: str) -> str:
                         result[index + 1] = " "
                     index += 2
                     continue
-            elif character == quote:
+            elif character == delimiter:
                 state = "code"
         index += 1
     return "".join(result)
@@ -750,7 +772,7 @@ def _validate_java_strategy_contract(files: Sequence[SourceFile]) -> None:
             raise SourceValidationError(
                 item.path,
                 "participant_contract",
-                "Java strategy source must be UTF-8: " + str(error),
+                "Java Team Source must be UTF-8: " + str(error),
             )
         significant_source = _java_significant_source(source)
         java_sources.append((item, significant_source))
@@ -798,67 +820,7 @@ def _validate_java_strategy_contract(files: Sequence[SourceFile]) -> None:
 def _java_significant_source(source: str) -> str:
     """Blank Java comments and literal contents while preserving line structure."""
 
-    result = list(source)
-    index = 0
-    state = "code"
-    quote = ""
-    while index < len(source):
-        character = source[index]
-        following = source[index + 1] if index + 1 < len(source) else ""
-        third = source[index + 2] if index + 2 < len(source) else ""
-        if state == "code":
-            if character == "/" and following == "/":
-                result[index] = result[index + 1] = " "
-                state = "line-comment"
-                index += 2
-                continue
-            if character == "/" and following == "*":
-                result[index] = result[index + 1] = " "
-                state = "block-comment"
-                index += 2
-                continue
-            if character == '"' and following == '"' and third == '"':
-                result[index] = result[index + 1] = result[index + 2] = " "
-                state = "text-block"
-                index += 3
-                continue
-            if character in ('"', "'"):
-                quote = character
-                result[index] = " "
-                state = "literal"
-        elif state == "line-comment":
-            if character == "\n":
-                state = "code"
-            else:
-                result[index] = " "
-        elif state == "block-comment":
-            if character == "*" and following == "/":
-                result[index] = result[index + 1] = " "
-                state = "code"
-                index += 2
-                continue
-            if character != "\n":
-                result[index] = " "
-        elif state == "text-block":
-            if character == '"' and following == '"' and third == '"':
-                result[index] = result[index + 1] = result[index + 2] = " "
-                state = "code"
-                index += 3
-                continue
-            if character != "\n":
-                result[index] = " "
-        elif state == "literal":
-            result[index] = " " if character != "\n" else "\n"
-            if character == "\\":
-                if index + 1 < len(source):
-                    if source[index + 1] != "\n":
-                        result[index + 1] = " "
-                    index += 2
-                    continue
-            elif character == quote:
-                state = "code"
-        index += 1
-    return "".join(result)
+    return _c_like_significant_source(source, raw_delimiters=('"""',))
 
 
 def _validate_python_function_contract(files: Sequence[SourceFile]) -> None:

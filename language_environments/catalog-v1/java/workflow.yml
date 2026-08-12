@@ -1,4 +1,4 @@
-name: Validate Java Team source
+name: Validate Java Team Source
 on: [push]
 permissions:
   contents: read
