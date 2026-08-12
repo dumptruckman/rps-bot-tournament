@@ -52,11 +52,17 @@ class ArtifactCertificationCliTests(unittest.TestCase):
                 "digest": "sha256:" + "4" * 64,
                 "identity": "python-runtime-v1@sha256:" + "4" * 64,
             },
+            "build_toolchain": {
+                "reference": "python@sha256:" + "4" * 64,
+                "digest": "sha256:" + "4" * 64,
+                "identity": "python-runtime-v1@sha256:" + "4" * 64,
+            },
             "language": "python",
             "platform": platform,
             "entrypoint": ["python3", "-I", "/opt/rps/wrapper.py"],
             "identities": {
                 "catalog": "catalog-v1@sha256:" + "5" * 64,
+                "build_toolchain": "build-toolchain-v1@sha256:" + "5" * 64,
                 "core_tool": "core-v1@sha256:" + "6" * 64,
                 "entrypoint": "entrypoint-v1@sha256:" + "7" * 64,
                 "language_environment": "python-v1@sha256:" + "8" * 64,
@@ -88,6 +94,7 @@ class ArtifactCertificationCliTests(unittest.TestCase):
         manifest["identities"].update(
             {
                 "catalog": catalog.identity,
+                "build_toolchain": environment.assets["build_toolchain"].identity,
                 "entrypoint": environment.assets["entrypoint"].identity,
                 "language_environment": environment.descriptor_identity,
                 "platform": environment.assets["platform"].identity,
@@ -375,6 +382,73 @@ class ArtifactCertificationCliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("conformance failure", diagnostics.getvalue())
         self.assertIn("strategy.py", diagnostics.getvalue())
+
+    def test_certification_preserves_the_candidate_selected_environment(self) -> None:
+        candidate = self.catalog_candidate()
+        manifest_path = candidate / "artifact-candidate.json"
+        manifest = json.loads(manifest_path.read_text())
+        catalog = load_catalog(CATALOG)
+        environment = catalog.environment("internal-shell")
+        manifest["language"] = environment.language
+        manifest["entrypoint"] = ["/bin/sh", "/opt/rps/wrapper.sh"]
+        manifest["identities"].update(
+            {
+                "language_environment": environment.descriptor_identity,
+                "build_toolchain": environment.assets["build_toolchain"].identity,
+                "suite_candidate": environment.assets["conformance"].identity,
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest))
+        smoke = {
+            "attempts": 2,
+            "same_seed_repeated": True,
+            "scheduled_turns": 300,
+            "outcome_observed_not_gated": {},
+            "practice_artifacts": {},
+            "diagnostic_fixtures": {},
+        }
+        output = self.directory / "shell-certified"
+
+        with (
+            mock.patch("rps_runner.artifact_certification._verify_candidate_identities"),
+            mock.patch("rps_runner.artifact_certification._verify_frozen_source"),
+            mock.patch("rps_runner.artifact_certification._verify_image"),
+            mock.patch(
+                "rps_runner.artifact_certification._run_smoke_matches",
+                return_value=smoke,
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            code = main(
+                [
+                    "--catalog",
+                    str(CATALOG),
+                    "--candidate",
+                    str(candidate),
+                    "--mode",
+                    "github-advisory",
+                    "--platform",
+                    "linux/amd64",
+                    "--profile",
+                    "docker-execution-v1",
+                    "--output",
+                    str(output),
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        certified = json.loads((output / "bot-artifact-manifest.json").read_text())
+        report = json.loads((output / "validation-report.json").read_text())
+        self.assertEqual(certified["language"], "shell-fixture")
+        self.assertEqual(
+            certified["identities"]["language_environment"],
+            environment.descriptor_identity,
+        )
+        self.assertTrue(
+            report["identities"]["suite"].startswith(
+                "internal-shell-artifact-conformance-v1@sha256:"
+            )
+        )
 
 
 if __name__ == "__main__":

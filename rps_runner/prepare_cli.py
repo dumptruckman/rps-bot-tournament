@@ -102,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Prepare an explicit frozen organizer configuration for offline use",
     )
     parser.add_argument("--catalog", required=True, type=Path)
+    parser.add_argument("--environment", required=True)
     parser.add_argument(
         "--platform", required=True, choices=("linux/arm64", "linux/amd64")
     )
@@ -155,9 +156,12 @@ def _docker(arguments: list[str], *, timeout: float = 300) -> subprocess.Complet
 
 
 def _ensure_pinned_runtimes(
-    catalog: object, platform: str, allow_pull: bool
+    catalog: object,
+    platform: str,
+    allow_pull: bool,
+    environment_name: str | None = None,
 ) -> list[str]:
-    references = runtime_references(catalog, platform)
+    references = runtime_references(catalog, platform, environment_name)
     for reference in references:
         inspected = _docker(["image", "inspect", reference], timeout=10)
         if inspected.returncode == 0:
@@ -243,18 +247,29 @@ def prepare_offline_inputs(
     profile: str,
     artifact_store: Path,
     allow_pull: bool,
+    environment_name: str,
 ) -> Mapping[str, object]:
     """Build and retain organizer-owned evidence using only pinned inputs."""
-    runtime_references = _ensure_pinned_runtimes(catalog, platform, allow_pull)
+    runtime_references = _ensure_pinned_runtimes(
+        catalog, platform, allow_pull, environment_name
+    )
     artifact_store.parent.mkdir(parents=True, exist_ok=True)
     with _writable_temporary_directory(artifact_store.parent) as work:
         source = work / "representative-source"
         source.mkdir()
-        (source / "strategy.py").write_text(
-            "def choose_move(history, seed=None):\n    return 'rock'\n"
+        environment = catalog.environment(environment_name)
+        conformance = json.loads(environment.assets["conformance"].content)
+        representative = conformance.get("practice_artifacts", {}).get("fixed-move")
+        source_path = conformance.get(
+            "source_path", environment.source_schema.required_paths[0]
         )
+        if not isinstance(representative, str) or not isinstance(source_path, str):
+            raise PreparationFailure(
+                "catalog_correction", "selected environment has no representative fixture"
+            )
+        (source / source_path).write_text(representative)
         bundle = work / "representative-bundle"
-        freeze_source_bundle(source, bundle, catalog, catalog.environment("python"))
+        freeze_source_bundle(source, bundle, catalog, environment)
         candidate = work / "representative-candidate"
         candidate_manifest = build_artifact_candidate(
             bundle, candidate, catalog, platform
@@ -341,6 +356,7 @@ def run(arguments: Optional[list[str]] = None) -> dict[str, object]:
             profile=options.profile,
             artifact_store=artifact_store,
             allow_pull=options.allow_pull,
+            environment_name=options.environment,
         )
     except PreparationFailure:
         _discard_generated_store(artifact_store)
@@ -444,6 +460,7 @@ def _finalize_preparation(
         "platform": options.platform,
         "catalog_identity": catalog.identity,
         "catalog": {"path": str(catalog_path), "identity": catalog.identity},
+        "environment": options.environment,
         "profile_identity": INITIAL_EXECUTION_PROFILE.identity,
         "profile": {
             "version": options.profile,

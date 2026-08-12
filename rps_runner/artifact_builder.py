@@ -82,7 +82,22 @@ def _read_json(content: bytes, description: str) -> Mapping[str, Any]:
     return value
 
 
-def _runtime_for(bundle: FrozenSourceBundle, platform: str) -> RuntimeIdentity:
+def _image_identity(value: object, description: str) -> RuntimeIdentity:
+    if not isinstance(value, dict):
+        raise ArtifactBuildFailure(description + " identity is missing")
+    reference = value.get("image")
+    version = value.get("version")
+    if not isinstance(reference, str) or "@" not in reference:
+        raise ArtifactBuildFailure(description + " is not referenced by immutable digest")
+    digest = reference.rsplit("@", 1)[1]
+    if not _DIGEST.fullmatch(digest) or not isinstance(version, str) or not version:
+        raise ArtifactBuildFailure(description + " identity is invalid or mutable")
+    return RuntimeIdentity(reference, digest, version + "@" + digest)
+
+
+def _build_and_runtime_for(
+    bundle: FrozenSourceBundle, platform: str
+) -> tuple[RuntimeIdentity, RuntimeIdentity]:
     if not _PLATFORM.fullmatch(platform):
         raise ArtifactBuildFailure(
             "target platform "
@@ -99,19 +114,11 @@ def _runtime_for(bundle: FrozenSourceBundle, platform: str) -> RuntimeIdentity:
             "target platform " + repr(platform) + " has no pinned base runtime"
         )
     selected = platforms[platform]
-    reference = selected.get("image")
-    version = selected.get("version")
-    if not isinstance(reference, str) or "@" not in reference:
-        raise ArtifactBuildFailure(
-            "selected base runtime is not referenced by immutable digest"
-        )
-    digest = reference.rsplit("@", 1)[1]
-    if not _DIGEST.fullmatch(digest) or not isinstance(version, str) or not version:
-        raise ArtifactBuildFailure("selected base runtime identity is invalid or mutable")
-    return RuntimeIdentity(
-        reference=reference,
-        digest=digest,
-        identity=version + "@" + digest,
+    execution_value = selected.get("execution_runtime", selected)
+    build_value = selected.get("build_toolchain", selected)
+    return (
+        _image_identity(build_value, "selected build toolchain"),
+        _image_identity(execution_value, "selected execution runtime"),
     )
 
 
@@ -286,9 +293,11 @@ def build_artifact_candidate(
         raise ArtifactBuildFailure(
             "contract-only Language Environment cannot build a Bot Artifact"
         )
-    runtime = _runtime_for(bundle, platform)
+    build_toolchain, runtime = _build_and_runtime_for(bundle, platform)
     entrypoint = _entrypoint(bundle)
     _verify_runtime(runtime, platform, timeout_seconds)
+    if build_toolchain.reference != runtime.reference:
+        _verify_runtime(build_toolchain, platform, timeout_seconds)
 
     candidate.parent.mkdir(parents=True, exist_ok=True)
     image_reference = "rps-tournament-candidate:" + uuid.uuid4().hex
@@ -300,7 +309,8 @@ def build_artifact_candidate(
         materialize_source_files(bundle.files, team)
         organizer = work / "organizer-context"
         (organizer / "organizer").mkdir(parents=True)
-        (organizer / "organizer" / "wrapper.py").write_bytes(
+        wrapper = bundle.environment.assets["wrapper"]
+        (organizer / "organizer" / wrapper.path.name).write_bytes(
             bundle.environment.assets["wrapper"].content
         )
         recipe = organizer / "Dockerfile"
@@ -314,6 +324,8 @@ def build_artifact_candidate(
             "--pull=false",
             "--platform",
             platform,
+            "--build-arg",
+            "RPS_BUILD_TOOLCHAIN=" + build_toolchain.reference,
             "--build-arg",
             "RPS_BASE_RUNTIME=" + runtime.reference,
             "--build-context",
@@ -362,6 +374,7 @@ def build_artifact_candidate(
 
         identities = {
             "catalog": catalog.identity,
+            "build_toolchain": bundle.environment.assets["build_toolchain"].identity,
             "core_tool": _core_tool_identity(),
             "entrypoint": bundle.environment.assets["entrypoint"].identity,
             "language_environment": bundle.environment.descriptor_identity,
@@ -376,6 +389,7 @@ def build_artifact_candidate(
             "language": bundle.environment.language,
             "platform": platform,
             "runtime_identity": runtime.identity,
+            "build_toolchain_identity": build_toolchain.identity,
             "source_digest": bundle.manifest["source_digest"],
         }
         manifest = {
@@ -386,6 +400,7 @@ def build_artifact_candidate(
             "build_identity": _canonical_identity(BUILD_FORMAT_VERSION, build_inputs),
             "runtime_digest": runtime.digest,
             "runtime": runtime.as_manifest(),
+            "build_toolchain": build_toolchain.as_manifest(),
             "language": bundle.environment.language,
             "platform": platform,
             "entrypoint": list(entrypoint),

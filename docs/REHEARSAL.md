@@ -33,6 +33,7 @@ prepared:
 rps-rehearse \
   --teams path/to/sixteen-teams.json \
   --catalog language_environments/catalog-v1/catalog.json \
+  --environment python \
   --output path/to/rehearsal-output \
   --tournament-seed 8675309 \
   --profile docker-execution-v1 \

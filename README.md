@@ -387,15 +387,16 @@ rps-build-artifact \
   --candidate path/to/new-artifact-candidate
 ```
 
-The builder honors the active Docker context, verifies the local base runtime by
-its platform-specific digest, and builds without networking. Team source and the
+The builder honors the active Docker context, verifies the selected build
+toolchain and execution runtime by their platform-specific digests, and builds
+without networking. Team source and the
 organizer-owned recipe and wrapper enter Docker through separate contexts. The
 new candidate directory retains read-only source, bounded build diagnostics, and
 `artifact-candidate.json`. That record identifies the exact produced image and
 all frozen build inputs. It is a suite candidate, not an official Bot Artifact,
 until conformance certification succeeds.
 
-### Certify a Python Bot Artifact
+### Certify a Bot Artifact
 
 All validation authorities invoke the same versioned command with explicit mode,
 platform, and execution-profile inputs:
@@ -419,7 +420,7 @@ Certification verifies the frozen catalog and source/build record, exact local
 image identity, entrypoint, readiness, lifecycle, protocol transcripts,
 same-seed behavior, timing and stream limits, the isolation/resource profile,
 and complete 300-Turn container Matches. Fixed-move, random, copycat, and
-protocol-test practice Bot Artifacts are built through the same Python Language
+protocol-test practice Bot Artifacts are built through the same selected Language
 Environment and container path. Their protocol conformance can fail the suite,
 but their score and winner never do. Successful output contains immutable
 `bot-artifact-manifest.json` and `validation-report.json` files with every
@@ -451,6 +452,7 @@ Artifacts with an explicit operational concurrency limit:
 rps-batch-plan \
   --teams path/to/team-sources.json \
   --catalog language_environments/catalog-v1/catalog.json \
+  --environment python \
   --output path/to/new-batch-output \
   --tournament-seed 8675309 \
   --execution-mode continuous \
@@ -554,6 +556,7 @@ access is still available if a pinned runtime is not already cached:
 ```text
 rps-prepare \
   --catalog language_environments/catalog-v1/catalog.json \
+  --environment python \
   --platform linux/arm64 \
   --profile docker-execution-v1 \
   --artifact-store path/to/prepared-artifact-store \

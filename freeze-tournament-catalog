@@ -12,7 +12,6 @@ import sys
 import tempfile
 from typing import Any, Dict, List, Tuple
 
-from rps_runner.artifact_certification import SUITE_VERSION
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import CatalogError, load_catalog
 
@@ -28,6 +27,7 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_source_validation_cli.py",
     "tests/test_artifact_builder_cli.py",
     "tests/test_artifact_certification_cli.py",
+    "tests/test_multi_language_environment.py",
     "tests/test_batch_plan_cli.py",
     "tests/test_tournament_plan_cli.py",
     "tests/test_tournament_cli.py",
@@ -86,29 +86,68 @@ def _require_clean_repository() -> None:
         raise ReleaseError("repository must be clean before freezing or verifying a release")
 
 
-def _runtime_records(catalog: Any) -> Dict[str, Dict[str, str]]:
-    try:
-        environment = catalog.environment("python")
-        runtime_catalog = json.loads(environment.assets["base_runtime"].content)
-        platforms = runtime_catalog["platforms"]
-    except (CatalogError, KeyError, TypeError, json.JSONDecodeError) as error:
-        raise ReleaseError("could not read the Python platform runtimes: " + str(error))
-    if set(platforms) != {"linux/amd64", "linux/arm64"}:
-        raise ReleaseError("Python runtimes must pin linux/amd64 and linux/arm64")
-    records: Dict[str, Dict[str, str]] = {}
-    for platform, runtime in sorted(platforms.items()):
-        reference = str(runtime.get("image", ""))
-        if "@" not in reference:
-            raise ReleaseError(platform + " runtime is not pinned by a full digest")
-        digest = reference.rsplit("@", 1)[1]
-        if not FULL_DIGEST.fullmatch(digest) or ":latest" in reference.lower():
-            raise ReleaseError(platform + " runtime is not pinned by a full digest")
-        records[platform] = {
-            "version": str(runtime.get("version", "")),
-            "reference": reference,
-            "digest": digest,
-        }
+def _immutable_image_record(value: Any, location: str) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        raise ReleaseError(location + " must be a complete image record")
+    reference = value.get("image")
+    version = value.get("version")
+    if not isinstance(reference, str) or "@" not in reference:
+        raise ReleaseError(location + " is not pinned by a full digest")
+    digest = reference.rsplit("@", 1)[1]
+    if (
+        not FULL_DIGEST.fullmatch(digest)
+        or ":latest" in reference.lower()
+        or not isinstance(version, str)
+        or not version
+    ):
+        raise ReleaseError(location + " is mutable or incomplete")
+    return {"version": version, "reference": reference, "digest": digest}
+
+
+def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
+    records: Dict[str, Dict[str, Any]] = {}
+    for name, environment in sorted(catalog.environments.items()):
+        if environment.publication != "production":
+            continue
+        try:
+            runtime_catalog = json.loads(environment.assets["base_runtime"].content)
+            platforms = runtime_catalog["platforms"]
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ReleaseError(name + " has no complete platform runtime catalog") from error
+        if set(platforms) != {"linux/amd64", "linux/arm64"}:
+            raise ReleaseError(name + " must pin linux/amd64 and linux/arm64")
+        environment_records: Dict[str, Any] = {}
+        for platform, selected in sorted(platforms.items()):
+            execution = selected.get("execution_runtime", selected)
+            build = selected.get("build_toolchain", selected)
+            environment_records[platform] = {
+                "build_toolchain": _immutable_image_record(
+                    build, name + " " + platform + " build toolchain"
+                ),
+                "execution_runtime": _immutable_image_record(
+                    execution, name + " " + platform + " execution runtime"
+                ),
+            }
+        records[name] = environment_records
+    if not records:
+        raise ReleaseError("catalog must publish at least one production environment")
     return records
+
+
+def _certification_suites(catalog: Any) -> Dict[str, str]:
+    suites: Dict[str, str] = {}
+    for name, environment in sorted(catalog.environments.items()):
+        if environment.contract_only:
+            continue
+        try:
+            definition = json.loads(environment.assets["conformance"].content)
+            suite_version = definition["suite_version"]
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ReleaseError(name + " has no complete conformance suite") from error
+        if not isinstance(suite_version, str) or not suite_version or "latest" in suite_version.lower():
+            raise ReleaseError(name + " conformance suite identity is mutable or incomplete")
+        suites[name] = suite_version + "@" + environment.assets["conformance"].digest
+    return suites
 
 
 def _verify_immutable_action_references(catalog: Any) -> None:
@@ -184,7 +223,6 @@ def _build_manifest(tag: str, bundle_path: Path) -> Dict[str, Any]:
         for environment_name, environment in sorted(catalog.environments.items())
         for asset_name, asset in sorted(environment.assets.items())
     }
-    python_conformance = catalog.environment("python").assets["conformance"]
     manifest = {
         "release_format_version": "catalog-release-v1",
         "repository": {"tag": tag},
@@ -202,9 +240,7 @@ def _build_manifest(tag: str, bundle_path: Path) -> Dict[str, Any]:
             "version": INITIAL_EXECUTION_PROFILE.version,
             "identity": INITIAL_EXECUTION_PROFILE.identity,
         },
-        "certification_suites": {
-            "python": SUITE_VERSION + "@" + python_conformance.digest
-        },
+        "certification_suites": _certification_suites(catalog),
         "platform_runtimes": _runtime_records(catalog),
         "offline_bundle": {"identity": _bundle_identity(bundle_path)},
     }

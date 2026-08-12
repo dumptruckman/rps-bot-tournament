@@ -34,6 +34,8 @@ class PrepareCliTests(unittest.TestCase):
         return [
             "--catalog",
             str(CATALOG),
+            "--environment",
+            "python",
             "--platform",
             "linux/arm64",
             "--profile",
@@ -147,7 +149,7 @@ class PrepareCliTests(unittest.TestCase):
 
     def test_all_mutable_selections_are_explicit_and_latest_is_rejected(self) -> None:
         parser = prepare_cli.build_parser()
-        for missing in ("--catalog", "--platform", "--profile", "--artifact-store", "--report"):
+        for missing in ("--catalog", "--environment", "--platform", "--profile", "--artifact-store", "--report"):
             arguments = self.arguments()
             index = arguments.index(missing)
             del arguments[index : index + 2]

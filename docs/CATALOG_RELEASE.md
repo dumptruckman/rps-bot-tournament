@@ -19,9 +19,11 @@ git status --short
 ```
 
 Creation verifies the catalog and every declared asset, the source-validation
-workflow, standard-library-only dependency policy, networkless recipe, pinned
-CI actions, both platform runtime digests, conformance suite identities, and
-execution profile identity. It then bundles the exact commit and its required
+workflow, pinned CI actions, and every production environment's complete,
+immutable Linux/AMD64 and Linux/ARM64 build-toolchain, execution-runtime, and
+conformance-suite identities. Contract-only production entries are rejected.
+Python's migration-era standard-library and networkless-recipe policies remain
+additional release checks. It then bundles the exact commit and its required
 history, records the bundle digest in the manifest, and creates the annotated
 tag. Existing bundle destinations and tag names are rejected.
 

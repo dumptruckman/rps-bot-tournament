@@ -1,0 +1,4 @@
+{
+  "argv": ["/bin/sh", "/opt/rps/wrapper.sh"],
+  "version": "internal-shell-entrypoint-v1"
+}

@@ -166,10 +166,14 @@ def _machine_report() -> dict[str, Any]:
     }
 
 
-def runtime_references(catalog: object, target_platform: str) -> list[str]:
+def runtime_references(
+    catalog: object, target_platform: str, environment_name: str | None = None
+) -> list[str]:
     references: list[str] = []
     environments = getattr(catalog, "environments")
     for environment in environments.values():
+        if environment_name is not None and environment.name != environment_name:
+            continue
         if environment.contract_only:
             continue
         asset = environment.assets.get("base_runtime")
@@ -177,22 +181,29 @@ def runtime_references(catalog: object, target_platform: str) -> list[str]:
             continue
         try:
             definition = json.loads(asset.content)
-            reference = definition["platforms"][target_platform]["image"]
+            selected = definition["platforms"][target_platform]
+            image_values = (
+                (selected.get("build_toolchain"), selected.get("execution_runtime"))
+                if "build_toolchain" in selected or "execution_runtime" in selected
+                else (selected,)
+            )
         except (json.JSONDecodeError, KeyError, TypeError) as error:
             raise CatalogError(
                 environment.name
                 + " has no valid base runtime for "
                 + target_platform
             ) from error
-        if (
-            not isinstance(reference, str)
-            or "@" not in reference
-            or _IMMUTABLE_DIGEST.fullmatch(reference.rsplit("@", 1)[1]) is None
-        ):
-            raise CatalogError(
-                environment.name + " base runtime is not pinned by sha256 digest"
-            )
-        references.append(reference)
+        for image_value in image_values:
+            reference = image_value.get("image") if isinstance(image_value, dict) else None
+            if (
+                not isinstance(reference, str)
+                or "@" not in reference
+                or _IMMUTABLE_DIGEST.fullmatch(reference.rsplit("@", 1)[1]) is None
+            ):
+                raise CatalogError(
+                    environment.name + " runtime input is not pinned by sha256 digest"
+                )
+            references.append(reference)
     if not references:
         raise CatalogError("catalog has no base runtime for " + target_platform)
     return sorted(set(references))

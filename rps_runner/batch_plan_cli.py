@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--teams", required=True, type=Path)
     parser.add_argument("--catalog", required=True, type=Path)
+    parser.add_argument("--environment", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
         "--tournament-seed", required=True, type=unsigned_64_bit_integer
@@ -114,7 +115,7 @@ def main(
 
         results = BatchExecutor(
             catalog,
-            catalog.environment("python"),
+            catalog.environment(options.environment),
             operations,
             options.retain_practice_images,
         ).execute(teams, team_directory, options.jobs)

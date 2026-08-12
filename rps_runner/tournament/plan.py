@@ -91,7 +91,6 @@ def validate_tournament_plan(
         or catalog_record.get("identity") != catalog.identity
     ):
         raise ValueError("Tournament plan uses a stale or mismatched catalog")
-    environment = catalog.environment("python")
 
     execution = _object(plan.get("execution"), "execution")
     _exact_fields(execution, {"mode", "parallelism"}, "execution")
@@ -183,7 +182,6 @@ def validate_tournament_plan(
             manifest,
             str(selected_source.get("source_digest")),
             catalog,
-            environment,
             profile,
             location,
         )

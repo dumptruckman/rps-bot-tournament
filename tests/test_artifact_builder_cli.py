@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -33,7 +34,7 @@ class ArtifactBuilderCliTests(unittest.TestCase):
             "with open(os.environ['FAKE_DOCKER_LOG'], 'a') as stream:\n"
             "    stream.write(json.dumps(args) + '\\n')\n"
             "mode = os.environ.get('FAKE_DOCKER_MODE', 'success')\n"
-            "runtime_digest = os.environ['FAKE_RUNTIME_DIGEST']\n"
+            "entrypoint = json.loads(os.environ.get('FAKE_ENTRYPOINT', '[\"python3\", \"-I\", \"/opt/rps/wrapper.py\"]'))\n"
             "if args[:2] == ['image', 'inspect']:\n"
             "    target = args[2]\n"
             "    if '@sha256:' in target:\n"
@@ -44,7 +45,7 @@ class ArtifactBuilderCliTests(unittest.TestCase):
             "        image_id = 'sha256:' + ('d' if mode == 'wrong-image' else 'b') * 64\n"
             "        print(json.dumps([{'Id': image_id, 'RepoDigests': [], "
             "'Os': 'linux', 'Architecture': architecture, "
-            "'Config': {'Entrypoint': ['python3', '-I', '/opt/rps/wrapper.py']}}]))\n"
+            "'Config': {'Entrypoint': entrypoint}}]))\n"
             "elif args and args[0] == 'build':\n"
             "    if mode == 'docker-failure':\n"
             "        print('Docker daemon rejected the build')\n"
@@ -68,15 +69,18 @@ class ArtifactBuilderCliTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
-    def make_bundle(self) -> Path:
+    def make_bundle(self, environment_name: str = "python") -> Path:
         self.bundle_count += 1
         suffix = str(self.bundle_count)
         source = self.directory / ("team-source-" + suffix)
         source.mkdir()
-        (source / "strategy.py").write_text(
-            "def choose_move(turn, my_history, opponent_history, rng):\n"
-            "    return 'R'\n"
-        )
+        if environment_name == "python":
+            (source / "strategy.py").write_text(
+                "def choose_move(turn, my_history, opponent_history, rng):\n"
+                "    return 'R'\n"
+            )
+        else:
+            (source / "strategy.sh").write_text("choose_move() { echo R; }\n")
         bundle = self.directory / ("source-bundle-" + suffix)
         completed = subprocess.run(
             [
@@ -86,7 +90,7 @@ class ArtifactBuilderCliTests(unittest.TestCase):
                 "--catalog",
                 str(CATALOG),
                 "--environment",
-                "python",
+                environment_name,
                 "--source",
                 str(source),
                 "--bundle",
@@ -108,20 +112,25 @@ class ArtifactBuilderCliTests(unittest.TestCase):
         mode: str = "success",
         timeout: str = "5",
         maximum_output: str = "65536",
+        environment_name: str = "python",
     ) -> subprocess.CompletedProcess[str]:
         runtime_data = json.loads(
-            (CATALOG.parent / "python" / "runtimes.json").read_text()
+            (CATALOG.parent / environment_name / "runtimes.json").read_text()
         )
-        runtime_digest = runtime_data["platforms"]["linux/amd64"]["image"].split(
-            "@", 1
-        )[1]
+        selected = runtime_data["platforms"]["linux/amd64"]
+        runtime = selected.get("execution_runtime", selected)
+        entrypoint = (
+            ["python3", "-I", "/opt/rps/wrapper.py"]
+            if environment_name == "python"
+            else ["/bin/sh", "/opt/rps/wrapper.sh"]
+        )
         environment = os.environ.copy()
         environment.update(
             {
                 "PATH": str(self.fake_bin) + os.pathsep + environment["PATH"],
                 "FAKE_DOCKER_LOG": str(self.docker_log),
                 "FAKE_DOCKER_MODE": mode,
-                "FAKE_RUNTIME_DIGEST": runtime_digest,
+                "FAKE_ENTRYPOINT": json.dumps(entrypoint),
             }
         )
         return subprocess.run(
@@ -174,6 +183,7 @@ class ArtifactBuilderCliTests(unittest.TestCase):
             set(result["identities"]),
             {
                 "catalog",
+                "build_toolchain",
                 "core_tool",
                 "entrypoint",
                 "language_environment",
@@ -199,8 +209,27 @@ class ArtifactBuilderCliTests(unittest.TestCase):
         self.assertIn("--network=none", build)
         self.assertIn("--pull=false", build)
         self.assertEqual(build[build.index("--platform") + 1], "linux/amd64")
-        runtime_argument = build[build.index("--build-arg") + 1]
-        self.assertRegex(runtime_argument, r"^RPS_BASE_RUNTIME=.+@sha256:[0-9a-f]{64}$")
+        build_arguments = [
+            build[index + 1]
+            for index, value in enumerate(build)
+            if value == "--build-arg"
+        ]
+        self.assertTrue(
+            any(
+                re.fullmatch(
+                    r"RPS_BASE_RUNTIME=.+@sha256:[0-9a-f]{64}", argument
+                )
+                for argument in build_arguments
+            )
+        )
+        self.assertTrue(
+            any(
+                re.fullmatch(
+                    r"RPS_BUILD_TOOLCHAIN=.+@sha256:[0-9a-f]{64}", argument
+                )
+                for argument in build_arguments
+            )
+        )
         team_context = build[build.index("--build-context") + 1]
         self.assertTrue(team_context.startswith("team="))
         team_path = Path(team_context.split("=", 1)[1])
@@ -213,6 +242,27 @@ class ArtifactBuilderCliTests(unittest.TestCase):
         recipe = Path(build[build.index("--file") + 1])
         self.assertEqual(recipe.parent, organizer_context)
         self.assertEqual(recipe.name, "Dockerfile")
+
+    def test_builds_internal_shell_candidate_from_frozen_environment(self) -> None:
+        bundle = self.make_bundle("internal-shell")
+
+        result = self.result(
+            self.run_builder(
+                bundle,
+                self.directory / "shell-candidate",
+                environment_name="internal-shell",
+            )
+        )
+
+        self.assertEqual(result["language"], "shell-fixture")
+        self.assertEqual(result["entrypoint"], ["/bin/sh", "/opt/rps/wrapper.sh"])
+        self.assertNotEqual(
+            result["build_toolchain"]["reference"], result["runtime"]["reference"]
+        )
+        self.assertRegex(
+            result["identities"]["language_environment"],
+            r"^internal-shell-language-environment-v1@sha256:[0-9a-f]{64}$",
+        )
 
     def test_rejects_a_frozen_bundle_when_source_bytes_have_changed(self) -> None:
         bundle = self.make_bundle()

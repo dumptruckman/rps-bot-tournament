@@ -50,7 +50,6 @@ def verify_retained_bot_artifacts(
     retained_reports = load_retained_validation_reports(
         store, verified_index=index
     )
-    environment = catalog.environment("python")
     platforms: dict[str, str] = {}
     for requirement in requirements:
         key = (requirement.artifact_digest, requirement.platform)
@@ -67,7 +66,6 @@ def verify_retained_bot_artifacts(
             retained,
             str(requirement.canonical_identity.get("source_digest")),
             catalog,
-            environment,
             profile,
             requirement.location,
         )
@@ -85,7 +83,6 @@ def validate_bot_artifact_manifest(
     manifest: Mapping[str, Any],
     selected_source_digest: str,
     catalog: LanguageEnvironmentCatalog,
-    environment: Any,
     profile: ExecutionProfile,
     location: str,
 ) -> None:
@@ -99,6 +96,7 @@ def validate_bot_artifact_manifest(
             "source_digest",
             "runtime_digest",
             "runtime",
+            "build_toolchain",
             "language",
             "platform",
             "profile",
@@ -115,13 +113,16 @@ def validate_bot_artifact_manifest(
         "bot_artifact_manifest_format_version": "bot-artifact-manifest-v1",
         "status": "validated",
         "authority": "canonical",
-        "language": "python",
         "platform": "linux/arm64",
         "profile": profile.version,
     }
     for field, expected in expected_scalars.items():
         if manifest.get(field) != expected:
             raise ValueError(location + "." + field + " is invalid")
+    try:
+        environment = catalog.environment_for_language(str(manifest.get("language")))
+    except ValueError as error:
+        raise ValueError(location + " language is not in the catalog: " + str(error)) from error
     for field in ("artifact_digest", "source_digest", "runtime_digest"):
         if not isinstance(manifest.get(field), str) or _DIGEST.fullmatch(
             str(manifest.get(field))
@@ -139,10 +140,13 @@ def validate_bot_artifact_manifest(
             "source",
             "image",
             "runtime",
+            "build_toolchain",
+            "build_toolchain_definition",
             "wrapper",
             "recipe",
             "entrypoint",
             "catalog",
+            "language_environment",
             "suite",
             "platform",
             "profile",
@@ -155,27 +159,31 @@ def validate_bot_artifact_manifest(
         "source": manifest["source_digest"],
         "image": manifest["artifact_digest"],
         "catalog": catalog.identity,
+        "language_environment": environment.descriptor_identity,
+        "build_toolchain_definition": environment.assets["build_toolchain"].identity,
         "profile": profile.identity,
         "wrapper": environment.assets["wrapper"].identity,
         "recipe": environment.assets["recipe"].identity,
         "entrypoint": environment.assets["entrypoint"].identity,
         "platform": environment.assets["platform"].identity,
         "suite": (
-            "python-artifact-conformance-v1@"
+            str(json.loads(environment.assets["conformance"].content)["suite_version"])
+            + "@"
             + environment.assets["conformance"].identity.split("@", 1)[1]
         ),
     }
     for field, expected in expected_identities.items():
         if identities.get(field) != expected:
             raise ValueError(location + " stale or mismatched " + field + " identity")
-    for field in ("runtime", "core_tool", "builder_core_tool"):
+    for field in ("runtime", "build_toolchain", "core_tool", "builder_core_tool"):
         value = identities.get(field)
         if not isinstance(value, str) or _IDENTITY.fullmatch(value) is None:
             raise ValueError(location + " missing " + field + " identity")
     runtime = _object(manifest.get("runtime"), location + ".runtime")
     _exact_fields(runtime, {"identity", "reference", "digest"}, location + ".runtime")
     runtime_definitions = json.loads(environment.assets["base_runtime"].content)
-    pinned = runtime_definitions["platforms"]["linux/arm64"]
+    pinned_platform = runtime_definitions["platforms"]["linux/arm64"]
+    pinned = pinned_platform.get("execution_runtime", pinned_platform)
     runtime_digest = pinned["image"].rsplit("@", 1)[1]
     if runtime != {
         "identity": pinned["version"] + "@" + runtime_digest,
@@ -185,6 +193,24 @@ def validate_bot_artifact_manifest(
         raise ValueError(location + " runtime does not match the pinned catalog")
     if identities.get("runtime") != runtime["identity"]:
         raise ValueError(location + " runtime identity mismatch")
+    build_toolchain = _object(
+        manifest.get("build_toolchain"), location + ".build_toolchain"
+    )
+    _exact_fields(
+        build_toolchain,
+        {"identity", "reference", "digest"},
+        location + ".build_toolchain",
+    )
+    pinned_build = pinned_platform.get("build_toolchain", pinned_platform)
+    build_digest = pinned_build["image"].rsplit("@", 1)[1]
+    if build_toolchain != {
+        "identity": pinned_build["version"] + "@" + build_digest,
+        "reference": pinned_build["image"],
+        "digest": build_digest,
+    }:
+        raise ValueError(location + " build toolchain does not match the pinned catalog")
+    if identities.get("build_toolchain") != build_toolchain["identity"]:
+        raise ValueError(location + " build toolchain identity mismatch")
     image = _object(manifest.get("image"), location + ".image")
     _exact_fields(image, {"manifest_digest", "local_image_id"}, location + ".image")
     if image.get("manifest_digest") != manifest["artifact_digest"]:

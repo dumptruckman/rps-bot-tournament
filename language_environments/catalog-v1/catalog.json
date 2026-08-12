@@ -3,20 +3,22 @@
   "environments": {
     "contract-fixture": {
       "assets": {
-        "base_runtime": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-runtime-v1"},
-        "build_target": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-build-target-v1"},
-        "conformance": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-conformance-v1"},
-        "dependency_definition": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-dependencies-v1"},
-        "entrypoint": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-entrypoint-v1"},
-        "platform": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "oci-platforms-v1"},
-        "readiness": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "wrapper-readiness-v1"},
-        "recipe": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-build-recipe-v1"},
-        "workflow": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "source-validation-workflow-v1"},
-        "wrapper": {"path": "contract-fixture/assets.json", "sha256": "sha256:1c80105b1826364b2b56b7d2ee4ce64941b3acdc9c70116d43d295dd250f540a", "version": "contract-wrapper-v1"}
+        "base_runtime": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-runtime-v1"},
+        "build_toolchain": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-build-toolchain-v1"},
+        "build_target": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-build-target-v1"},
+        "conformance": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-conformance-v1"},
+        "dependency_definition": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-dependencies-v1"},
+        "entrypoint": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-entrypoint-v1"},
+        "platform": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "oci-platforms-v1"},
+        "readiness": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-build-recipe-v1"},
+        "workflow": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-wrapper-v1"}
       },
       "contract_only": true,
       "descriptor_version": "contract-fixture-v1",
       "language": "contract-fixture",
+      "publication": "internal",
       "participant_contract": {
         "callable": "choose_move",
         "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",
@@ -46,22 +48,58 @@
         "version": "contract-source-schema-v1"
       }
     },
+    "internal-shell": {
+      "assets": {
+        "base_runtime": {"path": "internal-shell/runtimes.json", "sha256": "sha256:c8c91b683287d06ecc407ef4f568c2c4db18223d91541e1f67343138e028b62c", "version": "internal-shell-runtime-v1"},
+        "build_toolchain": {"path": "internal-shell/runtimes.json", "sha256": "sha256:c8c91b683287d06ecc407ef4f568c2c4db18223d91541e1f67343138e028b62c", "version": "internal-shell-build-toolchain-v1"},
+        "build_target": {"path": "internal-shell/Dockerfile", "sha256": "sha256:3875f006a4f660e811a97358f4017eb98073078138154631d4bc171890a36b3b", "version": "internal-shell-build-target-v1"},
+        "conformance": {"path": "internal-shell/conformance.json", "sha256": "sha256:664168210a06c8e77b15e9166e2ee394ad1f0bff05e7d31e8014361110c94f9e", "version": "internal-shell-conformance-v1"},
+        "dependency_definition": {"path": "internal-shell/dependencies.lock", "sha256": "sha256:86ba9f0599a0a04a165c364391c9cf136fd681a0cde46aab9edc92d05b56b437", "version": "internal-shell-dependencies-v1"},
+        "entrypoint": {"path": "internal-shell/entrypoint.json", "sha256": "sha256:8a54f98b7e6490dadf2922b830eaaa71ba3b4cc448482125e1c1fc7d808e52c2", "version": "internal-shell-entrypoint-v1"},
+        "platform": {"path": "internal-shell/runtimes.json", "sha256": "sha256:c8c91b683287d06ecc407ef4f568c2c4db18223d91541e1f67343138e028b62c", "version": "oci-platforms-v1"},
+        "readiness": {"path": "internal-shell/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "internal-shell/Dockerfile", "sha256": "sha256:3875f006a4f660e811a97358f4017eb98073078138154631d4bc171890a36b3b", "version": "internal-shell-build-recipe-v1"},
+        "workflow": {"path": "internal-shell/workflow.yml", "sha256": "sha256:498a8c7c1ca85d84b9daea663cb2b0e952dcf634af3e756cd533cbed5913ed09", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "internal-shell/wrapper.sh", "sha256": "sha256:3afe842359987474c65d685afbdb8338f4fda13d7febe006f30e1d1c853ebd35", "version": "internal-shell-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "internal-shell-language-environment-v1",
+      "language": "shell-fixture",
+      "publication": "internal",
+      "participant_contract": {
+        "callable": "choose_move",
+        "signature": "choose_move turn my_history opponent_history seed -> move",
+        "static_validation": "none-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": ["strategy.sh", "resources/*.txt"],
+        "forbidden_paths": [".git", ".github", "Dockerfile", "Makefile", "entrypoint.sh", "wrapper.sh"],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": ["strategy.sh"],
+        "version": "internal-shell-source-schema-v1"
+      }
+    },
     "python": {
       "assets": {
         "base_runtime": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "python-runtime-v1"},
-        "build_target": {"path": "python/Dockerfile", "sha256": "sha256:9c8e64f91dbbe89ed36d94787936cde16775f4f92c2eb3146a8bdb9eceafd8cc", "version": "python-build-target-v1"},
-        "conformance": {"path": "python/conformance.json", "sha256": "sha256:5122994b6067b438de7b9bc1720cb94296cda3a022dc629bc9269e3f1968e15b", "version": "python-conformance-v1"},
+        "build_toolchain": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "python-build-toolchain-v1"},
+        "build_target": {"path": "python/Dockerfile", "sha256": "sha256:8b805ad8a1541971fce3322a25d67dfc6f6e758d0f85033ab50c8974baf69696", "version": "python-build-target-v1"},
+        "conformance": {"path": "python/conformance.json", "sha256": "sha256:0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057", "version": "python-conformance-v1"},
         "dependency_definition": {"path": "python/requirements.lock", "sha256": "sha256:9f8c394be1f741a5351379bab966dec8e813ce017cb4e640d1f100e40e461f5f", "version": "python-dependencies-v1"},
         "entrypoint": {"path": "python/entrypoint.json", "sha256": "sha256:e663e70bb05c143591a06d352e325cb181136c5910fe62717056b0ed3fcb1e08", "version": "python-entrypoint-v1"},
         "platform": {"path": "python/runtimes.json", "sha256": "sha256:e5a635c659f52ff7433c1ab4f8d086a8b66689a84fe522e85b72b29801005b03", "version": "oci-platforms-v1"},
         "readiness": {"path": "python/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
-        "recipe": {"path": "python/Dockerfile", "sha256": "sha256:9c8e64f91dbbe89ed36d94787936cde16775f4f92c2eb3146a8bdb9eceafd8cc", "version": "python-build-recipe-v1"},
+        "recipe": {"path": "python/Dockerfile", "sha256": "sha256:8b805ad8a1541971fce3322a25d67dfc6f6e758d0f85033ab50c8974baf69696", "version": "python-build-recipe-v1"},
         "workflow": {"path": "python/workflow.yml", "sha256": "sha256:a66d958d1eaf7ed7b36ecc3aa0192dd28a67a172ef810d42575a8c73b14ce6f4", "version": "source-validation-workflow-v1"},
         "wrapper": {"path": "python/wrapper.py", "sha256": "sha256:a82ae2481ad47d0697f318ccf09c5e8bd9597efbbca12f31366fc61d811baed7", "version": "python-wrapper-v2"}
       },
       "contract_only": false,
       "descriptor_version": "python-language-environment-v1",
       "language": "python",
+      "publication": "production",
       "participant_contract": {
         "callable": "choose_move",
         "signature": "choose_move(turn, my_history, opponent_history, rng) -> move",

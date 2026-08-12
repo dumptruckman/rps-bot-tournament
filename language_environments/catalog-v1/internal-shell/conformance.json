@@ -1,0 +1,39 @@
+{
+  "contract": "choose-move-contract-v1",
+  "accepted_faults": {
+    "process": ["unexpected_exit"]
+  },
+  "diagnostic_fixtures": [
+    "syntax-build",
+    "import-time",
+    "nondeterministic",
+    "protocol-fault",
+    "slow-response",
+    "memory",
+    "process",
+    "filesystem",
+    "premature-output"
+  ],
+  "fixture_sources": {
+    "filesystem": "choose_move() { if dd if=/dev/zero of=/tmp/rps-fill bs=1048576 count=32 2>/dev/null; then echo X; else echo R; fi; rm -f /tmp/rps-fill; }\n",
+    "import-time": "exit 23\nchoose_move() { echo R; }\n",
+    "memory": "choose_move() { awk 'BEGIN { value=\"x\"; for (i=0; i<29; i++) value=value value; print \"R\" }'; }\n",
+    "nondeterministic": "choose_move() { value=$(od -An -N1 -tu1 /dev/urandom); case $(( value % 3 )) in 0) echo R;; 1) echo P;; *) echo S;; esac; }\n",
+    "premature-output": "echo R\nchoose_move() { echo R; }\n",
+    "process": "choose_move() { set +e; index=0; while [ $index -lt 80 ]; do sleep 30 & index=$((index + 1)); done 2>/dev/null; echo R; }\n",
+    "protocol-fault": "choose_move() { echo X; }\n",
+    "slow-response": "choose_move() { sleep 1; echo R; }\n",
+    "syntax-build": "choose_move() {\n"
+  },
+  "practice_artifacts": {
+    "copycat": "choose_move() { case \"$3\" in '') echo R;; *) printf '%s\\n' \"$(printf '%s' \"$3\" | tail -c 1)\";; esac; }\n",
+    "fixed-move": "choose_move() { echo R; }\n",
+    "protocol-test": "choose_move() { case $(( $1 % 3 )) in 0) echo R;; 1) echo P;; *) echo S;; esac; }\n",
+    "random": "choose_move() { case $(( ($4 + $1) % 3 )) in 0) echo R;; 1) echo P;; *) echo S;; esac; }\n"
+  },
+  "source_path": "strategy.sh",
+  "suite_version": "internal-shell-artifact-conformance-v1",
+  "syntax_diagnostic": "Syntax error",
+  "syntax_stage": "build",
+  "version": "internal-shell-conformance-v1"
+}

@@ -128,6 +128,11 @@ class TournamentPlanCliTests(unittest.TestCase):
                 "digest": runtime_digest,
                 "identity": pinned["version"] + "@" + runtime_digest,
             },
+            "build_toolchain": {
+                "reference": pinned["image"],
+                "digest": runtime_digest,
+                "identity": pinned["version"] + "@" + runtime_digest,
+            },
             "language": "python",
             "platform": "linux/arm64",
             "profile": INITIAL_EXECUTION_PROFILE.version,
@@ -140,10 +145,15 @@ class TournamentPlanCliTests(unittest.TestCase):
                 "source": source_digest,
                 "image": artifact_digest,
                 "runtime": pinned["version"] + "@" + runtime_digest,
+                "build_toolchain": pinned["version"] + "@" + runtime_digest,
+                "build_toolchain_definition": environment.assets[
+                    "build_toolchain"
+                ].identity,
                 "wrapper": environment.assets["wrapper"].identity,
                 "recipe": environment.assets["recipe"].identity,
                 "entrypoint": environment.assets["entrypoint"].identity,
                 "catalog": self.catalog.identity,
+                "language_environment": environment.descriptor_identity,
                 "suite": (
                     "python-artifact-conformance-v1@"
                     + environment.assets["conformance"].identity.split("@", 1)[1]

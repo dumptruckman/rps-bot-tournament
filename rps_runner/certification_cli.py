@@ -25,7 +25,7 @@ CERTIFICATION_ERROR_EXIT_CODE = 2
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rps-certify-artifact",
-        description="Run the versioned Python Bot Artifact conformance suite",
+        description="Run the selected versioned Bot Artifact conformance suite",
     )
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)

@@ -28,5 +28,9 @@
     "protocol-test": "def choose_move(turn, my_history, opponent_history, rng):\n    assert turn == len(my_history) == len(opponent_history)\n    assert set(my_history + opponent_history) <= set('RPS')\n    return ('R', 'P', 'S')[turn % 3]\n",
     "random": "def choose_move(turn, my_history, opponent_history, rng):\n    return rng.choice(('R', 'P', 'S'))\n"
   },
+  "source_path": "strategy.py",
+  "suite_version": "python-artifact-conformance-v1",
+  "syntax_diagnostic": "Python source is not valid syntax",
+  "syntax_stage": "source-validation",
   "version": "python-conformance-v1"
 }

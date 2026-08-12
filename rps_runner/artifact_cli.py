@@ -25,7 +25,7 @@ BUILD_ERROR_EXIT_CODE = 2
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rps-build-artifact",
-        description="Build one platform-specific Python Bot Artifact candidate",
+        description="Build one platform-specific Bot Artifact candidate",
     )
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--bundle", required=True, type=Path)

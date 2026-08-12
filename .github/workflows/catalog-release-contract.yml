@@ -31,6 +31,15 @@ jobs:
           tests/test_artifact_builder_cli.py
           tests/test_artifact_certification_cli.py
           -v
+      - name: Prepare exact internal-fixture images
+        run: |
+          docker pull --platform linux/amd64 docker.io/library/python@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f
+          docker pull --platform linux/amd64 docker.io/library/busybox@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f
+      - name: Prove the second executable Language Environment
+        env:
+          RPS_RUN_DOCKER_INTEGRATION: "1"
+          RPS_DOCKER_PLATFORM: linux/amd64
+        run: python -m unittest tests.test_multi_language_environment -v
       - name: Configure the disposable proof release identity
         run: |
           git config user.email catalog-proof@example.invalid

@@ -87,12 +87,13 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "8724e24a870b6004a01bca95d23059c94cb9abe2c73e15018db2ad0d0a02c181",
+            "922de3a340cc051354d20f472c4d65158e87dbdae310603584c391082f5bce71",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
             {
                 "contract-fixture.base_runtime",
+                "contract-fixture.build_toolchain",
                 "contract-fixture.build_target",
                 "contract-fixture.conformance",
                 "contract-fixture.dependency_definition",
@@ -102,7 +103,19 @@ class CatalogReleaseTests(unittest.TestCase):
                 "contract-fixture.recipe",
                 "contract-fixture.workflow",
                 "contract-fixture.wrapper",
+                "internal-shell.base_runtime",
+                "internal-shell.build_toolchain",
+                "internal-shell.build_target",
+                "internal-shell.conformance",
+                "internal-shell.dependency_definition",
+                "internal-shell.entrypoint",
+                "internal-shell.platform",
+                "internal-shell.readiness",
+                "internal-shell.recipe",
+                "internal-shell.workflow",
+                "internal-shell.wrapper",
                 "python.base_runtime",
+                "python.build_toolchain",
                 "python.build_target",
                 "python.conformance",
                 "python.dependency_definition",
@@ -122,15 +135,22 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["certification_suites"],
             {
+                "internal-shell": "internal-shell-artifact-conformance-v1@sha256:"
+                "664168210a06c8e77b15e9166e2ee394ad1f0bff05e7d31e8014361110c94f9e",
                 "python": "python-artifact-conformance-v1@sha256:"
-                "5122994b6067b438de7b9bc1720cb94296cda3a022dc629bc9269e3f1968e15b"
+                "0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057"
             },
         )
         self.assertEqual(
-            set(manifest["platform_runtimes"]), {"linux/amd64", "linux/arm64"}
+            set(manifest["platform_runtimes"]), {"python"}
         )
-        for runtime in manifest["platform_runtimes"].values():
-            self.assertRegex(runtime["digest"], r"^sha256:[0-9a-f]{64}$")
+        for runtime in manifest["platform_runtimes"]["python"].values():
+            self.assertRegex(
+                runtime["build_toolchain"]["digest"], r"^sha256:[0-9a-f]{64}$"
+            )
+            self.assertRegex(
+                runtime["execution_runtime"]["digest"], r"^sha256:[0-9a-f]{64}$"
+            )
         self.assertRegex(
             manifest["offline_bundle"]["identity"],
             r"^rps-runner-offline-bundle-v1@sha256:[0-9a-f]{64}$",
@@ -436,6 +456,7 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 "tests/test_source_validation_cli.py",
                 "tests/test_artifact_builder_cli.py",
                 "tests/test_artifact_certification_cli.py",
+                "tests/test_multi_language_environment.py",
                 "tests/test_batch_plan_cli.py",
                 "tests/test_tournament_plan_cli.py",
                 "tests/test_tournament_cli.py",

@@ -720,6 +720,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--teams", required=True, type=Path)
     parser.add_argument("--catalog", required=True, type=Path)
+    parser.add_argument("--environment", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--tournament-seed", required=True, type=int)
     parser.add_argument("--profile", required=True)
@@ -781,6 +782,7 @@ def main(
         "build_jobs": options.jobs,
         "tournament_seed": options.tournament_seed,
         "source_mapping": str(options.teams.expanduser().resolve()),
+        "environment": options.environment,
         "team_count": None,
         "phase_timings_seconds": {},
     }
@@ -818,6 +820,7 @@ def main(
                 [
                     "--teams", str(options.teams.expanduser().resolve()),
                     "--catalog", str(catalog_path),
+                    "--environment", options.environment,
                     "--output", str(batch),
                     "--tournament-seed", str(options.tournament_seed),
                     "--execution-mode", "continuous",

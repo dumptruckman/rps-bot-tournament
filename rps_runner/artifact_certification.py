@@ -20,6 +20,7 @@ from rps_runner.engine import ContainerOperations
 from rps_runner.engine.container_session import CONTAINER_ISOLATION_PROFILE_VERSION
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import (
+    LanguageEnvironment,
     LanguageEnvironmentCatalog,
     SourceValidationError,
     freeze_source_bundle,
@@ -149,8 +150,13 @@ def _mapping(value: object, field: str) -> Mapping[str, Any]:
 def _verify_candidate_identities(
     manifest: Mapping[str, Any], catalog: LanguageEnvironmentCatalog, inputs: CertificationInputs
 ) -> None:
-    if manifest.get("language") != "python":
-        raise CertificationFailure("only Python Bot Artifact candidates are supported")
+    language = manifest.get("language")
+    if not isinstance(language, str):
+        raise CertificationFailure("candidate language is missing")
+    try:
+        environment = catalog.environment_for_language(language)
+    except ValueError as error:
+        raise CertificationFailure(str(error)) from error
     if manifest.get("platform") != inputs.platform:
         raise CertificationFailure(
             "wrong-platform candidate: manifest says "
@@ -167,6 +173,7 @@ def _verify_candidate_identities(
     image = _mapping(manifest.get("image"), "image")
     retention = _mapping(manifest.get("retention"), "retention")
     runtime = _mapping(manifest.get("runtime"), "runtime")
+    build_toolchain = _mapping(manifest.get("build_toolchain"), "build_toolchain")
     runtime_identity = runtime.get("identity")
     if not isinstance(runtime_identity, str) or _IDENTITY.fullmatch(runtime_identity) is None:
         raise CertificationFailure("runtime.identity is missing or invalid")
@@ -187,9 +194,9 @@ def _verify_candidate_identities(
     if not isinstance(reference, str) or not reference:
         raise CertificationFailure("candidate image is missing from its active Docker context")
     identities = _mapping(manifest.get("identities"), "identities")
-    environment = catalog.environment("python")
     expected = {
         "catalog": catalog.identity,
+        "build_toolchain": environment.assets["build_toolchain"].identity,
         "entrypoint": environment.assets["entrypoint"].identity,
         "language_environment": environment.descriptor_identity,
         "platform": environment.assets["platform"].identity,
@@ -211,8 +218,10 @@ def _verify_candidate_identities(
     runtime_definition = json.loads(environment.assets["base_runtime"].content)
     platforms = runtime_definition.get("platforms")
     pinned = platforms.get(inputs.platform) if isinstance(platforms, dict) else None
-    pinned_reference = pinned.get("image") if isinstance(pinned, dict) else None
-    pinned_version = pinned.get("version") if isinstance(pinned, dict) else None
+    execution = pinned.get("execution_runtime", pinned) if isinstance(pinned, dict) else None
+    build = pinned.get("build_toolchain", pinned) if isinstance(pinned, dict) else None
+    pinned_reference = execution.get("image") if isinstance(execution, dict) else None
+    pinned_version = execution.get("version") if isinstance(execution, dict) else None
     if (
         not isinstance(pinned_reference, str)
         or "@" not in pinned_reference
@@ -226,13 +235,28 @@ def _verify_candidate_identities(
         or runtime_identity != pinned_version + "@" + pinned_digest
     ):
         raise CertificationFailure("stale-catalog candidate: pinned runtime does not match")
+    build_reference = build.get("image") if isinstance(build, dict) else None
+    build_version = build.get("version") if isinstance(build, dict) else None
+    if (
+        not isinstance(build_reference, str)
+        or "@" not in build_reference
+        or not isinstance(build_version, str)
+        or build_toolchain.get("reference") != build_reference
+        or build_toolchain.get("digest") != build_reference.rsplit("@", 1)[1]
+        or build_toolchain.get("identity")
+        != build_version + "@" + build_reference.rsplit("@", 1)[1]
+    ):
+        raise CertificationFailure(
+            "stale-catalog candidate: pinned build toolchain does not match"
+        )
 
     build_inputs = {
         "artifact_digest": artifact_digest,
         "identities": identities,
-        "language": "python",
+        "language": language,
         "platform": inputs.platform,
         "runtime_identity": runtime_identity,
+        "build_toolchain_identity": build_toolchain["identity"],
         "source_digest": manifest["source_digest"],
     }
     expected_build_identity = _identity("build-v1", build_inputs)
@@ -248,7 +272,8 @@ def _verify_frozen_source(
     catalog: LanguageEnvironmentCatalog,
 ) -> None:
     bundle = load_frozen_source_bundle(candidate, catalog)
-    if bundle.environment.name != "python":
+    language = candidate_manifest.get("language")
+    if bundle.environment.language != language:
         raise CertificationFailure("candidate source uses the wrong Language Environment")
     if bundle.manifest.get("source_digest") != candidate_manifest.get("source_digest"):
         raise CertificationFailure(
@@ -336,8 +361,9 @@ def _conformance_match_request(
 
 def _conformance_definition(
     catalog: LanguageEnvironmentCatalog,
+    environment: LanguageEnvironment,
 ) -> Mapping[str, Any]:
-    asset = catalog.environment("python").assets["conformance"]
+    asset = environment.assets["conformance"]
     try:
         value = json.loads(asset.content)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -347,13 +373,15 @@ def _conformance_definition(
     return value
 
 
-def _practice_sources(catalog: LanguageEnvironmentCatalog) -> Mapping[str, str]:
-    practices = _conformance_definition(catalog).get("practice_artifacts")
+def _practice_sources(
+    catalog: LanguageEnvironmentCatalog, environment: LanguageEnvironment
+) -> Mapping[str, Any]:
+    practices = _conformance_definition(catalog, environment).get("practice_artifacts")
     expected = {"fixed-move", "random", "copycat", "protocol-test"}
     if (
         not isinstance(practices, dict)
         or set(practices) != expected
-        or any(not isinstance(source, str) or not source for source in practices.values())
+        or any(not isinstance(source, (str, dict)) or not source for source in practices.values())
     ):
         raise CertificationFailure(
             "conformance definition must bundle fixed-move, random, copycat, "
@@ -364,10 +392,11 @@ def _practice_sources(catalog: LanguageEnvironmentCatalog) -> Mapping[str, str]:
 
 def _diagnostic_fixture_report(
     catalog: LanguageEnvironmentCatalog,
+    environment: LanguageEnvironment,
 ) -> Mapping[str, Mapping[str, str]]:
-    fixtures = _conformance_definition(catalog).get("diagnostic_fixtures")
+    fixtures = _conformance_definition(catalog, environment).get("diagnostic_fixtures")
     expected = {
-        "syntax-build": "Python source syntax or networkless Docker build failed",
+        "syntax-build": "source syntax or networkless Docker build failed",
         "import-time": "strategy import exited before wrapper readiness",
         "nondeterministic": "repeated same-seed transcript differed",
         "protocol-fault": "invalid protocol move and Turn were reported",
@@ -387,13 +416,15 @@ def _diagnostic_fixture_report(
     }
 
 
-def _fixture_sources(catalog: LanguageEnvironmentCatalog) -> Mapping[str, str]:
-    sources = _conformance_definition(catalog).get("fixture_sources")
-    expected = set(_diagnostic_fixture_report(catalog))
+def _fixture_sources(
+    catalog: LanguageEnvironmentCatalog, environment: LanguageEnvironment
+) -> Mapping[str, Any]:
+    sources = _conformance_definition(catalog, environment).get("fixture_sources")
+    expected = set(_diagnostic_fixture_report(catalog, environment))
     if (
         not isinstance(sources, dict)
         or set(sources) != expected
-        or any(not isinstance(source, str) or not source for source in sources.values())
+        or any(not isinstance(source, (str, dict)) or not source for source in sources.values())
     ):
         raise CertificationFailure(
             "conformance definition does not bundle every diagnostic fixture source"
@@ -410,14 +441,16 @@ def _make_tree_writable(root: Path) -> None:
 
 
 def _build_practice_artifacts(
-    catalog: LanguageEnvironmentCatalog, platform: str, work: Path
+    catalog: LanguageEnvironmentCatalog,
+    environment: LanguageEnvironment,
+    platform: str,
+    work: Path,
 ) -> Mapping[str, Mapping[str, Any]]:
-    environment = catalog.environment("python")
     built: dict[str, Mapping[str, Any]] = {}
-    for name, strategy in _practice_sources(catalog).items():
+    for name, strategy in _practice_sources(catalog, environment).items():
         source = work / (name + "-source")
         source.mkdir()
-        (source / "strategy.py").write_text(strategy)
+        _write_conformance_source(source, environment, strategy)
         bundle = work / (name + "-bundle")
         freeze_source_bundle(source, bundle, catalog, environment)
         candidate = work / (name + "-candidate")
@@ -428,19 +461,34 @@ def _build_practice_artifacts(
 
 
 def _build_diagnostic_artifacts(
-    catalog: LanguageEnvironmentCatalog, platform: str, work: Path
+    catalog: LanguageEnvironmentCatalog,
+    environment: LanguageEnvironment,
+    platform: str,
+    work: Path,
 ) -> Mapping[str, Mapping[str, Any]]:
-    environment = catalog.environment("python")
-    sources = _fixture_sources(catalog)
+    sources = _fixture_sources(catalog, environment)
+    definition = _conformance_definition(catalog, environment)
     syntax_source = work / "syntax-build-source"
     syntax_source.mkdir()
-    (syntax_source / "strategy.py").write_text(sources["syntax-build"])
+    _write_conformance_source(syntax_source, environment, sources["syntax-build"])
     try:
-        validate_source(syntax_source, environment)
-    except SourceValidationError as error:
-        if "Python source is not valid syntax" not in str(error):
+        if definition.get("syntax_stage", "source-validation") == "build":
+            syntax_bundle = work / "syntax-build-bundle"
+            freeze_source_bundle(syntax_source, syntax_bundle, catalog, environment)
+            build_artifact_candidate(
+                syntax_bundle, work / "syntax-build-candidate", catalog, platform
+            )
+        else:
+            validate_source(syntax_source, environment)
+    except (SourceValidationError, ValueError) as error:
+        diagnostic = definition.get("syntax_diagnostic", "Python source is not valid syntax")
+        observed_diagnostic = str(error) + "\n" + str(
+            getattr(error, "diagnostics", "")
+        )
+        if not isinstance(diagnostic, str) or diagnostic not in observed_diagnostic:
             raise CertificationFailure(
-                "syntax/build fixture produced an unactionable diagnostic: " + str(error)
+                "syntax/build fixture produced an unactionable diagnostic: "
+                + observed_diagnostic
             )
     else:
         raise CertificationFailure("syntax/build fixture unexpectedly passed source validation")
@@ -451,7 +499,7 @@ def _build_diagnostic_artifacts(
             continue
         source = work / (name + "-source")
         source.mkdir()
-        (source / "strategy.py").write_text(strategy)
+        _write_conformance_source(source, environment, strategy)
         bundle = work / (name + "-bundle")
         freeze_source_bundle(source, bundle, catalog, environment)
         candidate = work / (name + "-candidate")
@@ -459,6 +507,27 @@ def _build_diagnostic_artifacts(
             bundle, candidate, catalog, platform
         )
     return built
+
+
+def _write_conformance_source(
+    source: Path, environment: LanguageEnvironment, value: Any
+) -> None:
+    if isinstance(value, str):
+        definition = json.loads(environment.assets["conformance"].content)
+        path = definition.get("source_path", environment.source_schema.required_paths[0])
+        if not isinstance(path, str):
+            raise CertificationFailure("conformance source path is invalid")
+        (source / path).write_text(value)
+        return
+    if not isinstance(value, dict) or any(
+        not isinstance(path, str) or not isinstance(content, str)
+        for path, content in value.items()
+    ):
+        raise CertificationFailure("conformance fixture source is invalid")
+    for path, content in value.items():
+        destination = source / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content)
 
 
 def _execute_conforming_match(
@@ -522,6 +591,7 @@ def _run_diagnostic_artifacts(
     fixed_move: Mapping[str, Any],
     *,
     namespace: str,
+    accepted_faults: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Mapping[str, str]]:
     with _CONFORMANCE_EXECUTION_LOCK:
         return _run_diagnostic_artifacts_exclusively(
@@ -529,6 +599,7 @@ def _run_diagnostic_artifacts(
             fixtures,
             fixed_move,
             namespace=namespace,
+            accepted_faults=accepted_faults,
         )
 
 
@@ -538,6 +609,7 @@ def _run_diagnostic_artifacts_exclusively(
     fixed_move: Mapping[str, Any],
     *,
     namespace: str,
+    accepted_faults: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Mapping[str, str]]:
     fixed_digest = str(fixed_move["artifact_digest"])
     reports: dict[str, Mapping[str, str]] = {
@@ -553,6 +625,15 @@ def _run_diagnostic_artifacts_exclusively(
         "memory": {"resource_oom", "unexpected_exit"},
         "premature-output": {"unexpected_output"},
     }
+    if accepted_faults is not None:
+        for name, values in accepted_faults.items():
+            if (
+                not isinstance(name, str)
+                or not isinstance(values, list)
+                or any(not isinstance(value, str) for value in values)
+            ):
+                raise CertificationFailure("diagnostic accepted-fault policy is invalid")
+            expected_faults[name] = set(values)
     attempt = 20
     for name, accepted_kinds in expected_faults.items():
         fixture_digest = str(fixtures[name]["artifact_digest"])
@@ -579,7 +660,11 @@ def _run_diagnostic_artifacts_exclusively(
         }
         attempt += 1
 
-    for name in ("process", "filesystem"):
+    for name in (
+        fixture_name
+        for fixture_name in ("process", "filesystem")
+        if fixture_name not in expected_faults
+    ):
         fixture_digest = str(fixtures[name]["artifact_digest"])
         outcome = _execute_fixture_match(
             executor,
@@ -676,6 +761,7 @@ def _run_smoke_matches_exclusively(
     retain_practice_images: bool = False,
 ) -> Mapping[str, Any]:
     digest = str(manifest["artifact_digest"])
+    environment = catalog.environment_for_language(str(manifest["language"]))
     reference = str(_mapping(manifest["retention"], "retention")["local_image_id"])
     with tempfile.TemporaryDirectory(prefix="rps-conformance-") as work_name:
         work = Path(work_name)
@@ -683,9 +769,11 @@ def _run_smoke_matches_exclusively(
         practice_candidates: Mapping[str, Mapping[str, Any]] = {}
         diagnostic_candidates: Mapping[str, Mapping[str, Any]] = {}
         try:
-            practice_candidates = _build_practice_artifacts(catalog, platform, work)
+            practice_candidates = _build_practice_artifacts(
+                catalog, environment, platform, work
+            )
             diagnostic_candidates = _build_diagnostic_artifacts(
-                catalog, platform, work
+                catalog, environment, platform, work
             )
             references = {digest: reference}
             references.update(
@@ -766,6 +854,9 @@ def _run_smoke_matches_exclusively(
                 diagnostic_candidates,
                 practice_candidates["fixed-move"],
                 namespace=namespace,
+                accepted_faults=_conformance_definition(
+                    catalog, environment
+                ).get("accepted_faults"),
             )
             return {
                 "attempts": 2,
@@ -804,6 +895,7 @@ def certify_artifact_candidate(
     if destination.exists() or destination.is_symlink():
         raise CertificationFailure("output destination already exists and will not be replaced")
     candidate_manifest = _candidate_manifest(candidate)
+    environment = catalog.environment_for_language(str(candidate_manifest.get("language")))
     _verify_candidate_identities(candidate_manifest, catalog, inputs)
     _verify_frozen_source(candidate, candidate_manifest, catalog)
     _verify_image(candidate_manifest, inputs)
@@ -815,15 +907,22 @@ def certify_artifact_candidate(
     )
     diagnostic_fixtures = smoke["diagnostic_fixtures"]
     candidate_identities = _mapping(candidate_manifest["identities"], "identities")
+    definition = _conformance_definition(catalog, environment)
+    suite_version = definition.get("suite_version", SUITE_VERSION)
+    if not isinstance(suite_version, str) or not suite_version:
+        raise CertificationFailure("conformance suite version is invalid")
     identities = {
         "source": candidate_manifest["source_digest"],
         "image": candidate_manifest["artifact_digest"],
         "runtime": candidate_manifest["runtime"]["identity"],
+        "build_toolchain": candidate_manifest["build_toolchain"]["identity"],
+        "build_toolchain_definition": candidate_identities["build_toolchain"],
         "wrapper": candidate_identities["wrapper"],
         "recipe": candidate_identities["recipe"],
         "entrypoint": candidate_identities["entrypoint"],
         "catalog": candidate_identities["catalog"],
-        "suite": SUITE_VERSION + "@" + str(candidate_identities["suite_candidate"]).split("@", 1)[1],
+        "language_environment": candidate_identities["language_environment"],
+        "suite": suite_version + "@" + str(candidate_identities["suite_candidate"]).split("@", 1)[1],
         "platform": candidate_identities["platform"],
         "profile": INITIAL_EXECUTION_PROFILE.identity,
         "core_tool": _core_tool_identity(),
@@ -882,7 +981,8 @@ def certify_artifact_candidate(
         "source_digest": candidate_manifest["source_digest"],
         "runtime_digest": candidate_manifest["runtime_digest"],
         "runtime": candidate_manifest["runtime"],
-        "language": "python",
+        "build_toolchain": candidate_manifest["build_toolchain"],
+        "language": candidate_manifest["language"],
         "platform": inputs.platform,
         "profile": inputs.profile,
         "entrypoint": candidate_manifest["entrypoint"],

@@ -1,5 +1,6 @@
 {
   "base_runtime": {"version": "contract-runtime-v1"},
+  "build_toolchain": {"version": "contract-build-toolchain-v1"},
   "build_target": {"version": "contract-build-target-v1"},
   "conformance": {"version": "contract-conformance-v1"},
   "dependency_definition": {"version": "contract-dependencies-v1"},

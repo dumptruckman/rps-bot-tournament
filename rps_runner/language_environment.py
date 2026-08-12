@@ -88,6 +88,7 @@ class LanguageEnvironment:
     name: str
     language: str
     contract_only: bool
+    publication: str
     participant_contract: ParticipantContract
     source_schema: SourceSchema
     descriptor_version: str
@@ -114,6 +115,21 @@ class LanguageEnvironmentCatalog:
                 "Language Environment " + repr(name) + " is not in the catalog; "
                 "available environments: " + choices
             )
+
+    def environment_for_language(self, language: str) -> LanguageEnvironment:
+        matches = [
+            environment
+            for environment in self.environments.values()
+            if environment.language == language
+        ]
+        if len(matches) != 1:
+            raise CatalogError(
+                "language "
+                + repr(language)
+                + " must identify exactly one Language Environment; found "
+                + str(len(matches))
+            )
+        return matches[0]
 
 
 @dataclass(frozen=True)
@@ -229,6 +245,11 @@ def _validate_descriptor(
     if not isinstance(descriptor.get("contract_only"), bool):
         raise CatalogError(location + ".contract_only must be a boolean")
     contract_only = bool(descriptor["contract_only"])
+    publication = _require_string(descriptor, "publication", location)
+    if publication not in ("production", "internal"):
+        raise CatalogError(location + ".publication must be 'production' or 'internal'")
+    if publication == "production" and contract_only:
+        raise CatalogError(location + " cannot publish a contract-only environment")
 
     participant_value = _require_mapping(
         descriptor.get("participant_contract"), location + ".participant_contract"
@@ -299,6 +320,7 @@ def _validate_descriptor(
         "workflow",
         "readiness",
         "base_runtime",
+        "build_toolchain",
         "platform",
         "conformance",
     }
@@ -320,6 +342,7 @@ def _validate_descriptor(
         name=name,
         language=language,
         contract_only=contract_only,
+        publication=publication,
         participant_contract=participant_contract,
         source_schema=source_schema,
         descriptor_version=descriptor_version,
@@ -563,8 +586,18 @@ def validate_source(
 def _validate_participant_contract(
     files: Sequence[SourceFile], environment: LanguageEnvironment
 ) -> None:
-    if environment.participant_contract.static_validation == "none-v1":
-        return
+    validators = {
+        "none-v1": _validate_no_static_contract,
+        "single-unconditional-function-v1": _validate_python_function_contract,
+    }
+    validators[environment.participant_contract.static_validation](files)
+
+
+def _validate_no_static_contract(_files: Sequence[SourceFile]) -> None:
+    return
+
+
+def _validate_python_function_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.py")
     try:
         tree = ast.parse(source_file.content, filename=source_file.path)
@@ -710,6 +743,7 @@ def environment_identity_manifest(
         "workflow": assets["workflow"].identity,
         "readiness": assets["readiness"].identity,
         "base_runtime": assets["base_runtime"].identity,
+        "build_toolchain": assets["build_toolchain"].identity,
         "platform": assets["platform"].identity,
         "conformance": assets["conformance"].identity,
     }

@@ -181,6 +181,8 @@ class BatchPlanCliTests(unittest.TestCase):
                     str(mapping),
                     "--catalog",
                     str(CATALOG),
+                    "--environment",
+                    "python",
                     "--output",
                     str(output),
                     "--tournament-seed",

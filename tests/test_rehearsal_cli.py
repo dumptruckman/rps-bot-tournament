@@ -66,6 +66,8 @@ class RehearsalCliTests(unittest.TestCase):
             str(self.teams),
             "--catalog",
             str(CATALOG),
+            "--environment",
+            "python",
             "--output",
             str(self.output),
             "--tournament-seed",
