@@ -981,6 +981,97 @@ def _validate_rust_strategy_contract(files: Sequence[SourceFile]) -> None:
         )
 
 
+def _validate_clojure_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "strategy.clj")
+    sources = []
+    for item in files:
+        if not item.path.endswith(".clj"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Clojure Team Source must be UTF-8: " + str(error),
+            )
+        significant = _clojure_significant_source(source)
+        sources.append((item, significant))
+        if re.search(
+            r"\(\s*(?:deftype|defrecord|definterface)\s+"
+            r"(?:RpsRandom|RpsRandomApi)\b",
+            significant,
+        ):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define an organizer-owned random type",
+            )
+        if re.search(r"\(\s*defn\s+-main\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned -main entrypoint",
+            )
+
+    strategy = _clojure_significant_source(source_file.content.decode("utf-8"))
+    if not re.search(r"\(\s*ns\s+strategy(?:\s|\))", strategy):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "strategy.clj must declare the strategy namespace",
+        )
+    signature = re.compile(
+        r"\(\s*defn\s+choose-move\s+\[\s*turn\s+my-history\s+"
+        r"opponent-history\s+rng\s*\]"
+    )
+    bindings = sum(
+        len(re.findall(r"\(\s*(?:defn|def|defmacro)\s+choose-move\b", value))
+        for _, value in sources
+    )
+    if bindings != 1 or not signature.search(strategy):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one (defn choose-move "
+            "[turn my-history opponent-history rng] ...) function",
+        )
+
+
+def _clojure_significant_source(source: str) -> str:
+    """Blank Clojure comments and strings while preserving form structure."""
+
+    result = list(source)
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(source):
+        character = source[index]
+        if in_string:
+            if character == '"' and not escaped:
+                result[index] = " "
+                in_string = False
+            elif character != "\n":
+                result[index] = " "
+            escaped = character == "\\" and not escaped
+            if character != "\\":
+                escaped = False
+            index += 1
+            continue
+        if character == ";":
+            end = source.find("\n", index)
+            end = len(source) if end == -1 else end
+            for cursor in range(index, end):
+                result[cursor] = " "
+            index = end
+            continue
+        if character == '"':
+            result[index] = " "
+            in_string = True
+        index += 1
+    return "".join(result)
+
+
 def _validate_ruby_strategy_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.rb")
     sources = []
@@ -1317,6 +1408,7 @@ def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
 
 
 _PARTICIPANT_CONTRACT_VALIDATORS = {
+    "clojure-strategy-contract-v1": _validate_clojure_strategy_contract,
     "csharp-strategy-contract-v1": _validate_csharp_strategy_contract,
     "go-strategy-contract-v1": _validate_go_strategy_contract,
     "java-strategy-contract-v1": _validate_java_strategy_contract,

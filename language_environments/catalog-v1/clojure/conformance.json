@@ -1,0 +1,34 @@
+{
+  "accepted_faults": {"import-time":["unexpected_exit"],"memory":["resource_oom","unexpected_exit"]},
+  "contract":"choose-move-contract-v1",
+  "diagnostic_fixtures":["syntax-build","import-time","nondeterministic","protocol-fault","slow-response","memory","process","filesystem","premature-output"],
+  "fixture_sources": {
+    "syntax-build":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng]\n  [)\n",
+    "import-time":"(ns strategy)\n(throw (ex-info \"startup failure\" {}))\n(defn choose-move [turn my-history opponent-history rng] \"R\")\n",
+    "nondeterministic":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] (nth [\"R\" \"P\" \"S\"] (mod (System/nanoTime) 3)))\n",
+    "protocol-fault":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] \"X\")\n",
+    "slow-response":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] (Thread/sleep 200) \"R\")\n",
+    "memory":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] (byte-array (* 1024 1024 1024)) \"R\")\n",
+    "process":"(ns strategy)\n(def limited? (try (let [v (.trim (slurp \"/sys/fs/cgroup/pids.max\"))] (and (not= v \"max\") (<= (Long/parseLong v) 64))) (catch Exception _ false)))\n(defn choose-move [turn my-history opponent-history rng] (if limited? \"R\" \"X\"))\n",
+    "filesystem":"(ns strategy)\n(def limited? (try (spit \"/tmp/conformance-fill\" (apply str (repeat (* 32 1024 1024) \"x\"))) false (catch Exception _ true)))\n(defn choose-move [turn my-history opponent-history rng] (if limited? \"R\" \"X\"))\n",
+    "premature-output":"(ns strategy)\n(println \"R\")\n(defn choose-move [turn my-history opponent-history rng] \"R\")\n"
+  },
+  "practice_artifacts": {
+    "fixed-move":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] \"R\")\n",
+    "copycat":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] (if (empty? opponent-history) \"R\" (str (last opponent-history))))\n",
+    "protocol-test":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] (if (and (= turn (count my-history) (count opponent-history)) (re-matches #\"[RPS]*\" (str my-history opponent-history))) (nth [\"R\" \"P\" \"S\"] (mod turn 3)) \"X\"))\n",
+    "random":"(ns strategy)\n(defn choose-move [turn my-history opponent-history rng] (nth [\"R\" \"P\" \"S\"] (.nextInt rng 3)))\n"
+  },
+  "seed_adapter": {
+    "algorithm":"SplitMix64(seed)",
+    "golden_vectors":[
+      {"seed":"0","first_uint64":["16294208416658607535","7960286522194355700","487617019471545679"]},
+      {"seed":"1","first_uint64":["10451216379200822465","13757245211066428519","17911839290282890590"]},
+      {"seed":"9223372036854775807","first_uint64":["3055647633038352039","17441316833444690247","17011665146503905680"]},
+      {"seed":"18446744073709551615","first_uint64":["16490336266968443936","16834447057089888969","4048727598324417001"]}
+    ],
+    "system_randomness":false,
+    "version":"clojure-splitmix64-seed-adapter-v1"
+  },
+  "source_path":"strategy.clj","suite_version":"clojure-artifact-conformance-v1","syntax_diagnostic":"Docker build failed","syntax_stage":"build","version":"clojure-conformance-v1"
+}

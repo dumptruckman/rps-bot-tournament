@@ -1,0 +1,1 @@
+{"argv":["/opt/java/openjdk/bin/java","-XX:+UseSerialGC","-XX:TieredStopAtLevel=1","-Xms32m","-Xmx128m","-cp","/opt/rps/lib/*:/opt/rps/team:/opt/rps/organizer","clojure.main","-m","rps-wrapper"],"version":"clojure-entrypoint-v1"}

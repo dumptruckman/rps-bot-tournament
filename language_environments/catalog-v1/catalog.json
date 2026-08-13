@@ -174,6 +174,32 @@
         "version": "java-source-schema-v1"
       }
     },
+    "clojure": {
+      "assets": {
+        "base_runtime": {"path":"clojure/runtimes.json","sha256":"sha256:8ae7d50bff8abbd118b613eaded52d861b9c34e6637cd97270ac7fc8ca14bc92","version":"clojure-runtime-v1"},
+        "build_toolchain": {"path":"clojure/runtimes.json","sha256":"sha256:8ae7d50bff8abbd118b613eaded52d861b9c34e6637cd97270ac7fc8ca14bc92","version":"clojure-build-toolchain-v1"},
+        "build_target": {"path":"clojure/Dockerfile","sha256":"sha256:8a619fb9b5639781493a1c2319e96a4d272ca047ef923ad773f1a1589e12e4a8","version":"clojure-build-target-v1"},
+        "conformance": {"path":"clojure/conformance.json","sha256":"sha256:899765a409381aa679d33b2cfdf154ce4f517aa79b5b70275207f1a0320b06c8","version":"clojure-conformance-v1"},
+        "dependency_definition": {"path":"clojure/dependencies.lock","sha256":"sha256:c132850546737edb466b1117f10c901ca2fe5aa5629055be3cc924fd96fe331e","version":"clojure-dependencies-v1"},
+        "entrypoint": {"path":"clojure/entrypoint.json","sha256":"sha256:52047945a662b8454206327b2e5ac0dea0059a550c8221924c1562c88676d4d7","version":"clojure-entrypoint-v1"},
+        "platform": {"path":"clojure/runtimes.json","sha256":"sha256:8ae7d50bff8abbd118b613eaded52d861b9c34e6637cd97270ac7fc8ca14bc92","version":"clojure-oci-platforms-v1"},
+        "readiness": {"path":"clojure/readiness.json","sha256":"sha256:55fc90a02fc24c2723a779126a3ee0060eda92dec2a68adde4e47156dfce79c4","version":"wrapper-readiness-v1"},
+        "recipe": {"path":"clojure/Dockerfile","sha256":"sha256:8a619fb9b5639781493a1c2319e96a4d272ca047ef923ad773f1a1589e12e4a8","version":"clojure-build-recipe-v1"},
+        "workflow": {"path":"clojure/workflow.yml","sha256":"sha256:e457e7e227774cc409eb55f88e1f26b6544539c502b31c52de76bb74656f84c8","version":"source-validation-workflow-v1"},
+        "wrapper": {"path":"clojure/rps_wrapper.clj","sha256":"sha256:4d56c8b77e22059abd3cf008db55a9917e100242c03593e182f14e8caa218d2b","version":"clojure-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "clojure-language-environment-v1",
+      "language": "clojure",
+      "publication": "production",
+      "participant_contract": {"callable":"choose-move","signature":"(choose-move turn my-history opponent-history rng) -> String","static_validation":"clojure-strategy-contract-v1","version":"choose-move-contract-v1"},
+      "source_schema": {
+        "allowed_files":["*.clj","resources/*.csv","resources/*.json","resources/*.txt","resources/**/*.csv","resources/**/*.json","resources/**/*.txt"],
+        "forbidden_paths":[".clj-kondo",".git",".github",".hg",".gitlab-ci.yml",".svn","Dockerfile","Justfile","Makefile","bb.edn","build.clj","compose.yml","deps.edn","docker-compose.yml","entrypoint.sh","pom.xml","project.clj","rps_wrapper.clj","shadow-cljs.edn","vendor"],
+        "max_file_bytes":262144,"max_file_count":64,"max_total_bytes":1048576,
+        "required_paths":["strategy.clj"],"version":"clojure-source-schema-v1"
+      }
+    },
     "csharp": {
       "assets": {
         "base_runtime": {"path": "csharp/runtimes.json", "sha256": "sha256:ed45f9845c468ab0c121e11db2782700dbdb5b2cac3f88047caa1c7e5a09c79f", "version": "csharp-runtime-v1"},

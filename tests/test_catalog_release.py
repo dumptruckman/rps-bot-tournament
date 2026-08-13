@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "be6776a9d9426e6c1a6902f89a9621dfb1790a94444d72bed5197ecc5923f4a2",
+            "c1b2961447993653df86b8a58c4cb4662aa0bc6bfc8e2fe7ed388273968a9f53",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -103,6 +103,17 @@ class CatalogReleaseTests(unittest.TestCase):
                 "contract-fixture.recipe",
                 "contract-fixture.workflow",
                 "contract-fixture.wrapper",
+                "clojure.base_runtime",
+                "clojure.build_toolchain",
+                "clojure.build_target",
+                "clojure.conformance",
+                "clojure.dependency_definition",
+                "clojure.entrypoint",
+                "clojure.platform",
+                "clojure.readiness",
+                "clojure.recipe",
+                "clojure.workflow",
+                "clojure.wrapper",
                 "go.base_runtime",
                 "go.build_toolchain",
                 "go.build_target",
@@ -180,6 +191,17 @@ class CatalogReleaseTests(unittest.TestCase):
                 "python.recipe",
                 "python.workflow",
                 "python.wrapper",
+                "ruby.base_runtime",
+                "ruby.build_toolchain",
+                "ruby.build_target",
+                "ruby.conformance",
+                "ruby.dependency_definition",
+                "ruby.entrypoint",
+                "ruby.platform",
+                "ruby.readiness",
+                "ruby.recipe",
+                "ruby.workflow",
+                "ruby.wrapper",
             },
         )
         self.assertEqual(
@@ -198,17 +220,21 @@ class CatalogReleaseTests(unittest.TestCase):
                 "f29543b7644c0a65dc46ed3c88e5215b5177a2434f156f27130e81c613d4aa3f",
                 "csharp": "csharp-artifact-conformance-v1@sha256:"
                 "a1715ef34a2bfef92976a30ac490d498e913cbf2ae0ad4f1a8b4ae8235b98c6f",
+                "clojure": "clojure-artifact-conformance-v1@sha256:"
+                "899765a409381aa679d33b2cfdf154ce4f517aa79b5b70275207f1a0320b06c8",
                 "rust": "rust-artifact-conformance-v1@sha256:"
                 "b39ff8f5359aad15abefb7c6f4b592d95f1e0fac7eca69a2ff3ac7f8f163ef79",
                 "python": "python-artifact-conformance-v1@sha256:"
                 "0541ac0e19bedc42241e65ffb462d894833c6c30d268fa054162bdff8615c057",
+                "ruby": "ruby-artifact-conformance-v1@sha256:"
+                "747f47e66d8129edaef9a6589f639f73487e13b36aad6e62161cd3c802f04e91",
                 "typescript": "typescript-artifact-conformance-v1@sha256:"
                 "dddd1c15d1d0f2bf87677f71bb4fc18b7f72965a213121ef0d226914efbeb9ed",
             },
         )
         self.assertEqual(
             set(manifest["platform_runtimes"]),
-            {"csharp", "go", "java", "python", "rust", "typescript"},
+            {"clojure", "csharp", "go", "java", "python", "ruby", "rust", "typescript"},
         )
         python_runtimes = manifest["platform_runtimes"]["python"]
         self.assertEqual(
@@ -569,9 +595,11 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 "tests/test_artifact_builder_cli.py",
                 "tests/test_artifact_certification_cli.py",
                 "tests/test_multi_language_environment.py",
+                "tests/test_clojure_language_environment.py",
                 "tests/test_csharp_language_environment.py",
                 "tests/test_java_language_environment.py",
                 "tests/test_rust_language_environment.py",
+                "tests/test_ruby_language_environment.py",
                 "tests/test_typescript_language_environment.py",
                 "tests/test_batch_plan_cli.py",
                 "tests/test_tournament_plan_cli.py",

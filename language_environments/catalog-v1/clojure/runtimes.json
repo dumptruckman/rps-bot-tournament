@@ -1,0 +1,24 @@
+{
+  "selection": {
+    "policy": "latest-upstream-supported-stable-with-latest-compatible-java-lts",
+    "clojure_version": "1.12.5",
+    "clojure_cli_version": "1.12.5.1664",
+    "java_version": "25.0.3+9",
+    "java_lts_release": "25",
+    "rationale": "Clojure 1.12.5 is the latest stable upstream release and recommends Java 25, the latest upstream-designated Java LTS; the official Clojure image embeds Temurin 25.0.3+9 and all approved runtime jars.",
+    "selected_on": "2026-08-13",
+    "upstream_release": "https://clojure.org/releases/downloads",
+    "java_support": "https://www.oracle.com/java/technologies/java-se-support-roadmap.html"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {"image": "docker.io/library/clojure@sha256:c50576e2fcb26300d09dae1f3b5d3a7a1482334c5113ea7bcd3f6a17b0141aca", "version": "linux-amd64-clojure-1.12.5-cli-1.12.5.1664-java-25.0.3+9-build-toolchain-v1"},
+      "execution_runtime": {"image": "docker.io/library/eclipse-temurin@sha256:c650e8097620a27a61f476d2a269e02078dc9f316136ecd9821dedd98b89e719", "version": "linux-amd64-clojure-1.12.5-java-25.0.3+9-execution-runtime-v1"}
+    },
+    "linux/arm64": {
+      "build_toolchain": {"image": "docker.io/library/clojure@sha256:394388e78b78fc48d385ca92d42df15501d48996a157f663c5c788a7d3bb86fc", "version": "linux-arm64-clojure-1.12.5-cli-1.12.5.1664-java-25.0.3+9-build-toolchain-v1"},
+      "execution_runtime": {"image": "docker.io/library/eclipse-temurin@sha256:57f9a2046d0ff628c24c0c127bd9d37a57e372064b30fdade9c00683382c1ab3", "version": "linux-arm64-clojure-1.12.5-java-25.0.3+9-execution-runtime-v1"}
+    }
+  },
+  "version": "clojure-runtime-v1"
+}

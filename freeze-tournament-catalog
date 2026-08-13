@@ -28,9 +28,11 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_artifact_builder_cli.py",
     "tests/test_artifact_certification_cli.py",
     "tests/test_multi_language_environment.py",
+    "tests/test_clojure_language_environment.py",
     "tests/test_csharp_language_environment.py",
     "tests/test_java_language_environment.py",
     "tests/test_rust_language_environment.py",
+    "tests/test_ruby_language_environment.py",
     "tests/test_typescript_language_environment.py",
     "tests/test_batch_plan_cli.py",
     "tests/test_tournament_plan_cli.py",
@@ -309,6 +311,60 @@ def _verify_java_dependency_policy(catalog: Any) -> None:
     )
 
 
+def _verify_clojure_release_policy(catalog: Any) -> None:
+    environment = catalog.environment("clojure")
+    try:
+        definition = json.loads(environment.assets["base_runtime"].content)
+        selection = definition["selection"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReleaseError("the Clojure release inputs are incomplete") from error
+    if set(selection) != {
+        "policy", "clojure_version", "clojure_cli_version", "java_version",
+        "java_lts_release", "rationale", "selected_on", "upstream_release",
+        "java_support",
+    } or selection["policy"] != (
+        "latest-upstream-supported-stable-with-latest-compatible-java-lts"
+    ):
+        raise ReleaseError("the Clojure and Java runtime selection is incomplete")
+    for platform in ("linux/amd64", "linux/arm64"):
+        try:
+            selected = definition["platforms"][platform]
+        except (KeyError, TypeError) as error:
+            raise ReleaseError("the Clojure runtime is missing " + platform) from error
+        if set(selected) != {"build_toolchain", "execution_runtime"}:
+            raise ReleaseError("the Clojure runtime coordinates are incomplete")
+        if not all(
+            value in selected["build_toolchain"]["version"]
+            for value in (
+                selection["clojure_version"],
+                selection["clojure_cli_version"],
+                selection["java_version"],
+            )
+        ):
+            raise ReleaseError("the Clojure build-toolchain coordinate is incomplete")
+        if not all(
+            value in selected["execution_runtime"]["version"]
+            for value in (selection["clojure_version"], selection["java_version"])
+        ):
+            raise ReleaseError("the Clojure execution-runtime coordinate is incomplete")
+    dependency_lines = [
+        line.split()
+        for line in environment.assets["dependency_definition"].content.decode().splitlines()
+        if line.strip()
+    ]
+    if len(dependency_lines) != 3 or any(
+        len(line) != 2 or not re.fullmatch(r"[0-9a-f]{64}", line[0])
+        for line in dependency_lines
+    ):
+        raise ReleaseError("the approved Clojure runtime jars are not exactly locked")
+    _verify_networkless_recipe_policy(
+        catalog,
+        "clojure",
+        "Clojure",
+        ("clojure -p", "clojure -x", "mvn ", "lein ", "clojars", "curl ", "wget "),
+    )
+
+
 def _verify_typescript_release_policy(catalog: Any) -> None:
     environment = catalog.environment("typescript")
     try:
@@ -400,6 +456,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_rust_release_policy(catalog)
     _verify_java_runtime_policy(catalog)
     _verify_java_dependency_policy(catalog)
+    _verify_clojure_release_policy(catalog)
     _verify_csharp_release_policy(catalog)
     _verify_typescript_release_policy(catalog)
 
