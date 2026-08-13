@@ -208,6 +208,32 @@
         "version": "csharp-source-schema-v1"
       }
     },
+    "ruby": {
+      "assets": {
+        "base_runtime": {"path":"ruby/runtimes.json","sha256":"sha256:f752e2638e85a7c982eb8ce39cce8d6064be19c49fdfb9649e5a408040afb88a","version":"ruby-runtime-v1"},
+        "build_toolchain": {"path":"ruby/runtimes.json","sha256":"sha256:f752e2638e85a7c982eb8ce39cce8d6064be19c49fdfb9649e5a408040afb88a","version":"ruby-build-toolchain-v1"},
+        "build_target": {"path":"ruby/Dockerfile","sha256":"sha256:ac8e27e09225831e53190c276a24ba59a9c2a8cbdce3b52e8131e2063ab343d9","version":"ruby-build-target-v1"},
+        "conformance": {"path":"ruby/conformance.json","sha256":"sha256:747f47e66d8129edaef9a6589f639f73487e13b36aad6e62161cd3c802f04e91","version":"ruby-conformance-v1"},
+        "dependency_definition": {"path":"ruby/dependencies.lock","sha256":"sha256:b1ac3df700d7f0fea53ec5982c5927acd3d8864d1a1d1db1c1bc803b4b6206a8","version":"ruby-dependencies-v1"},
+        "entrypoint": {"path":"ruby/entrypoint.json","sha256":"sha256:5a79f4de55c24a44c0e9257c6809205907056b75231439d133b86c83cf8b99ae","version":"ruby-entrypoint-v1"},
+        "platform": {"path":"ruby/runtimes.json","sha256":"sha256:f752e2638e85a7c982eb8ce39cce8d6064be19c49fdfb9649e5a408040afb88a","version":"ruby-oci-platforms-v1"},
+        "readiness": {"path":"ruby/readiness.json","sha256":"sha256:55fc90a02fc24c2723a779126a3ee0060eda92dec2a68adde4e47156dfce79c4","version":"wrapper-readiness-v1"},
+        "recipe": {"path":"ruby/Dockerfile","sha256":"sha256:ac8e27e09225831e53190c276a24ba59a9c2a8cbdce3b52e8131e2063ab343d9","version":"ruby-build-recipe-v1"},
+        "workflow": {"path":"ruby/workflow.yml","sha256":"sha256:a895067467d3d89ad5cc63ae9672417e3680645f6cd200221f159c8bdfc6a6a8","version":"source-validation-workflow-v1"},
+        "wrapper": {"path":"ruby/wrapper.rb","sha256":"sha256:cc57a07a0053ed324564c4146c89c15885ce2c6bcec43dcb929909632560fc99","version":"ruby-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "ruby-language-environment-v1",
+      "language": "ruby",
+      "publication": "production",
+      "participant_contract": {"callable":"choose_move","signature":"choose_move(turn, my_history, opponent_history, rng) -> String","static_validation":"ruby-strategy-contract-v1","version":"choose-move-contract-v1"},
+      "source_schema": {
+        "allowed_files":["*.rb","resources/*.csv","resources/*.json","resources/*.txt","resources/**/*.csv","resources/**/*.json","resources/**/*.txt"],
+        "forbidden_paths":[".bundle",".git",".github",".hg",".gitlab-ci.yml",".svn","Dockerfile","Gemfile","Gemfile.lock","Justfile","Makefile","Rakefile","compose.yml","docker-compose.yml","entrypoint.sh","vendor","wrapper.rb"],
+        "max_file_bytes":262144,"max_file_count":64,"max_total_bytes":1048576,
+        "required_paths":["strategy.rb"],"version":"ruby-source-schema-v1"
+      }
+    },
     "rust": {
       "assets": {
         "base_runtime": {

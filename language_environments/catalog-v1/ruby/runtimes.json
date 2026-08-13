@@ -1,0 +1,20 @@
+{
+  "selection": {
+    "policy": "latest-upstream-supported-stable",
+    "ruby_version": "4.0.6",
+    "rationale": "Ruby does not designate an LTS release; 4.0.6 was the latest stable upstream release when selected.",
+    "selected_on": "2026-08-13",
+    "upstream_release": "https://www.ruby-lang.org/en/news/2026/07/14/ruby-4-0-6-released/"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {"image": "docker.io/library/ruby@sha256:5dff75e5286a89836c9fb34473809e4b6a756687a914898b7ecf5fd8d29e16a8", "version": "linux-amd64-ruby-4.0.6-build-toolchain-v1"},
+      "execution_runtime": {"image": "docker.io/library/ruby@sha256:5dff75e5286a89836c9fb34473809e4b6a756687a914898b7ecf5fd8d29e16a8", "version": "linux-amd64-ruby-4.0.6-execution-runtime-v1"}
+    },
+    "linux/arm64": {
+      "build_toolchain": {"image": "docker.io/library/ruby@sha256:cde120660ff22235429157098de77cf3f14291f220c8eea49564edecbd5a2516", "version": "linux-arm64-ruby-4.0.6-build-toolchain-v1"},
+      "execution_runtime": {"image": "docker.io/library/ruby@sha256:cde120660ff22235429157098de77cf3f14291f220c8eea49564edecbd5a2516", "version": "linux-arm64-ruby-4.0.6-execution-runtime-v1"}
+    }
+  },
+  "version": "ruby-runtime-v1"
+}

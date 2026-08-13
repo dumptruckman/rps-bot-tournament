@@ -1,0 +1,34 @@
+{
+  "accepted_faults": {"import-time":["unexpected_exit"],"memory":["resource_oom","unexpected_exit"]},
+  "contract":"choose-move-contract-v1",
+  "diagnostic_fixtures":["syntax-build","import-time","nondeterministic","protocol-fault","slow-response","memory","process","filesystem","premature-output"],
+  "fixture_sources": {
+    "syntax-build":"def choose_move(turn, my_history, opponent_history, rng)\n [\nend\n",
+    "import-time":"abort 'startup failure'\ndef choose_move(turn, my_history, opponent_history, rng); 'R'; end\n",
+    "nondeterministic":"def choose_move(turn, my_history, opponent_history, rng); ['R','P','S'][File.binread('/dev/urandom', 1).ord % 3]; end\n",
+    "protocol-fault":"def choose_move(turn, my_history, opponent_history, rng); 'X'; end\n",
+    "slow-response":"def choose_move(turn, my_history, opponent_history, rng); sleep 0.2; 'R'; end\n",
+    "memory":"def choose_move(turn, my_history, opponent_history, rng); value = 'x' * (1024 * 1024 * 1024); value.object_id; 'R'; end\n",
+    "process":"LIMITED = begin; value = File.read('/sys/fs/cgroup/pids.max').strip; value != 'max' && value.to_i <= 64; rescue; false; end\ndef choose_move(turn, my_history, opponent_history, rng); LIMITED ? 'R' : 'X'; end\n",
+    "filesystem":"LIMITED = begin; File.binwrite('/tmp/conformance-fill', 'x' * (32 * 1024 * 1024)); false; rescue; true; ensure; File.delete('/tmp/conformance-fill') rescue nil; end\ndef choose_move(turn, my_history, opponent_history, rng); LIMITED ? 'R' : 'X'; end\n",
+    "premature-output":"STDOUT.puts 'R'\ndef choose_move(turn, my_history, opponent_history, rng); 'R'; end\n"
+  },
+  "practice_artifacts": {
+    "fixed-move":"def choose_move(turn, my_history, opponent_history, rng); 'R'; end\n",
+    "copycat":"def choose_move(turn, my_history, opponent_history, rng); opponent_history.empty? ? 'R' : opponent_history[-1]; end\n",
+    "protocol-test":"def choose_move(turn, my_history, opponent_history, rng); return 'X' unless turn == my_history.length && my_history.length == opponent_history.length && (my_history + opponent_history).match?(/\\A[RPS]*\\z/); ['R','P','S'][turn % 3]; end\n",
+    "random":"def choose_move(turn, my_history, opponent_history, rng); ['R','P','S'][rng.next_int(3)]; end\n"
+  },
+  "seed_adapter": {
+    "algorithm":"SplitMix64(seed)",
+    "golden_vectors":[
+      {"seed":"0","first_uint64":["16294208416658607535","7960286522194355700","487617019471545679"]},
+      {"seed":"1","first_uint64":["10451216379200822465","13757245211066428519","17911839290282890590"]},
+      {"seed":"9223372036854775807","first_uint64":["3055647633038352039","17441316833444690247","17011665146503905680"]},
+      {"seed":"18446744073709551615","first_uint64":["16490336266968443936","16834447057089888969","4048727598324417001"]}
+    ],
+    "system_randomness":false,
+    "version":"ruby-splitmix64-seed-adapter-v1"
+  },
+  "source_path":"strategy.rb","suite_version":"ruby-artifact-conformance-v1","syntax_diagnostic":"Docker build failed","syntax_stage":"build","version":"ruby-conformance-v1"
+}

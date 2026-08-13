@@ -981,6 +981,80 @@ def _validate_rust_strategy_contract(files: Sequence[SourceFile]) -> None:
         )
 
 
+def _validate_ruby_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "strategy.rb")
+    sources = []
+    for item in files:
+        if not item.path.endswith(".rb"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Ruby Team Source must be UTF-8: " + str(error),
+            )
+        significant = _ruby_significant_source(source)
+        sources.append((item, significant))
+        if re.search(r"\bclass\s+RpsRandom\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned RpsRandom class",
+            )
+
+    strategy = _ruby_significant_source(source_file.content.decode("utf-8"))
+    signature = re.compile(
+        r"\bdef\s+choose_move\s*\(\s*turn\s*,\s*my_history\s*,\s*"
+        r"opponent_history\s*,\s*rng\s*\)"
+    )
+    bindings = sum(
+        len(re.findall(r"\bdef\s+(?:self\.)?choose_move\b", value))
+        for _, value in sources
+    )
+    if bindings != 1 or not signature.search(strategy):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one choose_move(turn, my_history, opponent_history, rng) method",
+        )
+
+
+def _ruby_significant_source(source: str) -> str:
+    """Blank Ruby comments and quoted literals while preserving line structure."""
+
+    result = list(source)
+    index = 0
+    quote = None
+    escaped = False
+    while index < len(source):
+        character = source[index]
+        if quote:
+            if character == quote and not escaped:
+                result[index] = " "
+                quote = None
+            elif character != "\n":
+                result[index] = " "
+            escaped = character == "\\" and not escaped
+            if character != "\\":
+                escaped = False
+            index += 1
+            continue
+        if character == "#":
+            end = source.find("\n", index)
+            end = len(source) if end == -1 else end
+            for cursor in range(index, end):
+                result[cursor] = " "
+            index = end
+            continue
+        if character in ("'", '"'):
+            result[index] = " "
+            quote = character
+        index += 1
+    return "".join(result)
+
+
 def _rust_significant_source(source: str) -> str:
     """Blank Rust comments and literals while retaining lifetime identifiers."""
 
@@ -1147,6 +1221,7 @@ _PARTICIPANT_CONTRACT_VALIDATORS = {
     "go-strategy-contract-v1": _validate_go_strategy_contract,
     "java-strategy-contract-v1": _validate_java_strategy_contract,
     "rust-strategy-contract-v1": _validate_rust_strategy_contract,
+    "ruby-strategy-contract-v1": _validate_ruby_strategy_contract,
     "typescript-strategy-contract-v1": _validate_typescript_strategy_contract,
     "none-v1": _validate_no_static_contract,
     "single-unconditional-function-v1": _validate_python_function_contract,
