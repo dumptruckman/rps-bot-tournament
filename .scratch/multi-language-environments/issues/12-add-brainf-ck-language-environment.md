@@ -73,5 +73,5 @@ its Brainf-ck conformance identity is
 its catalog-owned interpreter identity is
 `catalog-brainf-ck-interpreter-v1@sha256:86d8652f905b9836171b74ebd0be063df740b457d5d343f27af35312cb9d0432`,
 and its independently verified offline bundle identity is
-`rps-runner-offline-bundle-v1@sha256:f72095b97678a18cfd4ca668e9bac1e24bcad0e3c9c8697a3da3bb829f6c5f68`.
+`rps-runner-offline-bundle-v1@sha256:440fe7070f3811449970a23b7c4b581c517effe146987d80f820fb261d9ed7ee`.
 No Runner dependency surface references the Team Template repository.
