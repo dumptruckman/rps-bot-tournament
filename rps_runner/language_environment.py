@@ -873,8 +873,13 @@ def _validate_kotlin_strategy_contract(files: Sequence[SourceFile]) -> None:
         r"rng\s*:\s*RandomGenerator\s*\)\s*:\s*String\s*(?:=|\{)"
     )
     bindings = sum(
-        len(re.findall(r"\b(?:fun|val|var|class|object)\s+chooseMove\b", value))
-        for _, value in kotlin_sources
+        len(
+            re.findall(
+                r"\b(?:fun|val|var|class|object)\s+chooseMove\b",
+                significant_source,
+            )
+        )
+        for _, significant_source in kotlin_sources
     )
     if bindings != 1 or not signature.search(strategy):
         raise SourceValidationError(

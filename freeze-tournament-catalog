@@ -434,6 +434,55 @@ def _verify_javascript_release_policy(catalog: Any) -> None:
     )
 
 
+def _verify_kotlin_release_policy(catalog: Any) -> None:
+    environment = catalog.environment("kotlin")
+    try:
+        definition = json.loads(environment.assets["base_runtime"].content)
+        selection = definition["selection"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReleaseError("the Kotlin and Java release inputs are incomplete") from error
+    if set(selection) != {
+        "policy", "kotlin_version", "java_version", "java_lts_release",
+        "rationale", "selected_on", "upstream_kotlin_release",
+        "upstream_java_release",
+    } or selection["policy"] != (
+        "latest-upstream-supported-stable-with-compatible-java-lts"
+    ):
+        raise ReleaseError("the Kotlin and Java runtime selection is incomplete")
+    dependency = environment.assets["dependency_definition"]
+    for platform in ("linux/amd64", "linux/arm64"):
+        try:
+            selected = definition["platforms"][platform]
+            compiler = selected["build_toolchain"]["kotlin_compiler"]
+        except (KeyError, TypeError) as error:
+            raise ReleaseError(
+                "the Kotlin runtime is missing immutable inputs for " + platform
+            ) from error
+        if set(selected) != {"build_toolchain", "execution_runtime"}:
+            raise ReleaseError("the Kotlin runtime coordinates are incomplete")
+        if set(selected["build_toolchain"]) != {
+            "image", "kotlin_compiler", "version"
+        }:
+            raise ReleaseError("the Kotlin build toolchain coordinate is incomplete")
+        if set(selected["execution_runtime"]) != {"image", "version"}:
+            raise ReleaseError("the Kotlin execution runtime coordinate is incomplete")
+        if (
+            compiler.get("version") != selection["kotlin_version"]
+            or compiler.get("sha256") != dependency.digest
+            or compiler.get("package") != dependency.path.name
+            or selection["kotlin_version"] not in selected["build_toolchain"]["version"]
+            or selection["java_version"] not in selected["build_toolchain"]["version"]
+            or selection["java_version"] not in selected["execution_runtime"]["version"]
+        ):
+            raise ReleaseError("the Kotlin compiler or Java identity is incomplete")
+    _verify_networkless_recipe_policy(
+        catalog,
+        "kotlin",
+        "Kotlin",
+        ("mvn ", "gradle ", "maven", "curl ", "wget "),
+    )
+
+
 def _verify_csharp_release_policy(catalog: Any) -> None:
     environment = catalog.environment("csharp")
     try:
@@ -483,6 +532,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_csharp_release_policy(catalog)
     _verify_typescript_release_policy(catalog)
     _verify_javascript_release_policy(catalog)
+    _verify_kotlin_release_policy(catalog)
 
 
 def _bundle_identity(bundle_path: Path) -> str:
