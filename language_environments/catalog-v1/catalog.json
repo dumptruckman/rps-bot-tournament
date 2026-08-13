@@ -220,7 +220,7 @@
         "readiness": {"path":"ruby/readiness.json","sha256":"sha256:55fc90a02fc24c2723a779126a3ee0060eda92dec2a68adde4e47156dfce79c4","version":"wrapper-readiness-v1"},
         "recipe": {"path":"ruby/Dockerfile","sha256":"sha256:ac8e27e09225831e53190c276a24ba59a9c2a8cbdce3b52e8131e2063ab343d9","version":"ruby-build-recipe-v1"},
         "workflow": {"path":"ruby/workflow.yml","sha256":"sha256:a895067467d3d89ad5cc63ae9672417e3680645f6cd200221f159c8bdfc6a6a8","version":"source-validation-workflow-v1"},
-        "wrapper": {"path":"ruby/wrapper.rb","sha256":"sha256:cc57a07a0053ed324564c4146c89c15885ce2c6bcec43dcb929909632560fc99","version":"ruby-wrapper-v1"}
+        "wrapper": {"path":"ruby/wrapper.rb","sha256":"sha256:7ff95f3e6951ec1a699d60fea92783d69f31747aed9867b4f2c5296e571f6826","version":"ruby-wrapper-v2"}
       },
       "contract_only": false,
       "descriptor_version": "ruby-language-environment-v1",

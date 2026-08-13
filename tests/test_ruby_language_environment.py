@@ -58,6 +58,33 @@ class RubyLanguageEnvironmentTests(unittest.TestCase):
                 with self.assertRaises(SourceValidationError):
                     validate_source(source, self.environment)
 
+    def test_accepts_percent_literal_and_block_comment_decoys(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            source = Path(name)
+            (source / "strategy.rb").write_text(
+                "%q{def choose_move(turn, my_history, opponent_history, rng)}\n"
+                "=begin\nclass RpsRandom\n=end\n"
+                "def choose_move(turn, my_history, opponent_history, rng)\n 'R'\nend\n"
+            )
+            validate_source(source, self.environment)
+
+    @unittest.skipUnless(shutil.which("ruby"), "Ruby is required")
+    def test_wrapper_sanitizes_import_and_protects_seed_adapter_and_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / "wrapper.rb").write_bytes(self.environment.assets["wrapper"].content)
+            (root / "strategy.rb").write_text(
+                "warn 'RPS_READY_V1'\n"
+                "raise 'ambient environment leaked' if ENV.key?('RPS_SECRET')\n"
+                "begin\n class ::RpsRandom; def next_uint64; 0; end; end\nrescue FrozenError\nend\n"
+                "def choose_move(turn, my_history, opponent_history, rng); 'R'; end\n"
+            )
+            env = {"RPS_PROTOCOL_VERSION": "1", "RPS_SEED": "0", "RPS_ROUNDS": "1", "RPS_SECRET": "no"}
+            completed = subprocess.run([shutil.which("ruby"), "wrapper.rb"], cwd=root, env=env, input="0\n-\n-\n", capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr.splitlines(), ["RPS_READY_V1"])
+        self.assertEqual(completed.stdout, "R\n")
+
     def test_publishes_seed_vectors_without_system_randomness(self) -> None:
         adapter = json.loads(self.environment.assets["conformance"].content)["seed_adapter"]
         self.assertEqual(adapter["version"], "ruby-splitmix64-seed-adapter-v1")

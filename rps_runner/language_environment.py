@@ -1029,6 +1029,15 @@ def _ruby_significant_source(source: str) -> str:
     quote = None
     escaped = False
     while index < len(source):
+        if source.startswith("=begin", index) and (index == 0 or source[index - 1] == "\n"):
+            end = source.find("\n=end", index + 6)
+            end = len(source) if end == -1 else source.find("\n", end + 1)
+            end = len(source) if end == -1 else end
+            for cursor in range(index, end):
+                if result[cursor] != "\n":
+                    result[cursor] = " "
+            index = end
+            continue
         character = source[index]
         if quote:
             if character == quote and not escaped:
@@ -1046,6 +1055,17 @@ def _ruby_significant_source(source: str) -> str:
             end = len(source) if end == -1 else end
             for cursor in range(index, end):
                 result[cursor] = " "
+            index = end
+            continue
+        percent = re.match(r"%[qQwWiIxr]?(.)", source[index:])
+        if percent and not percent.group(1).isalnum() and not percent.group(1).isspace():
+            opener = percent.group(1)
+            closer = {"(": ")", "[": "]", "{": "}", "<": ">"}.get(opener, opener)
+            end = source.find(closer, index + len(percent.group(0)))
+            end = len(source) if end == -1 else end + 1
+            for cursor in range(index, end):
+                if result[cursor] != "\n":
+                    result[cursor] = " "
             index = end
             continue
         if character in ("'", '"'):

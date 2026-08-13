@@ -25,8 +25,7 @@ class RpsRandom
     end
   end
 end
-
-require_relative "strategy"
+RpsRandom.freeze
 
 def fail_wrapper(message)
   warn "Ruby wrapper: #{message}"
@@ -40,6 +39,14 @@ if $PROGRAM_NAME == __FILE__
   rounds = ENV.fetch("RPS_ROUNDS", "")
   ENV.clear
   ENV.update("HOME" => "/tmp", "LANG" => "C.UTF-8", "LC_ALL" => "C.UTF-8", "TZ" => "UTC", "RPS_PROTOCOL_VERSION" => "1", "RPS_ROUNDS" => rounds, "RPS_SEED" => seed_text)
+  original_stderr = STDERR.dup
+  STDERR.reopen(File::NULL, "w")
+  begin
+    require_relative "strategy"
+  ensure
+    STDERR.reopen(original_stderr)
+    original_stderr.close
+  end
   rng = RpsRandom.new(seed_text.to_i)
   warn "RPS_READY_V1"
   STDERR.flush
