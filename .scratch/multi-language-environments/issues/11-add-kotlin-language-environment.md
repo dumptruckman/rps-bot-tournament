@@ -1,6 +1,6 @@
 # Add and publish the Kotlin Language Environment
 
-Status: ready-for-agent
+Status: resolved
 
 Blocked by: 03
 
@@ -39,3 +39,31 @@ platforms.
   expose immutable Kotlin compatibility and build-toolchain coordinates.
 - [ ] No test or publication step fetches, imports, or inspects the Kotlin Team
   Template repository.
+
+## Answer
+
+Added the production Kotlin Language Environment with Kotlin 2.4.10 and Java
+25 LTS (Temurin 25.0.3+9). The Catalog pins exact Linux/AMD64 and Linux/ARM64
+build-toolchain and execution-runtime images and vendors JetBrains' official
+Kotlin compiler distribution by SHA-256, so builds require no Maven or other
+mutable dependency source.
+
+The organizer-owned `Strategy.kt` contract, wrapper, Seed Adapter, readiness
+marker, fixed JAR entrypoint, source schema, dependency policy, practice
+artifacts, and diagnostic fixtures are complete. Published 64-bit seed vectors
+execute through Kotlin 2.4.10 without ambient randomness. Complete
+Linux/AMD64 Advisory Validation and Linux/ARM64 Final Validation passed,
+including isolation/resource/lifecycle checks, mixed-language Matches, and an
+ARM64 mixed-language Tournament plan.
+
+Published and independently verified `catalog-v17` at Runner commit
+`8b51ae363f359a74b516a65c9d0bb644c91b9cac`. Its Catalog identity is
+`rps-language-environment-catalog-v1@sha256:47ce9003164c1fe9dfb4f1fd7c711e2fd11d45f041de1f5cb37fd7fad06f8c2d`,
+its Kotlin conformance identity is
+`kotlin-artifact-conformance-v1@sha256:f530c8e3e6719a48a0305afd7b33981c38e8a0cbf2d2aae305f1ca4606034af8`,
+and its offline bundle identity is
+`rps-runner-offline-bundle-v1@sha256:fe6d3e318aee296aea39f99873602233e42e4942e8841cf08e82993dedbfd460`.
+The complete Python 3.9 suite passed 482 tests with 14 expected opt-in skips.
+Both review axes passed after addressing the initial publication, seed-vector,
+and ARM64 proof findings; no Runner workflow depends on the Team Template
+repository.
