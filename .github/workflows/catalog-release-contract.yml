@@ -39,6 +39,8 @@ jobs:
         run: python -m unittest tests.test_clojure_language_environment.ClojureLanguageEnvironmentTests -v
       - name: Exercise Kotlin catalog and Seed Adapter contracts
         run: python -m unittest tests.test_kotlin_language_environment.KotlinLanguageEnvironmentTests -v
+      - name: Exercise Brainf-ck catalog and Seed Adapter contracts
+        run: python -m unittest tests.test_brainf_ck_language_environment.BrainfCkLanguageEnvironmentTests -v
       - name: Prepare exact internal-fixture images
         run: |
           docker pull --platform linux/amd64 docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4
@@ -85,6 +87,14 @@ jobs:
           python -m unittest
           tests.test_kotlin_language_environment.KotlinLanguageEnvironmentDockerTests
           -v
+      - name: Prove Brainf-ck Linux/AMD64 Advisory Validation
+        env:
+          RPS_RUN_DOCKER_INTEGRATION: "1"
+          RPS_DOCKER_PLATFORM: linux/amd64
+        run: >-
+          python -m unittest
+          tests.test_brainf_ck_language_environment.BrainfCkLanguageEnvironmentDockerTests
+          -v
       - name: Configure the disposable proof release identity
         run: |
           git config user.email catalog-proof@example.invalid
@@ -130,4 +140,26 @@ jobs:
         run: >-
           python -m unittest
           tests.test_kotlin_language_environment.KotlinLanguageEnvironmentDockerTests
+          -v
+
+  brainf-ck-final-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out Runner
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install Python 3.9
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.9"
+      - name: Install the Runner
+        run: python -m pip install -e .
+      - name: Prepare exact Brainf-ck and Python runtimes
+        run: docker pull --platform linux/arm64 docker.io/library/python@sha256:1609c3e634a6ad5b4759f67e34c246640d41858fffde69876245fd26afd632b7
+      - name: Prove Brainf-ck Linux/ARM64 Final Validation
+        env:
+          RPS_RUN_DOCKER_INTEGRATION: "1"
+          RPS_DOCKER_PLATFORM: linux/arm64
+        run: >-
+          python -m unittest
+          tests.test_brainf_ck_language_environment.BrainfCkLanguageEnvironmentDockerTests
           -v

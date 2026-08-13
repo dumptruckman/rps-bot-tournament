@@ -594,6 +594,7 @@ def _run_diagnostic_artifacts(
     namespace: str,
     accepted_faults: Mapping[str, Any] | None = None,
     syntax_diagnostic: str = "Python source is not valid syntax",
+    ambient_nondeterminism_unavailable: bool = False,
 ) -> Mapping[str, Mapping[str, str]]:
     with _CONFORMANCE_EXECUTION_LOCK:
         return _run_diagnostic_artifacts_exclusively(
@@ -603,6 +604,7 @@ def _run_diagnostic_artifacts(
             namespace=namespace,
             accepted_faults=accepted_faults,
             syntax_diagnostic=syntax_diagnostic,
+            ambient_nondeterminism_unavailable=ambient_nondeterminism_unavailable,
         )
 
 
@@ -614,6 +616,7 @@ def _run_diagnostic_artifacts_exclusively(
     namespace: str,
     accepted_faults: Mapping[str, Any] | None = None,
     syntax_diagnostic: str = "Python source is not valid syntax",
+    ambient_nondeterminism_unavailable: bool = False,
 ) -> Mapping[str, Mapping[str, str]]:
     fixed_digest = str(fixed_move["artifact_digest"])
     reports: dict[str, Mapping[str, str]] = {
@@ -695,6 +698,13 @@ def _run_diagnostic_artifacts_exclusively(
             "actionable_diagnostic": name + " limit was enforced",
         }
         attempt += 1
+
+    if ambient_nondeterminism_unavailable:
+        reports["nondeterministic"] = {
+            "status": "passed",
+            "actionable_diagnostic": "ambient nondeterminism is unavailable in the language dialect",
+        }
+        return reports
 
     nondeterministic_digest = str(fixtures["nondeterministic"]["artifact_digest"])
     nondeterministic_outcomes = [
@@ -865,6 +875,12 @@ def _run_smoke_matches_exclusively(
                     _conformance_definition(environment).get(
                         "syntax_diagnostic", "Python source is not valid syntax"
                     )
+                ),
+                ambient_nondeterminism_unavailable=(
+                    _conformance_definition(environment).get(
+                        "ambient_nondeterminism_unavailable", False
+                    )
+                    is True
                 ),
             )
             return {

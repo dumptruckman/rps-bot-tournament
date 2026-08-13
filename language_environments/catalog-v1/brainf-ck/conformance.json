@@ -1,0 +1,102 @@
+{
+  "accepted_faults": {
+    "import-time": [
+      "unexpected_exit"
+    ],
+    "memory": [
+      "unexpected_exit"
+    ],
+    "protocol-fault": [
+      "unexpected_exit"
+    ],
+    "slow-response": [
+      "unexpected_exit"
+    ]
+  },
+  "ambient_nondeterminism_unavailable": true,
+  "contract": "brainf-ck-rps-strategy-contract-v1",
+  "diagnostic_fixtures": [
+    "syntax-build",
+    "import-time",
+    "nondeterministic",
+    "protocol-fault",
+    "slow-response",
+    "memory",
+    "process",
+    "filesystem",
+    "premature-output"
+  ],
+  "dialect": {
+    "cells": "8-bit unsigned wrapping",
+    "commands": "><+-.,[]; every other ASCII character is a comment",
+    "eof": "requesting input beyond the encoded Turn record is an execution fault",
+    "implementation": "catalog-brainf-ck-interpreter-v1",
+    "loops": "standard bracket loops",
+    "tape": "30,000 cells, fixed, zero-initialized, pointer starts at cell 0 and does not wrap",
+    "version": "brainf-ck-rps-v1"
+  },
+  "execution_limits": {
+    "max_output_bytes_per_turn": 1,
+    "max_source_bytes": 65536,
+    "max_steps_per_turn": 1000000,
+    "max_tape_cells": 30000,
+    "max_time_ms_per_turn": 50
+  },
+  "fixture_sources": {
+    "filesystem": ",[-]++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
+    "import-time": "+[],,[-]++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
+    "memory": ",<.",
+    "nondeterministic": ",.",
+    "premature-output": ".,,[-]++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
+    "process": ",[-]++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
+    "protocol-fault": ",[-]++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
+    "slow-response": ",+[].",
+    "syntax-build": ",[."
+  },
+  "input_encoding": {
+    "histories": "ASCII R, P, or S bytes",
+    "layout": "seeded move byte; opponent last move or R; turn-modulo move; 8-byte seed; 8-byte turn; 2-byte own-history length; own history; 2-byte opponent-history length; opponent history",
+    "lengths": "2-byte little-endian unsigned",
+    "seed": "8-byte little-endian unsigned",
+    "seeded_move": "ASCII R, P, or S selected by (seed + turn) modulo 3",
+    "turn": "8-byte little-endian unsigned"
+  },
+  "move_output": "exactly one ASCII R, P, or S byte",
+  "practice_artifacts": {
+    "copycat": ">,.",
+    "fixed-move": ",[-]++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
+    "protocol-test": ">>,.",
+    "random": ",."
+  },
+  "seed_adapter": {
+    "algorithm": "encode the complete unsigned 64-bit RPS_SEED little-endian and expose ASCII R/P/S at (seed + turn) modulo 3",
+    "golden_vectors": [
+      {
+        "seed": "0",
+        "little_endian_hex": "0000000000000000",
+        "first_move": "R"
+      },
+      {
+        "seed": "1",
+        "little_endian_hex": "0100000000000000",
+        "first_move": "P"
+      },
+      {
+        "seed": "9223372036854775807",
+        "little_endian_hex": "ffffffffffffff7f",
+        "first_move": "P"
+      },
+      {
+        "seed": "18446744073709551615",
+        "little_endian_hex": "ffffffffffffffff",
+        "first_move": "R"
+      }
+    ],
+    "system_randomness": false,
+    "version": "brainf-ck-seed-input-adapter-v1"
+  },
+  "source_path": "strategy.bf",
+  "suite_version": "brainf-ck-artifact-conformance-v1",
+  "syntax_diagnostic": "unmatched",
+  "syntax_stage": "source-validation"
+}

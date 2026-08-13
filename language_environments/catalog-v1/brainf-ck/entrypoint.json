@@ -1,0 +1,4 @@
+{
+  "argv": ["/usr/local/bin/python3", "-I", "/opt/rps/wrapper.py"],
+  "version": "brainf-ck-entrypoint-v1"
+}

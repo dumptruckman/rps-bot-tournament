@@ -1,0 +1,34 @@
+{
+  "selection": {
+    "policy": "catalog-owned-immutable-implementation-with-pinned-execution-runtime",
+    "dialect": "brainf-ck-rps-v1",
+    "implementation_version": "catalog-brainf-ck-interpreter-v1",
+    "python_version": "3.14.6",
+    "rationale": "The catalog-owned interpreter makes the selected dialect and its bounds immutable; Python 3.14.6 is the pinned runtime on both supported platforms.",
+    "selected_on": "2026-08-13",
+    "upstream_release": "https://www.python.org/downloads/release/python-3146/"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {
+        "image": "docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4",
+        "version": "linux-amd64-python-3.14.6-brainf-ck-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4",
+        "version": "linux-amd64-python-3.14.6-brainf-ck-execution-runtime-v1"
+      }
+    },
+    "linux/arm64": {
+      "build_toolchain": {
+        "image": "docker.io/library/python@sha256:1609c3e634a6ad5b4759f67e34c246640d41858fffde69876245fd26afd632b7",
+        "version": "linux-arm64-python-3.14.6-brainf-ck-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/python@sha256:1609c3e634a6ad5b4759f67e34c246640d41858fffde69876245fd26afd632b7",
+        "version": "linux-arm64-python-3.14.6-brainf-ck-execution-runtime-v1"
+      }
+    }
+  },
+  "version": "brainf-ck-runtime-v1"
+}

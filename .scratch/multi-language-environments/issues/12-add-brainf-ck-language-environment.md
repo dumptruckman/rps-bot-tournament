@@ -1,4 +1,4 @@
-# Add and publish the Brainfuck Language Environment
+# Add and publish the Brainf-ck Language Environment
 
 Status: ready-for-agent
 
@@ -10,22 +10,22 @@ Blocked by: 03
 
 ## What to build
 
-Deliver a production Brainfuck Language Environment and immutable Catalog
+Deliver a production Brainf-ck Language Environment and immutable Catalog
 Release with behavior equivalent to the other required languages across both
 supported platforms.
 
 ## Acceptance criteria
 
-- [ ] The environment documents one stable Brainfuck dialect and selects a
+- [ ] The environment documents one stable Brainf-ck dialect and selects a
   maintained implementation available when work begins, pinning its exact
   Linux/AMD64 and Linux/ARM64 identities; a catalog-owned implementation is
   versioned and identified as an immutable catalog asset instead.
-- [ ] The Brainfuck implementation and every required build or execution input
+- [ ] The Brainf-ck implementation and every required build or execution input
   are available networklessly without resolving a mutable dependency source.
 - [ ] The Team Source schema, validation or build recipe, fixed entrypoint,
   wrapper, readiness contract, dialect, tape and cell semantics, and dependency
   policy are complete and organizer-owned.
-- [ ] The Brainfuck strategy contract defines the exact encoding of opponent
+- [ ] The Brainf-ck strategy contract defines the exact encoding of opponent
   history and the 64-bit Bot-visible Seed, the valid move output, and
   deterministic behavior without ambient randomness; published golden vectors
   cover the Seed Adapter and encoding.
@@ -37,9 +37,9 @@ supported platforms.
 - [ ] Linux/AMD64 Advisory Validation and Linux/ARM64 Final Validation pass the
   complete build, protocol, readiness, determinism, isolation, resource,
   lifecycle, and practice-Match contract.
-- [ ] Brainfuck Bot Artifacts can participate in mixed-language Tournament plans
+- [ ] Brainf-ck Bot Artifacts can participate in mixed-language Tournament plans
   and Matches without language-specific Tournament logic.
 - [ ] A new Catalog Release and offline bundle are independently verified and
-  expose immutable Brainfuck compatibility and implementation coordinates.
-- [ ] No test or publication step fetches, imports, or inspects the Brainfuck
+  expose immutable Brainf-ck compatibility and implementation coordinates.
+- [ ] No test or publication step fetches, imports, or inspects the Brainf-ck
   Team Template repository.

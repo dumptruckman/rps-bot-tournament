@@ -1,0 +1,6 @@
+{
+  "channel": "stderr",
+  "marker": "RPS_READY_V1",
+  "timeout_ms": 1000,
+  "version": "wrapper-readiness-v1"
+}

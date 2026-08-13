@@ -87,11 +87,22 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "47ce9003164c1fe9dfb4f1fd7c711e2fd11d45f041de1f5cb37fd7fad06f8c2d",
+            "5cf3fc6de60bbf5da3256fd3987440fe098f99dfcff9450787b1683338d29f69",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
             {
+                "brainf-ck.base_runtime",
+                "brainf-ck.build_toolchain",
+                "brainf-ck.build_target",
+                "brainf-ck.conformance",
+                "brainf-ck.dependency_definition",
+                "brainf-ck.entrypoint",
+                "brainf-ck.platform",
+                "brainf-ck.readiness",
+                "brainf-ck.recipe",
+                "brainf-ck.workflow",
+                "brainf-ck.wrapper",
                 "contract-fixture.base_runtime",
                 "contract-fixture.build_toolchain",
                 "contract-fixture.build_target",
@@ -234,6 +245,8 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["certification_suites"],
             {
+                "brainf-ck": "brainf-ck-artifact-conformance-v1@sha256:"
+                "4458ace4b58846542152c1eb334ded52ac102f85f57ad3514db4f32913ad3ecb",
                 "internal-shell": "internal-shell-artifact-conformance-v1@sha256:"
                 "664168210a06c8e77b15e9166e2ee394ad1f0bff05e7d31e8014361110c94f9e",
                 "go": "go-artifact-conformance-v1@sha256:"
@@ -261,7 +274,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             set(manifest["platform_runtimes"]),
             {
-                "clojure", "csharp", "go", "java", "javascript", "kotlin",
+                "brainf-ck", "clojure", "csharp", "go", "java", "javascript", "kotlin",
                 "python", "ruby", "rust", "typescript",
             },
         )
@@ -572,12 +585,13 @@ class CatalogIndependenceProofTests(unittest.TestCase):
         self.assertIn("## Go Team Template build toolchains", notes)
         self.assertIn("## Java Team Template build toolchains", notes)
         self.assertIn("## Kotlin Team Template build toolchains", notes)
+        self.assertIn("## Brainf-ck Team Template build toolchains", notes)
         self.assertIn("## JavaScript Team Template build toolchains", notes)
         self.assertIn("## C# Team Template build toolchains", notes)
         self.assertIn("## Rust Team Template build toolchains", notes)
         self.assertIn("## TypeScript Team Template build toolchains", notes)
         for language in (
-            "csharp", "go", "java", "javascript", "kotlin", "python", "rust", "typescript"
+            "brainf-ck", "csharp", "go", "java", "javascript", "kotlin", "python", "rust", "typescript"
         ):
             for platform in ("linux/amd64", "linux/arm64"):
                 build = manifest["platform_runtimes"][language]["platforms"][platform][
@@ -638,6 +652,7 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 "tests/test_ruby_language_environment.py",
                 "tests/test_typescript_language_environment.py",
                 "tests/test_batch_plan_cli.py",
+                "tests/test_brainf_ck_language_environment.py",
                 "tests/test_tournament_plan_cli.py",
                 "tests/test_tournament_cli.py",
                 "tests/test_rehearsal_cli.py",

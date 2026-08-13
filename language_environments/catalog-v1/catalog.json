@@ -1,6 +1,54 @@
 {
   "catalog_version": "rps-language-environment-catalog-v1",
   "environments": {
+    "brainf-ck": {
+      "assets": {
+        "base_runtime": {"path": "brainf-ck/runtimes.json", "sha256": "sha256:6514ce66b2f4116f2e4205c7cf4bd98b2048d61ce0bcf9b8d836cb9565824074", "version": "brainf-ck-runtime-v1"},
+        "build_toolchain": {"path": "brainf-ck/runtimes.json", "sha256": "sha256:6514ce66b2f4116f2e4205c7cf4bd98b2048d61ce0bcf9b8d836cb9565824074", "version": "brainf-ck-build-toolchain-v1"},
+        "build_target": {"path": "brainf-ck/Dockerfile", "sha256": "sha256:2209b28c56aa94142c14d7a6f84a7c47bc05b4d8a51043ea2dbbae176b291224", "version": "brainf-ck-build-target-v1"},
+        "conformance": {"path": "brainf-ck/conformance.json", "sha256": "sha256:4458ace4b58846542152c1eb334ded52ac102f85f57ad3514db4f32913ad3ecb", "version": "brainf-ck-conformance-v1"},
+        "dependency_definition": {"path": "brainf-ck/interpreter.py", "sha256": "sha256:86d8652f905b9836171b74ebd0be063df740b457d5d343f27af35312cb9d0432", "version": "catalog-brainf-ck-interpreter-v1"},
+        "entrypoint": {"path": "brainf-ck/entrypoint.json", "sha256": "sha256:f27199a23c5f64008963fe3edb85e99c80f471ffb3f3020580324fff653bee54", "version": "brainf-ck-entrypoint-v1"},
+        "platform": {"path": "brainf-ck/runtimes.json", "sha256": "sha256:6514ce66b2f4116f2e4205c7cf4bd98b2048d61ce0bcf9b8d836cb9565824074", "version": "brainf-ck-oci-platforms-v1"},
+        "readiness": {"path": "brainf-ck/readiness.json", "sha256": "sha256:35a0c73a1d3f529f1b6621a526e5fd0de4ab300adab7383c29728ad808ce0941", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "brainf-ck/Dockerfile", "sha256": "sha256:2209b28c56aa94142c14d7a6f84a7c47bc05b4d8a51043ea2dbbae176b291224", "version": "brainf-ck-build-recipe-v1"},
+        "workflow": {"path": "brainf-ck/workflow.yml", "sha256": "sha256:29c48e9cb48c91b164657fd390dbc3c20ddc5e38c05a0237890ada18b01efb0f", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "brainf-ck/wrapper.py", "sha256": "sha256:18cfa96f865513f35f8e938f5507f7f3dcd9aae301adfe0289ced643f5f15abc", "version": "brainf-ck-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "brainf-ck-language-environment-v1",
+      "language": "brainf-ck",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "strategy.bf program",
+        "signature": "encoded Turn record on input -> exactly one ASCII R, P, or S byte",
+        "static_validation": "brainf-ck-strategy-contract-v1",
+        "version": "brainf-ck-rps-strategy-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": ["strategy.bf"],
+        "forbidden_paths": [
+          ".git",
+          ".github",
+          ".hg",
+          ".gitlab-ci.yml",
+          ".svn",
+          "Dockerfile",
+          "Justfile",
+          "Makefile",
+          "compose.yml",
+          "docker-compose.yml",
+          "entrypoint.sh",
+          "interpreter.py",
+          "wrapper.py"
+        ],
+        "max_file_bytes": 65536,
+        "max_file_count": 1,
+        "max_total_bytes": 65536,
+        "required_paths": ["strategy.bf"],
+        "version": "brainf-ck-source-schema-v1"
+      }
+    },
     "contract-fixture": {
       "assets": {
         "base_runtime": {"path": "contract-fixture/assets.json", "sha256": "sha256:2c01a7c87b1ab97368b809454b91b5051c80a40a4eb63bd3dd35ab321397c001", "version": "contract-runtime-v1"},

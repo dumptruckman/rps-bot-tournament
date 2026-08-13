@@ -8,7 +8,7 @@ Implementation status: not started
 
 Extend the Runner-owned Language Environment Catalog from one production Python
 environment to the initial Tournament language set: Python, Go, Java,
-TypeScript, C#, Ruby, Clojure, JavaScript, Kotlin, Brainfuck, and optional Rust.
+TypeScript, C#, Ruby, Clojure, JavaScript, Kotlin, Brainf-ck, and optional Rust.
 
 Each production Language Environment must own the complete source-validation,
 build, wrapper, Seed Adapter, readiness, entrypoint, runtime, and conformance
@@ -25,7 +25,7 @@ an LTS designation, select the latest upstream-supported stable release.
 TypeScript selects the latest supported Node.js LTS plus an exactly pinned,
 compatible stable TypeScript compiler. JavaScript selects the latest supported
 Node.js LTS. Kotlin selects the latest stable Kotlin compiler plus a compatible
-upstream-supported Java LTS. Brainfuck selects and documents one stable dialect
+upstream-supported Java LTS. Brainf-ck selects and documents one stable dialect
 and a maintained implementation, then pins the implementation and its execution
 runtime exactly; a catalog-owned implementation is versioned as an immutable
 catalog asset instead.
@@ -46,7 +46,7 @@ authority into that repository.
 2. Apply the runtime policy to Python and publish the first catalog contract
    consumable by native-or-Docker Team Template checks.
 3. Add and publish Go as the first new production Language Environment.
-4. Add Java, TypeScript, C#, Ruby, Clojure, JavaScript, Kotlin, and Brainfuck
+4. Add Java, TypeScript, C#, Ruby, Clojure, JavaScript, Kotlin, and Brainf-ck
    after the Go tracer bullet proves the seam.
 5. Add Rust optionally against the same production acceptance bar.
 

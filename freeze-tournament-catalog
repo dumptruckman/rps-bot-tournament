@@ -37,6 +37,7 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_ruby_language_environment.py",
     "tests/test_typescript_language_environment.py",
     "tests/test_batch_plan_cli.py",
+    "tests/test_brainf_ck_language_environment.py",
     "tests/test_tournament_plan_cli.py",
     "tests/test_tournament_cli.py",
     "tests/test_rehearsal_cli.py",
@@ -131,6 +132,7 @@ def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
 
 def _language_display_name(language: str) -> str:
     names = {
+        "brainf-ck": "Brainf-ck",
         "csharp": "C#",
         "javascript": "JavaScript",
         "typescript": "TypeScript",
@@ -283,6 +285,61 @@ def _verify_stable_runtime_policy(
 
 def _verify_python_runtime_policy(catalog: Any) -> None:
     _verify_stable_runtime_policy(catalog, "python", "python_version")
+
+
+def _verify_brainf_ck_release_policy(catalog: Any) -> None:
+    environment = catalog.environment("brainf-ck")
+    try:
+        definition = json.loads(environment.assets["base_runtime"].content)
+        selection = definition["selection"]
+        conformance = json.loads(environment.assets["conformance"].content)
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReleaseError("the Brainf-ck release inputs are incomplete") from error
+    if set(selection) != {
+        "policy",
+        "dialect",
+        "implementation_version",
+        "python_version",
+        "rationale",
+        "selected_on",
+        "upstream_release",
+    } or selection["policy"] != (
+        "catalog-owned-immutable-implementation-with-pinned-execution-runtime"
+    ):
+        raise ReleaseError("the Brainf-ck dialect and implementation selection is incomplete")
+    if selection["implementation_version"] != environment.assets[
+        "dependency_definition"
+    ].version:
+        raise ReleaseError("the Brainf-ck catalog-owned implementation is not pinned")
+    limits = conformance.get("execution_limits")
+    if limits != {
+        "max_output_bytes_per_turn": 1,
+        "max_source_bytes": 65536,
+        "max_steps_per_turn": 1000000,
+        "max_tape_cells": 30000,
+        "max_time_ms_per_turn": 50,
+    }:
+        raise ReleaseError("the Brainf-ck execution limits are incomplete")
+    for platform in ("linux/amd64", "linux/arm64"):
+        try:
+            selected = definition["platforms"][platform]
+        except (KeyError, TypeError) as error:
+            raise ReleaseError("the Brainf-ck runtime is missing " + platform) from error
+        if set(selected) != {"build_toolchain", "execution_runtime"}:
+            raise ReleaseError("the Brainf-ck runtime coordinates are incomplete")
+        for role in ("build_toolchain", "execution_runtime"):
+            coordinate = selected[role]
+            if not all(
+                value in coordinate["version"]
+                for value in (selection["python_version"], "brainf-ck")
+            ):
+                raise ReleaseError("the Brainf-ck runtime coordinate is incomplete")
+    _verify_networkless_recipe_policy(
+        catalog,
+        "brainf-ck",
+        "Brainf-ck",
+        ("curl ", "wget ", "pip install", "apt-get", "apk add"),
+    )
 
 
 def _verify_go_runtime_policy(catalog: Any) -> None:
@@ -524,6 +581,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_python_dependency_policy(catalog)
     _verify_python_recipe_policy(catalog)
     _verify_python_runtime_policy(catalog)
+    _verify_brainf_ck_release_policy(catalog)
     _verify_go_runtime_policy(catalog)
     _verify_rust_release_policy(catalog)
     _verify_java_runtime_policy(catalog)

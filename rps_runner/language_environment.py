@@ -625,6 +625,49 @@ def _validate_no_static_contract(_files: Sequence[SourceFile]) -> None:
     return
 
 
+def _validate_brainf_ck_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "strategy.bf")
+    try:
+        source = source_file.content.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise SourceValidationError(
+            source_file.path,
+            "brainf-ck-strategy-contract-v1",
+            "Brainf-ck Team Source must be ASCII text",
+        ) from error
+    commands = "".join(character for character in source if character in "><+-.,[]")
+    stack = []
+    for index, command in enumerate(commands):
+        if command == "[":
+            stack.append(index)
+        elif command == "]":
+            if not stack:
+                raise SourceValidationError(
+                    source_file.path,
+                    "brainf-ck-strategy-contract-v1",
+                    "program has an unmatched closing bracket",
+                )
+            stack.pop()
+    if stack:
+        raise SourceValidationError(
+            source_file.path,
+            "brainf-ck-strategy-contract-v1",
+            "program has an unmatched opening bracket",
+        )
+    if "," not in commands:
+        raise SourceValidationError(
+            source_file.path,
+            "brainf-ck-strategy-contract-v1",
+            "program must contain an input command",
+        )
+    if "." not in commands:
+        raise SourceValidationError(
+            source_file.path,
+            "brainf-ck-strategy-contract-v1",
+            "program must contain an output command",
+        )
+
+
 def _validate_go_strategy_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.go")
     go_sources = []
@@ -1528,6 +1571,7 @@ def _contains_module_named_expression(node: ast.AST, name: str) -> bool:
 
 
 _PARTICIPANT_CONTRACT_VALIDATORS = {
+    "brainf-ck-strategy-contract-v1": _validate_brainf_ck_strategy_contract,
     "clojure-strategy-contract-v1": _validate_clojure_strategy_contract,
     "csharp-strategy-contract-v1": _validate_csharp_strategy_contract,
     "go-strategy-contract-v1": _validate_go_strategy_contract,
