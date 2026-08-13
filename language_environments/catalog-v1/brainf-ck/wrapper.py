@@ -19,6 +19,8 @@ from interpreter import (
 READY_MARKER = "RPS_READY_V1"
 MOVES = "RPS"
 MAX_SEED = (1 << 64) - 1
+LCG_MULTIPLIER = 6364136223846793005
+LCG_INCREMENT = 1442695040888963407
 
 
 def fail(message: str) -> None:
@@ -33,15 +35,24 @@ def read_history(line: str) -> str:
     return value
 
 
+def seeded_move(seed: int, turn: int) -> str:
+    """Return one move from the Brainf-ck deterministic 64-bit LCG stream."""
+
+    state = seed
+    for _ in range(turn + 1):
+        state = (state * LCG_MULTIPLIER + LCG_INCREMENT) & MAX_SEED
+    return MOVES[state % len(MOVES)]
+
+
 def encode_turn(seed: int, turn: int, own_history: str, opponent_history: str) -> bytes:
     """Encode the deterministic Brainf-ck RPS input record."""
 
-    seeded_move = MOVES[(seed + turn) % len(MOVES)]
+    random_move = seeded_move(seed, turn)
     opponent_move = opponent_history[-1] if opponent_history else "R"
     turn_move = MOVES[turn % len(MOVES)]
     return b"".join(
         (
-            seeded_move.encode("ascii"),
+            random_move.encode("ascii"),
             opponent_move.encode("ascii"),
             turn_move.encode("ascii"),
             seed.to_bytes(8, "little"),

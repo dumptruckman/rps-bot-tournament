@@ -6,14 +6,14 @@
         "base_runtime": {"path": "brainf-ck/runtimes.json", "sha256": "sha256:6514ce66b2f4116f2e4205c7cf4bd98b2048d61ce0bcf9b8d836cb9565824074", "version": "brainf-ck-runtime-v1"},
         "build_toolchain": {"path": "brainf-ck/runtimes.json", "sha256": "sha256:6514ce66b2f4116f2e4205c7cf4bd98b2048d61ce0bcf9b8d836cb9565824074", "version": "brainf-ck-build-toolchain-v1"},
         "build_target": {"path": "brainf-ck/Dockerfile", "sha256": "sha256:2209b28c56aa94142c14d7a6f84a7c47bc05b4d8a51043ea2dbbae176b291224", "version": "brainf-ck-build-target-v1"},
-        "conformance": {"path": "brainf-ck/conformance.json", "sha256": "sha256:4458ace4b58846542152c1eb334ded52ac102f85f57ad3514db4f32913ad3ecb", "version": "brainf-ck-conformance-v1"},
+        "conformance": {"path": "brainf-ck/conformance.json", "sha256": "sha256:5a46b3e6010736ddc36e91d198d40a551c1f593d0408d684bd268155b8aa0074", "version": "brainf-ck-conformance-v1"},
         "dependency_definition": {"path": "brainf-ck/interpreter.py", "sha256": "sha256:86d8652f905b9836171b74ebd0be063df740b457d5d343f27af35312cb9d0432", "version": "catalog-brainf-ck-interpreter-v1"},
         "entrypoint": {"path": "brainf-ck/entrypoint.json", "sha256": "sha256:f27199a23c5f64008963fe3edb85e99c80f471ffb3f3020580324fff653bee54", "version": "brainf-ck-entrypoint-v1"},
         "platform": {"path": "brainf-ck/runtimes.json", "sha256": "sha256:6514ce66b2f4116f2e4205c7cf4bd98b2048d61ce0bcf9b8d836cb9565824074", "version": "brainf-ck-oci-platforms-v1"},
         "readiness": {"path": "brainf-ck/readiness.json", "sha256": "sha256:35a0c73a1d3f529f1b6621a526e5fd0de4ab300adab7383c29728ad808ce0941", "version": "wrapper-readiness-v1"},
         "recipe": {"path": "brainf-ck/Dockerfile", "sha256": "sha256:2209b28c56aa94142c14d7a6f84a7c47bc05b4d8a51043ea2dbbae176b291224", "version": "brainf-ck-build-recipe-v1"},
         "workflow": {"path": "brainf-ck/workflow.yml", "sha256": "sha256:29c48e9cb48c91b164657fd390dbc3c20ddc5e38c05a0237890ada18b01efb0f", "version": "source-validation-workflow-v1"},
-        "wrapper": {"path": "brainf-ck/wrapper.py", "sha256": "sha256:18cfa96f865513f35f8e938f5507f7f3dcd9aae301adfe0289ced643f5f15abc", "version": "brainf-ck-wrapper-v1"}
+        "wrapper": {"path": "brainf-ck/wrapper.py", "sha256": "sha256:8c705e585590aab28f6d5e33c1248035a5604f495ac4c435e2e8d731ad38f5da", "version": "brainf-ck-wrapper-v1"}
       },
       "contract_only": false,
       "descriptor_version": "brainf-ck-language-environment-v1",

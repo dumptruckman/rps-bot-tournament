@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "5cf3fc6de60bbf5da3256fd3987440fe098f99dfcff9450787b1683338d29f69",
+            "0f6af8f7c31924180c37c4d0cf2c142b171ee3c7786ef86f7aec826a1b6180be",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -246,7 +246,7 @@ class CatalogReleaseTests(unittest.TestCase):
             manifest["certification_suites"],
             {
                 "brainf-ck": "brainf-ck-artifact-conformance-v1@sha256:"
-                "4458ace4b58846542152c1eb334ded52ac102f85f57ad3514db4f32913ad3ecb",
+                "5a46b3e6010736ddc36e91d198d40a551c1f593d0408d684bd268155b8aa0074",
                 "internal-shell": "internal-shell-artifact-conformance-v1@sha256:"
                 "664168210a06c8e77b15e9166e2ee394ad1f0bff05e7d31e8014361110c94f9e",
                 "go": "go-artifact-conformance-v1@sha256:"

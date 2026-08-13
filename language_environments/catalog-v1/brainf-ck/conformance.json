@@ -54,11 +54,20 @@
     "syntax-build": ",[."
   },
   "input_encoding": {
+    "golden_vectors": [
+      {
+        "encoded_hex": "535353010000000000000002000000000000000200525002005053",
+        "opponent_history": "PS",
+        "own_history": "RP",
+        "seed": "1",
+        "turn": 2
+      }
+    ],
     "histories": "ASCII R, P, or S bytes",
     "layout": "seeded move byte; opponent last move or R; turn-modulo move; 8-byte seed; 8-byte turn; 2-byte own-history length; own history; 2-byte opponent-history length; opponent history",
     "lengths": "2-byte little-endian unsigned",
     "seed": "8-byte little-endian unsigned",
-    "seeded_move": "ASCII R, P, or S selected by (seed + turn) modulo 3",
+    "seeded_move": "ASCII R, P, or S selected from the Brainf-ck deterministic 64-bit LCG stream",
     "turn": "8-byte little-endian unsigned"
   },
   "move_output": "exactly one ASCII R, P, or S byte",
@@ -69,12 +78,12 @@
     "random": ",."
   },
   "seed_adapter": {
-    "algorithm": "encode the complete unsigned 64-bit RPS_SEED little-endian and expose ASCII R/P/S at (seed + turn) modulo 3",
+    "algorithm": "advance state = state * 6364136223846793005 + 1442695040888963407 modulo 2^64 once per turn from the unsigned 64-bit seed, then expose ASCII R/P/S at state modulo 3",
     "golden_vectors": [
       {
         "seed": "0",
         "little_endian_hex": "0000000000000000",
-        "first_move": "R"
+        "first_move": "P"
       },
       {
         "seed": "1",
@@ -84,12 +93,12 @@
       {
         "seed": "9223372036854775807",
         "little_endian_hex": "ffffffffffffff7f",
-        "first_move": "P"
+        "first_move": "R"
       },
       {
         "seed": "18446744073709551615",
         "little_endian_hex": "ffffffffffffffff",
-        "first_move": "R"
+        "first_move": "S"
       }
     ],
     "system_randomness": false,

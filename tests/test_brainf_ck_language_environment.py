@@ -126,7 +126,7 @@ class BrainfCkLanguageEnvironmentTests(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.splitlines(), ["P", "S", "R"])
+        self.assertEqual(completed.stdout.splitlines(), ["P", "S", "S"])
         self.assertIn("RPS_READY_V1", completed.stderr)
 
     def test_contract_documents_encoding_and_golden_vectors(self) -> None:
@@ -136,13 +136,30 @@ class BrainfCkLanguageEnvironmentTests(unittest.TestCase):
         self.assertEqual(conformance["input_encoding"]["histories"], "ASCII R, P, or S bytes")
         self.assertEqual(conformance["move_output"], "exactly one ASCII R, P, or S byte")
         self.assertEqual(
-            conformance["seed_adapter"]["golden_vectors"],
+            [vector["first_move"] for vector in conformance["seed_adapter"]["golden_vectors"]],
+            ["P", "P", "R", "S"],
+        )
+        self.assertEqual(
+            conformance["input_encoding"]["golden_vectors"],
             [
-                {"seed": "0", "little_endian_hex": "0000000000000000", "first_move": "R"},
-                {"seed": "1", "little_endian_hex": "0100000000000000", "first_move": "P"},
-                {"seed": "9223372036854775807", "little_endian_hex": "ffffffffffffff7f", "first_move": "P"},
-                {"seed": "18446744073709551615", "little_endian_hex": "ffffffffffffffff", "first_move": "R"},
+                {
+                    "seed": "1",
+                    "turn": 2,
+                    "own_history": "RP",
+                    "opponent_history": "PS",
+                    "encoded_hex": "535353010000000000000002000000000000000200525002005053",
+                }
             ],
+        )
+
+        wrapper_path = PROJECT_ROOT / self.environment.assets["wrapper"].path
+        spec = importlib.util.spec_from_file_location("brainf_ck_wrapper", wrapper_path)
+        assert spec is not None and spec.loader is not None
+        wrapper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wrapper)
+        self.assertEqual(
+            wrapper.encode_turn(1, 2, "RP", "PS").hex(),
+            conformance["input_encoding"]["golden_vectors"][0]["encoded_hex"],
         )
 
     def test_networkless_recipe_uses_the_fixed_catalog_interpreter(self) -> None:
