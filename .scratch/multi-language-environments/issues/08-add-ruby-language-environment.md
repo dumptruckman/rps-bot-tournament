@@ -39,8 +39,8 @@ platforms.
 
 ## Answer
 
-Ruby 4.0.6 is published in the independently verified `catalog-v13` release at
-Runner commit `9952cf795b3f5ffb26b9d3de9c886c5669eb6464`. The catalog pins exact
+Ruby 4.0.6 is published in the independently verified `catalog-v14` release at
+Runner commit `0b7f84a1aa3bf60efa5a5e0026d68b7b7337cb20`. The catalog pins exact
 official Linux/AMD64 and Linux/ARM64 image manifests and owns the complete
 standard-library-only, networkless source, wrapper, Seed Adapter, readiness,
 entrypoint, dependency, and conformance contract.
@@ -49,4 +49,4 @@ The focused suite passed Advisory Validation on Linux/AMD64 and Final
 Validation on Linux/ARM64. The isolated release proof passed all 156 organizer
 workflow tests and confirmed the Runner has no dependency on the Team Template
 repository. The offline bundle identity is
-`rps-runner-offline-bundle-v1@sha256:2e92aba7038fed973008f025e1213e3f0d880628216687aafd9a8b8c5d82f3e7`.
+`rps-runner-offline-bundle-v1@sha256:4ac566c60f7dbdbba162809a4a411eda97031192f668d508ea76edee722009cb`.
