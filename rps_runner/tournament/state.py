@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
+from rps_runner.team_role import team_role_from_mapping
+
 from .immutable import FrozenJsonDict, freeze_json
 from .competition import (
     MatchOutcome,
@@ -964,7 +966,10 @@ def build_playoff_bracket_record(
         raise TournamentStateError(
             "Manifest contains an invalid Tournament Seed"
         ) from error
-    bracket = create_playoff_bracket_from_ranked_standings(standings)
+    bracket = create_playoff_bracket_from_ranked_standings(
+        standings,
+        eligible_team_ids=_playoff_eligible_team_ids(manifest),
+    )
     seeds = [
         {"seed": seeded.seed, "team_id": seeded.team_id}
         for seeded in bracket.seeds
@@ -1425,6 +1430,29 @@ def _team_ids(manifest: Mapping[str, Any]) -> tuple[str, ...]:
     if len(team_ids) != len(set(team_ids)):
         raise TournamentStateError("Manifest contains a duplicate Team ID")
     return tuple(team_ids)
+
+
+def _playoff_eligible_team_ids(
+    manifest: Mapping[str, Any],
+) -> tuple[str, ...]:
+    roster = manifest.get("roster")
+    if not isinstance(roster, (list, tuple)):
+        raise TournamentStateError("Manifest has no canonical roster")
+    eligible: list[str] = []
+    for ordinal, team in enumerate(roster):
+        if not isinstance(team, Mapping) or not isinstance(
+            team.get("team_id"), str
+        ):
+            raise TournamentStateError("Manifest contains an invalid Team")
+        try:
+            role = team_role_from_mapping(
+                team, f"Manifest roster[{ordinal}]"
+            )
+        except ValueError as error:
+            raise TournamentStateError(str(error)) from error
+        if role.playoff_eligible:
+            eligible.append(team["team_id"])
+    return tuple(eligible)
 
 
 def _tie_break_keys(

@@ -84,6 +84,7 @@ not.
 | Tournament lifecycle | Projection `status` | Map the supplied enum to audience language; never infer status from Fixture counts. |
 | Current phase | Projection `phase` | Display Qualifying Phase or Playoff Phase as supplied. |
 | Team Display Name | Projection `teams[].team_id` and `display_name` | Use the Team Display Name and retain Team ID as the stable lookup key. |
+| Team Role | Projection `teams[].role`, when present | Label `challenger` Teams as unable to qualify. Absence means a legacy `competitor`. |
 | Team eligibility | Projection `teams[].eligible` and `status`, when present | Display Disqualification without exposing evidence. Absence means no extra eligibility label, not an inferred `true`. |
 | Standings rank | Position in projection `standings[]` | Preserve array order; never sort or rerank. |
 | Standing Points and tie-break values | Fields in projection `standings[]` | Display the supplied values exactly. Do not recompute from Match history. |

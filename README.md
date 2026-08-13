@@ -441,9 +441,15 @@ before this command:
 {
   "team_id": "red-rockets",
   "display_name": "Red Rockets",
+  "role": "competitor",
   "source_directory": "/local/selected/red-rockets"
 }
 ```
+
+`role` may be `competitor` or `challenger` and defaults to `competitor` when
+omitted. Challenger Teams play and score normally throughout the complete
+qualifying round robin and appear in standings, but the Runner excludes them
+when selecting and seeding the playoff field.
 
 Then build, organizer-final validate, and preserve the selected ARM64 Bot
 Artifacts with an explicit operational concurrency limit:

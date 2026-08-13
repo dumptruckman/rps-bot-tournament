@@ -249,6 +249,64 @@ class BatchPlanCliTests(unittest.TestCase):
             ["team-a", "team-b", "team-c", "team-d"],
         )
 
+    def test_preserves_challenger_roles_and_defaults_competitors(self) -> None:
+        teams = [
+            {
+                "team_id": team_id,
+                "display_name": "Team " + team_id[-1],
+                "source_directory": str(
+                    self.source(team_id, team_id[-1].upper())
+                ),
+                **({"role": "challenger"} if team_id == "team-d" else {}),
+            }
+            for team_id in ("team-a", "team-b", "team-c", "team-d")
+        ]
+
+        code, output = self.run_batch(
+            self.mapping(teams), FakeBatchPipeline(), jobs=2
+        )
+
+        self.assertEqual(code, 0)
+        plan = json.loads((output / "tournament-plan.json").read_text())
+        self.assertEqual(
+            {team["team_id"]: team["role"] for team in plan["teams"]},
+            {
+                "team-a": "competitor",
+                "team-b": "competitor",
+                "team-c": "competitor",
+                "team-d": "challenger",
+            },
+        )
+
+    def test_rejects_an_invalid_team_role(self) -> None:
+        for invalid_role in ("spectator", None):
+            with self.subTest(role=invalid_role):
+                teams = [
+                    {
+                        "team_id": team_id,
+                        "display_name": team_id,
+                        "source_directory": str(
+                            self.source(
+                                team_id + str(invalid_role),
+                                team_id[-1].upper(),
+                            )
+                        ),
+                        **(
+                            {"role": invalid_role}
+                            if team_id == "team-d"
+                            else {}
+                        ),
+                    }
+                    for team_id in ("team-a", "team-b", "team-c", "team-d")
+                ]
+
+                code, output = self.run_batch(
+                    self.mapping(teams), FakeBatchPipeline()
+                )
+
+                self.assertEqual(code, 2)
+                self.assertFalse(output.exists())
+
     def test_reports_failures_without_writing_a_roster_ready_plan(self) -> None:
         teams = [
             {

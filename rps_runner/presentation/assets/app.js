@@ -300,9 +300,12 @@ function renderStandings(tournament, teamNames) {
     const projectedTeam = tournament.teams.find(
       (team) => team.team_id === standing.team_id
     );
-    const teamLabel = projectedTeam !== undefined && projectedTeam.status === "disqualified"
-      ? `${teamName(teamNames, standing.team_id)} — Disqualified`
-      : teamName(teamNames, standing.team_id);
+    let teamLabel = teamName(teamNames, standing.team_id);
+    if (projectedTeam !== undefined && projectedTeam.status === "disqualified") {
+      teamLabel = `${teamLabel} — Disqualified`;
+    } else if (projectedTeam !== undefined && projectedTeam.role === "challenger") {
+      teamLabel = `${teamLabel} — Challenger (cannot qualify)`;
+    }
     const cells = [
       index + 1,
       teamLabel,

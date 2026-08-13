@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from rps_runner.team_role import TeamRole
+
 
 SUPPORTED_PROJECTION_VERSION = 1
 SUPPORTED_REPLAY_VERSION = 1
@@ -18,6 +20,7 @@ _STATUSES = frozenset(
     )
 )
 _PHASES = frozenset(("qualifying", "playoff"))
+_TEAM_ROLES = frozenset(role.value for role in TeamRole)
 _STANDING_FIELDS = (
     "team_id",
     "standing_points",
@@ -76,6 +79,13 @@ def project_live(projection: Mapping[str, Any]) -> dict[str, Any]:
                 team, "display_name", f"teams[{index}]"
             ),
         }
+        if "role" in team:
+            role = _required_string(team, "role", f"teams[{index}]")
+            if role not in _TEAM_ROLES:
+                raise ProjectionContractError(
+                    f"teams[{index}].role must be competitor or challenger"
+                )
+            copied["role"] = role
         if "eligible" in team:
             eligible = team["eligible"]
             if not isinstance(eligible, bool):

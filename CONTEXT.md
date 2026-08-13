@@ -21,14 +21,32 @@ four Teams but adapts when disqualifications leave fewer eligible Teams.
 _Avoid_: Finals, knockout stage, bracket phase
 
 **Tournament Champion**:
-The eligible Team declared the winner of the Playoff Phase, including a sole
-eligible Team or a finalist advanced by Disqualification.
+The playoff-eligible Competitor Team declared the winner of the Playoff Phase,
+including a sole eligible Competitor Team or a finalist advanced by
+Disqualification.
 _Avoid_: Qualifying winner, standings leader
 
 **Team**:
-The competitive identity that owns one Tournament entry, appears in standings,
-and may become Tournament Champion.
+The competitive identity that owns one Tournament entry and appears in
+qualifying standings. Its immutable Team Role determines whether it may enter
+the Playoff Phase and become Tournament Champion.
 _Avoid_: Bot, participant, player, entrant
+
+**Team Role**:
+The immutable `competitor` or `challenger` classification assigned before the
+Tournament is sealed. A missing role in a legacy Tournament means `competitor`.
+_Avoid_: Eligibility status, Disqualification status
+
+**Competitor Team**:
+A Team that competes throughout qualification and is eligible for playoff
+selection unless disqualified.
+_Avoid_: Participant Team, regular Team
+
+**Challenger Team**:
+An organizer-selected Team that competes and is scored normally throughout the
+Qualifying Phase but is never eligible for the Playoff Phase or Tournament
+Champion.
+_Avoid_: Benchmark bot, exhibition Bot Artifact, disqualified Team
 
 **Bot Artifact**:
 The immutable executable entry submitted by a Team for one Tournament. Its exact

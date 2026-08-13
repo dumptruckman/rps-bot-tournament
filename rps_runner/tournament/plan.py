@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 from rps_runner.execution_profile import ExecutionProfile, INITIAL_EXECUTION_PROFILE
 from rps_runner.language_environment import LanguageEnvironmentCatalog
+from rps_runner.team_role import team_role_from_mapping
 
 from .execution_inputs import TournamentExecutionInputs
 from .retained_artifacts import (
@@ -143,17 +144,20 @@ def validate_tournament_plan(
     for ordinal, value in enumerate(team_values):
         location = f"teams[{ordinal}]"
         team = _object(value, location)
+        team_fields = {
+            "team_id",
+            "display_name",
+            "roster_ready",
+            "selected_source",
+            "bot_artifact_manifest",
+            "canonical_artifact_identity",
+            "artifact_store_reference",
+        }
+        if "role" in team:
+            team_fields.add("role")
         _exact_fields(
             team,
-            {
-                "team_id",
-                "display_name",
-                "roster_ready",
-                "selected_source",
-                "bot_artifact_manifest",
-                "canonical_artifact_identity",
-                "artifact_store_reference",
-            },
+            team_fields,
             location,
         )
         if team.get("roster_ready") is not True:
@@ -162,6 +166,7 @@ def validate_tournament_plan(
         display_name = _string(
             team.get("display_name"), location + ".display_name"
         )
+        role = team_role_from_mapping(team, location)
         selected_source = _object(
             team.get("selected_source"), location + ".selected_source"
         )
@@ -210,6 +215,7 @@ def validate_tournament_plan(
                     entrypoint=tuple(manifest["entrypoint"]),
                     canonical_identity=canonical,
                 ),
+                role,
             )
         )
         retained_requirements.append(

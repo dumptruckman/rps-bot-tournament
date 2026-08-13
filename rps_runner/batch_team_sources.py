@@ -9,6 +9,7 @@ import re
 from typing import Any, Mapping, Optional
 
 from rps_runner.batch_repair import CompatibilityRepair
+from rps_runner.team_role import TeamRole, team_role_from_mapping
 
 
 MINIMUM_TEAMS = 4
@@ -48,6 +49,7 @@ class TeamSource:
     display_name: TeamDisplayName
     source_directory: Path
     repair: Optional[CompatibilityRepair] = None
+    role: TeamRole = TeamRole.COMPETITOR
 
 
 def load_team_sources(path: Path) -> tuple[TeamSource, ...]:
@@ -81,6 +83,7 @@ def load_team_sources(path: Path) -> tuple[TeamSource, ...]:
         except ValueError as error:
             raise ValueError(location + ".display_name " + str(error)) from error
         source_directory = _source_directory(value, "source_directory", location)
+        role = team_role_from_mapping(value, location)
 
         repair_value = value.get("repair")
         repair: Optional[CompatibilityRepair] = None
@@ -96,7 +99,9 @@ def load_team_sources(path: Path) -> tuple[TeamSource, ...]:
                     repair_value, "explanation", repair_location
                 ).strip(),
             )
-        teams.append(TeamSource(team_id, display_name, source_directory, repair))
+        teams.append(
+            TeamSource(team_id, display_name, source_directory, repair, role)
+        )
     return tuple(teams)
 
 

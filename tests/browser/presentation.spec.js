@@ -297,6 +297,30 @@ test("shows Match-boundary progress, committed history, and supplied bracket ord
   }
 });
 
+test("labels challengers in qualifying standings as unable to qualify", async ({ page }) => {
+  const presentation = await startPresentation();
+  try {
+    replaceProjection(presentation.directory, projection({
+      teams: [
+        { team_id: "alpha", display_name: "Alpha", role: "challenger" },
+        { team_id: "beta", display_name: "Beta", role: "competitor" },
+        { team_id: "gamma", display_name: "Gamma", role: "competitor" },
+        { team_id: "delta", display_name: "Delta", role: "competitor" },
+      ],
+    }));
+    await page.goto(presentation.url);
+
+    const standings = page.getByRole("table", {
+      name: "Runner-ordered qualifying standings",
+    });
+    await expect(standings).toContainText("Alpha — Challenger (cannot qualify)");
+    await expect(standings).toContainText("Beta");
+    await expect(standings).not.toContainText("Beta — Challenger");
+  } finally {
+    await presentation.stop();
+  }
+});
+
 test("uses safe audience copy while organizer review is pending", async ({ page }) => {
   const presentation = await startPresentation();
   try {

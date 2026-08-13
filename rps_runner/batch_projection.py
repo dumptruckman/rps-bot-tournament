@@ -69,6 +69,7 @@ def project_tournament_plan(
             {
                 "team_id": str(result.team.team_id),
                 "display_name": str(result.team.display_name),
+                "role": result.team.role.value,
                 "roster_ready": True,
                 "selected_source": selected_source,
                 "bot_artifact_manifest": manifest.as_mapping(),

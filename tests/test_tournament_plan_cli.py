@@ -376,6 +376,38 @@ class TournamentPlanCliTests(unittest.TestCase):
         self.assertEqual(load_competition_records(self.directory), [])
         self.assertIsNotNone(load_scoreboard_projection(self.directory))
 
+    def test_plan_seals_challenger_role_and_defaults_omitted_roles(self) -> None:
+        self.plan["teams"][-1]["role"] = "challenger"
+        self.plan_path.write_text(json.dumps(self.plan))
+
+        code = self.run_plan("--create-only")
+
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        manifest = load_manifest(self.directory).manifest
+        self.assertEqual(
+            {team["team_id"]: team["role"] for team in manifest["roster"]},
+            {
+                "team-a": "competitor",
+                "team-b": "competitor",
+                "team-c": "competitor",
+                "team-d": "challenger",
+            },
+        )
+
+    def test_plan_rejects_an_invalid_team_role(self) -> None:
+        for invalid_role in ("spectator", None):
+            with self.subTest(role=invalid_role):
+                self.plan["teams"][-1]["role"] = invalid_role
+                self.plan_path.write_text(json.dumps(self.plan))
+
+                code = self.run_plan("--create-only")
+
+                self.assertEqual(code, 2)
+                self.assertIn("role", self.stderr.getvalue())
+                self.assertFalse(self.directory.exists())
+                self.stderr.seek(0)
+                self.stderr.truncate()
+
     def test_all_qualification_pauses_before_the_first_playoff_match(self) -> None:
         code = self.run_plan("--all-qualification")
 

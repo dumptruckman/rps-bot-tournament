@@ -9,6 +9,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Optional
 
+from rps_runner.team_role import TeamRole
 from rps_runner.tournament.competition import Phase
 from rps_runner.tournament.runner import (
     ArtifactDigestVerificationError,
@@ -22,6 +23,7 @@ from rps_runner.tournament.runner import (
     TournamentConfig,
     TournamentExecutionBoundary,
     TournamentRunner,
+    tournament_manifest_incompatibilities,
 )
 from rps_runner.tournament.state import (
     TournamentStateError,
@@ -329,6 +331,7 @@ class TournamentCreationTests(unittest.TestCase):
             {
                 "team_id": "alpha",
                 "display_name": "Alpha Team",
+                "role": "competitor",
                 "bot_artifact": {
                     "artifact_digest": "a" * 64,
                     "language_id": "python",
@@ -362,10 +365,26 @@ class TournamentCreationTests(unittest.TestCase):
                 "status": "paused",
                 "phase": "qualifying",
                 "teams": [
-                    {"team_id": "alpha", "display_name": "Alpha Team"},
-                    {"team_id": "beta", "display_name": "Beta"},
-                    {"team_id": "delta", "display_name": "Delta!"},
-                    {"team_id": "gamma", "display_name": "Gamma"},
+                    {
+                        "team_id": "alpha",
+                        "display_name": "Alpha Team",
+                        "role": "competitor",
+                    },
+                    {
+                        "team_id": "beta",
+                        "display_name": "Beta",
+                        "role": "competitor",
+                    },
+                    {
+                        "team_id": "delta",
+                        "display_name": "Delta!",
+                        "role": "competitor",
+                    },
+                    {
+                        "team_id": "gamma",
+                        "display_name": "Gamma",
+                        "role": "competitor",
+                    },
                 ],
                 "fixtures": [
                     {
@@ -663,6 +682,59 @@ class TournamentContinuousModeTests(unittest.TestCase):
             all(
                 fixture["status"] == "complete"
                 for fixture in projection["bracket"]["fixtures"]
+            )
+        )
+
+    def test_challenger_competes_in_qualification_but_not_playoffs(self) -> None:
+        roster = tuple(
+            Team(
+                team.team_id,
+                team.display_name,
+                team.bot_artifact,
+                TeamRole.CHALLENGER
+                if team.team_id == "alpha"
+                else TeamRole.COMPETITOR,
+            )
+            for team in four_team_roster()
+        )
+        requests: list[MatchExecutionRequest] = []
+
+        def execute(request: MatchExecutionRequest) -> MatchExecutionResult:
+            requests.append(request)
+            return executor_result(
+                request,
+                winner_team_id=min(request.team_a_id, request.team_b_id),
+            )
+
+        runner = TournamentRunner.create(
+            self.directory,
+            tournament_id="challenger-cup",
+            tournament_seed=123456789,
+            roster=roster,
+            config=TournamentConfig(execution_mode="continuous"),
+            match_executor=execute,
+        )
+
+        runner.run_continuously()
+
+        projection = load_scoreboard_projection(self.directory)
+        self.assertEqual(projection["standings"][0]["team_id"], "alpha")
+        self.assertNotIn(
+            "alpha",
+            [seed["team_id"] for seed in projection["bracket"]["seeds"]],
+        )
+        self.assertTrue(
+            any(
+                request.fixture_id.startswith("qualifying-")
+                and "alpha" in (request.team_a_id, request.team_b_id)
+                for request in requests
+            )
+        )
+        self.assertFalse(
+            any(
+                request.fixture_id.startswith("playoff-")
+                and "alpha" in (request.team_a_id, request.team_b_id)
+                for request in requests
             )
         )
 
@@ -4059,6 +4131,20 @@ class TournamentResumeTests(unittest.TestCase):
             self.assertEqual(load_scoreboard_projection(self.directory), expected)
             self.assertEqual(resumed.status, "aborted")
             self.assertIsNone(resumed.play_next_match())
+
+    def test_legacy_roster_without_roles_remains_compatible(self) -> None:
+        legacy_manifest = thaw_json(load_manifest(self.directory).manifest)
+        for team in legacy_manifest["roster"]:
+            team.pop("role")
+
+        incompatibilities = tournament_manifest_incompatibilities(
+            legacy_manifest,
+            tournament_id="resume-verification-cup",
+            tournament_seed=123456789,
+            roster=four_team_roster(),
+        )
+
+        self.assertEqual(incompatibilities, ())
 
     def test_open_rejects_incompatible_manifest_versions(self) -> None:
         manifest = load_manifest(self.directory).manifest

@@ -13,6 +13,7 @@ from typing import Any, Optional, Union
 
 from rps_runner.engine import CONTAINER_ISOLATION_PROFILE_VERSION
 from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
+from rps_runner.team_role import TeamRole
 
 from .immutable import freeze_json
 from .competition import (
@@ -190,6 +191,7 @@ class Team:
     team_id: str
     display_name: str
     bot_artifact: BotArtifactManifest
+    role: TeamRole = TeamRole.COMPETITOR
 
 
 @dataclass(frozen=True)
@@ -1399,14 +1401,29 @@ def tournament_manifest_incompatibilities(
         sorted(
             field
             for field in set(sealed_manifest) | set(expected_payload)
-            if (
-                sealed_manifest.get(field, 1)
-                if field == "continuous_parallelism"
-                else sealed_manifest.get(field)
-            )
-            != expected_payload.get(field)
+            if _comparable_manifest_field(sealed_manifest, field)
+            != _comparable_manifest_field(expected_payload, field)
         )
     )
+
+
+def _comparable_manifest_field(
+    manifest: Mapping[str, Any], field: str
+) -> object:
+    if field == "continuous_parallelism":
+        return manifest.get(field, 1)
+    value = manifest.get(field)
+    if field != "roster" or not isinstance(value, (list, tuple)):
+        return value
+    return [
+        {
+            **team,
+            "role": team.get("role", TeamRole.COMPETITOR.value),
+        }
+        if isinstance(team, Mapping)
+        else team
+        for team in value
+    ]
 
 
 def _build_manifest_payload(
@@ -1496,6 +1513,8 @@ def _validate_creation_inputs(
             raise ValueError(f"Malformed Team ID: {team.team_id!r}")
         if not isinstance(team.display_name, str) or not team.display_name.strip():
             raise ValueError("Team Display Name must be a non-empty string")
+        if not isinstance(team.role, TeamRole):
+            raise ValueError("Team role must be competitor or challenger")
         _validate_artifact(team.bot_artifact)
         if (
             config.container_identity is not None
@@ -1655,6 +1674,7 @@ def _serialize_team(team: Team) -> dict[str, Any]:
     return {
         "team_id": team.team_id,
         "display_name": team.display_name,
+        "role": team.role.value,
         "bot_artifact": (
             dict(artifact.canonical_identity)
             if artifact.canonical_identity is not None
@@ -1732,6 +1752,7 @@ def _initial_projection(manifest: dict[str, Any]) -> dict[str, Any]:
             {
                 "team_id": team["team_id"],
                 "display_name": team["display_name"],
+                "role": team.get("role", TeamRole.COMPETITOR.value),
             }
             for team in manifest["roster"]
         ],

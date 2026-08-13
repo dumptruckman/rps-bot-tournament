@@ -60,8 +60,10 @@ The official tournament has two phases:
 
 1. A complete round-robin qualifying phase in which every accepted Team competes
    against every other accepted Team.
-2. Normally, a four-Team single-elimination playoff seeded from the qualifying
-   standings. The bracket adapts if disqualifications leave fewer eligible Teams.
+2. Normally, a four-Team single-elimination playoff seeded from the highest-ranked
+   eligible Competitor Teams in the qualifying standings. Challenger Teams never
+   enter the playoff field. The bracket adapts if fewer eligible Competitor Teams
+   remain.
 
 The playoff semifinals pair seed 1 against seed 4 and seed 2 against seed 3.
 The semifinal winners advance to the final, and its winner becomes Tournament
@@ -77,6 +79,13 @@ Each Team enters exactly one immutable Bot Artifact in a Tournament. Tournament
 records identify both the Team and the exact Bot Artifact so that organizer- and
 participant-facing results remain understandable while executions remain
 reproducible.
+
+Each Team also has one immutable Team Role. A `competitor` is eligible for
+playoff selection unless disqualified. A `challenger` participates in the same
+complete qualifying round robin, contributes to every Series and standing
+calculation normally, and appears in qualifying standings, but is excluded when
+the playoff field is selected. Missing roles in legacy Tournament inputs are
+interpreted as `competitor`.
 
 A Team cannot replace its Bot Artifact after the Tournament begins.
 
@@ -273,9 +282,9 @@ standings.
 
 ### 16. Disqualification During Playoffs
 
-Before the first playoff Match begins, a disqualified Team is removed, up to the
-four highest-ranked eligible Teams are selected, and the playoff bracket is
-seeded again under the eligible-Team rules.
+Before the first playoff Match begins, a disqualified Team is removed, Challenger
+Teams are excluded, up to the four highest-ranked eligible Competitor Teams are
+selected, and the playoff bracket is seeded again under the eligible-Team rules.
 
 Bracket Lock occurs when the first playoff Match begins. After Bracket Lock, no
 Team enters the Playoff Phase from qualification and the bracket is not
@@ -500,7 +509,8 @@ without changing Tournament schema or rules.
 
 ### 28. Reduced Playoffs After Disqualification
 
-Before Bracket Lock, the Playoff Phase adapts to the number of eligible Teams:
+Before Bracket Lock, the Playoff Phase adapts to the number of eligible
+Competitor Teams after Challenger Teams and disqualified Teams are excluded:
 
 - Four or more eligible Teams use the standard four-Team bracket.
 - Three eligible Teams give seed 1 a bye to the final while seeds 2 and 3 play a

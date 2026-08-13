@@ -120,6 +120,21 @@ def terminal_record(
 
 
 class LiveContractTests(unittest.TestCase):
+    def test_copies_challenger_role_without_inferring_it_for_legacy_teams(
+        self,
+    ) -> None:
+        source = projection()
+        source["teams"][0]["role"] = "challenger"
+
+        live = project_live(source)
+
+        self.assertEqual(live["teams"][0]["role"], "challenger")
+        self.assertNotIn("role", live["teams"][1])
+
+        source["teams"][0]["role"] = "spectator"
+        with self.assertRaisesRegex(ProjectionContractError, "role"):
+            project_live(source)
+
     def test_copies_only_live_standings_fields_in_projection_order(self) -> None:
         source = projection()
         source["standings"].insert(

@@ -412,6 +412,43 @@ class TournamentStateFoldTests(unittest.TestCase):
             record["fixtures"][0]["team_ids"], ["beta", "alpha"]
         )
 
+    def test_challengers_remain_ranked_but_are_filtered_from_playoffs(self) -> None:
+        challenger_manifest = manifest()
+        challenger_manifest["roster"][0]["role"] = "challenger"
+        standings = (
+            Standing("alpha", 9, 3, 6, 0, 900, 0, 0, 10),
+            Standing("beta", 6, 2, 4, 2, 600, 300, 0, 20),
+            Standing("gamma", 3, 1, 2, 4, 300, 600, 0, 30),
+            Standing("delta", 0, 0, 0, 6, 0, 900, 0, 40),
+        )
+
+        record = build_playoff_bracket_record(
+            challenger_manifest, standings
+        )
+
+        self.assertEqual(
+            record["seeds"],
+            [
+                {"seed": 1, "team_id": "beta"},
+                {"seed": 2, "team_id": "gamma"},
+                {"seed": 3, "team_id": "delta"},
+            ],
+        )
+        self.assertEqual(
+            [fixture["team_ids"] for fixture in record["fixtures"]],
+            [["gamma", "delta"], ["beta", None]],
+        )
+
+    def test_playoff_selection_rejects_an_explicit_null_manifest_role(self) -> None:
+        invalid_manifest = manifest()
+        invalid_manifest["roster"][0]["role"] = None
+        standings = (
+            Standing("alpha", 0, 0, 0, 0, 0, 0, 0, 10),
+        )
+
+        with self.assertRaisesRegex(TournamentStateError, "role"):
+            build_playoff_bracket_record(invalid_manifest, standings)
+
     def test_zero_eligible_terminal_record_is_rules_driven_and_canonical(self) -> None:
         empty_manifest = manifest() | {
             "roster": [],
