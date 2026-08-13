@@ -37,6 +37,8 @@ jobs:
         run: python -m unittest tests.test_csharp_language_environment.CSharpLanguageEnvironmentTests -v
       - name: Exercise Clojure catalog and Seed Adapter contracts
         run: python -m unittest tests.test_clojure_language_environment.ClojureLanguageEnvironmentTests -v
+      - name: Exercise Kotlin catalog and Seed Adapter contracts
+        run: python -m unittest tests.test_kotlin_language_environment.KotlinLanguageEnvironmentTests -v
       - name: Prepare exact internal-fixture images
         run: |
           docker pull --platform linux/amd64 docker.io/library/python@sha256:ff83a535339812dd72e69c93b3c48ddf7c85a324d6330af5797c82a255dbeef4
@@ -74,6 +76,14 @@ jobs:
         run: >-
           python -m unittest
           tests.test_clojure_language_environment.ClojureLanguageEnvironmentDockerTests
+          -v
+      - name: Prove Kotlin Linux/AMD64 Advisory Validation
+        env:
+          RPS_RUN_DOCKER_INTEGRATION: "1"
+          RPS_DOCKER_PLATFORM: linux/amd64
+        run: >-
+          python -m unittest
+          tests.test_kotlin_language_environment.KotlinLanguageEnvironmentDockerTests
           -v
       - name: Configure the disposable proof release identity
         run: |

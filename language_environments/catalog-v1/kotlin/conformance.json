@@ -1,0 +1,50 @@
+{
+  "accepted_faults": {
+    "import-time": ["unexpected_exit"],
+    "memory": ["resource_oom", "unexpected_exit"]
+  },
+  "contract": "choose-move-contract-v1",
+  "diagnostic_fixtures": [
+    "syntax-build",
+    "import-time",
+    "nondeterministic",
+    "protocol-fault",
+    "slow-response",
+    "memory",
+    "process",
+    "filesystem",
+    "premature-output"
+  ],
+  "fixture_sources": {
+    "filesystem": "import java.nio.file.Files\nimport java.nio.file.Path\nimport java.util.random.RandomGenerator\n\nobject Strategy {\n  private val limitEnforced = probe()\n  private fun probe(): Boolean = try {\n    Files.write(Path.of(\"/tmp/conformance-fill\"), ByteArray(32 * 1024 * 1024))\n    Files.deleteIfExists(Path.of(\"/tmp/conformance-fill\"))\n    false\n  } catch (_: Exception) { true }\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = if (limitEnforced) \"R\" else \"X\"\n}\n",
+    "import-time": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  private val failure: Int = throw IllegalStateException(\"conformance initialization fixture\")\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = \"R\"\n}\n",
+    "memory": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  private var retained = ByteArray(0)\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String {\n    retained = ByteArray(512 * 1024 * 1024)\n    for (index in retained.indices step 4096) retained[index] = index.toByte()\n    return \"R\"\n  }\n}\n",
+    "nondeterministic": "import java.security.SecureRandom\nimport java.util.random.RandomGenerator\n\nobject Strategy {\n  private val ambient = SecureRandom()\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = arrayOf(\"R\", \"P\", \"S\")[ambient.nextInt(3)]\n}\n",
+    "premature-output": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  init { println(\"R\") }\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = \"R\"\n}\n",
+    "process": "import java.nio.file.Files\nimport java.nio.file.Path\nimport java.util.random.RandomGenerator\n\nobject Strategy {\n  private val limitEnforced = try {\n    val value = Files.readString(Path.of(\"/sys/fs/cgroup/pids.max\")).trim()\n    value != \"max\" && value.toLong() <= 64\n  } catch (_: Exception) { false }\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = if (limitEnforced) \"R\" else \"X\"\n}\n",
+    "protocol-fault": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = \"X\"\n}\n",
+    "slow-response": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String {\n    Thread.sleep(200)\n    return \"R\"\n  }\n}\n",
+    "syntax-build": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String {\n    this is not valid Kotlin\n    return \"R\"\n  }\n}\n"
+  },
+  "practice_artifacts": {
+    "copycat": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = if (opponentHistory.isEmpty()) \"R\" else opponentHistory.last().toString()\n}\n",
+    "fixed-move": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = \"R\"\n}\n",
+    "protocol-test": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String {\n    if (turn != myHistory.length || myHistory.length != opponentHistory.length) return \"X\"\n    if (!(myHistory + opponentHistory).all { it in \"RPS\" }) return \"X\"\n    return arrayOf(\"R\", \"P\", \"S\")[turn % 3]\n  }\n}\n",
+    "random": "import java.util.random.RandomGenerator\n\nobject Strategy {\n  fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String = arrayOf(\"R\", \"P\", \"S\")[rng.nextInt(3)]\n}\n"
+  },
+  "seed_adapter": {
+    "algorithm": "java.util.SplittableRandom(java.lang.Long.parseUnsignedLong(RPS_SEED))",
+    "golden_vectors": [
+      {"seed": "0", "first_long": [-2152535657050944081, 7960286522194355700, 487617019471545679]},
+      {"seed": "1", "first_long": [-7995527694508729151, -4689498862643123097, -534904783426661026]},
+      {"seed": "9223372036854775807", "first_long": [3055647633038352039, -1005427240264861369, -1435078927205645936]},
+      {"seed": "18446744073709551615", "first_long": [-1956407806741107680, -1612297016619662647, 4048727598324417001]}
+    ],
+    "system_randomness": false,
+    "version": "kotlin-splittable-random-seed-adapter-v1"
+  },
+  "source_path": "Strategy.kt",
+  "syntax_diagnostic": "error:",
+  "syntax_stage": "build",
+  "suite_version": "kotlin-artifact-conformance-v1"
+}

@@ -1,0 +1,4 @@
+{
+  "argv": ["/opt/java/openjdk/bin/java", "-jar", "/opt/rps/rps-bot.jar"],
+  "version": "kotlin-entrypoint-v1"
+}

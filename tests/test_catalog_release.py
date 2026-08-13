@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "c70dac15b4c0220cb9315a92db7e3be696fd44a1f944a30a6f6c771864ebfb97",
+            "47ce9003164c1fe9dfb4f1fd7c711e2fd11d45f041de1f5cb37fd7fad06f8c2d",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -136,6 +136,17 @@ class CatalogReleaseTests(unittest.TestCase):
                 "java.recipe",
                 "java.workflow",
                 "java.wrapper",
+                "kotlin.base_runtime",
+                "kotlin.build_toolchain",
+                "kotlin.build_target",
+                "kotlin.conformance",
+                "kotlin.dependency_definition",
+                "kotlin.entrypoint",
+                "kotlin.platform",
+                "kotlin.readiness",
+                "kotlin.recipe",
+                "kotlin.workflow",
+                "kotlin.wrapper",
                 "javascript.base_runtime",
                 "javascript.build_toolchain",
                 "javascript.build_target",
@@ -229,6 +240,8 @@ class CatalogReleaseTests(unittest.TestCase):
                 "d791f1719d0becbcb1b36bf4f94a006484637d8762685d9b7471ca1f8f39c1e8",
                 "java": "java-artifact-conformance-v1@sha256:"
                 "f29543b7644c0a65dc46ed3c88e5215b5177a2434f156f27130e81c613d4aa3f",
+                "kotlin": "kotlin-artifact-conformance-v1@sha256:"
+                "f530c8e3e6719a48a0305afd7b33981c38e8a0cbf2d2aae305f1ca4606034af8",
                 "javascript": "javascript-artifact-conformance-v1@sha256:"
                 "7c8de8485a6d643f0e93112f3bd319df03a6d93cd4472da7a9bfc3652941c91c",
                 "csharp": "csharp-artifact-conformance-v1@sha256:"
@@ -248,8 +261,8 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             set(manifest["platform_runtimes"]),
             {
-                "clojure", "csharp", "go", "java", "javascript", "python",
-                "ruby", "rust", "typescript",
+                "clojure", "csharp", "go", "java", "javascript", "kotlin",
+                "python", "ruby", "rust", "typescript",
             },
         )
         python_runtimes = manifest["platform_runtimes"]["python"]
@@ -558,12 +571,13 @@ class CatalogIndependenceProofTests(unittest.TestCase):
         self.assertIn("## Python Team Template build toolchains", notes)
         self.assertIn("## Go Team Template build toolchains", notes)
         self.assertIn("## Java Team Template build toolchains", notes)
+        self.assertIn("## Kotlin Team Template build toolchains", notes)
         self.assertIn("## JavaScript Team Template build toolchains", notes)
         self.assertIn("## C# Team Template build toolchains", notes)
         self.assertIn("## Rust Team Template build toolchains", notes)
         self.assertIn("## TypeScript Team Template build toolchains", notes)
         for language in (
-            "csharp", "go", "java", "javascript", "python", "rust", "typescript"
+            "csharp", "go", "java", "javascript", "kotlin", "python", "rust", "typescript"
         ):
             for platform in ("linux/amd64", "linux/arm64"):
                 build = manifest["platform_runtimes"][language]["platforms"][platform][
@@ -619,6 +633,7 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 "tests/test_csharp_language_environment.py",
                 "tests/test_java_language_environment.py",
                 "tests/test_javascript_language_environment.py",
+                "tests/test_kotlin_language_environment.py",
                 "tests/test_rust_language_environment.py",
                 "tests/test_ruby_language_environment.py",
                 "tests/test_typescript_language_environment.py",

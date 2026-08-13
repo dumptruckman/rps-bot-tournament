@@ -174,6 +174,72 @@
         "version": "java-source-schema-v1"
       }
     },
+    "kotlin": {
+      "assets": {
+        "base_runtime": {"path": "kotlin/runtimes.json", "sha256": "sha256:4cf7adc6035eb851373633677ca6d9ec34e9126e8176779e29e14b66e01f2741", "version": "kotlin-runtime-v1"},
+        "build_toolchain": {"path": "kotlin/runtimes.json", "sha256": "sha256:4cf7adc6035eb851373633677ca6d9ec34e9126e8176779e29e14b66e01f2741", "version": "kotlin-build-toolchain-v1"},
+        "build_target": {"path": "kotlin/Dockerfile", "sha256": "sha256:8e8add48e7c7e5f61322f900bc6f54a2a9f4197127ebba1b71ac6507cdd7ab60", "version": "kotlin-build-target-v1"},
+        "conformance": {"path": "kotlin/conformance.json", "sha256": "sha256:f530c8e3e6719a48a0305afd7b33981c38e8a0cbf2d2aae305f1ca4606034af8", "version": "kotlin-conformance-v1"},
+        "dependency_definition": {"path": "kotlin/kotlin-compiler-2.4.10.zip", "sha256": "sha256:473dd66c7a3ef4b182065b3da670466c1bf2773a9dbb0ed8b33a39fe9d4f876d", "version": "kotlin-compiler-distribution-v1"},
+        "entrypoint": {"path": "kotlin/entrypoint.json", "sha256": "sha256:b08b86256a2452f6d783485576e59f77ab39df0cdd93e7197a07670507822042", "version": "kotlin-entrypoint-v1"},
+        "platform": {"path": "kotlin/runtimes.json", "sha256": "sha256:4cf7adc6035eb851373633677ca6d9ec34e9126e8176779e29e14b66e01f2741", "version": "kotlin-oci-platforms-v1"},
+        "readiness": {"path": "kotlin/readiness.json", "sha256": "sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458", "version": "wrapper-readiness-v1"},
+        "recipe": {"path": "kotlin/Dockerfile", "sha256": "sha256:8e8add48e7c7e5f61322f900bc6f54a2a9f4197127ebba1b71ac6507cdd7ab60", "version": "kotlin-build-recipe-v1"},
+        "workflow": {"path": "kotlin/workflow.yml", "sha256": "sha256:cb26c88a5a2d0300c37194aadcadd5e244604176d9a8efe406e90419d73f0d41", "version": "source-validation-workflow-v1"},
+        "wrapper": {"path": "kotlin/RpsWrapper.kt", "sha256": "sha256:0b9816bd10ad1509563e938e89925b6103052fb0ada983022826c7a50832b810", "version": "kotlin-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "kotlin-language-environment-v1",
+      "language": "kotlin",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "Strategy.chooseMove",
+        "signature": "fun chooseMove(turn: Int, myHistory: String, opponentHistory: String, rng: RandomGenerator): String",
+        "static_validation": "kotlin-strategy-contract-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": [
+          "*.kt",
+          "resources/*.csv",
+          "resources/*.json",
+          "resources/*.txt",
+          "resources/**/*.csv",
+          "resources/**/*.json",
+          "resources/**/*.txt"
+        ],
+        "forbidden_paths": [
+          ".git",
+          ".github",
+          ".gradle",
+          ".hg",
+          ".gitlab-ci.yml",
+          ".mvn",
+          ".svn",
+          "Dockerfile",
+          "Justfile",
+          "Makefile",
+          "build.gradle",
+          "build.gradle.kts",
+          "compose.yml",
+          "docker-compose.yml",
+          "entrypoint.sh",
+          "gradle",
+          "gradle.properties",
+          "gradlew",
+          "gradlew.bat",
+          "pom.xml",
+          "settings.gradle",
+          "settings.gradle.kts",
+          "RpsWrapper.kt"
+        ],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": ["Strategy.kt"],
+        "version": "kotlin-source-schema-v1"
+      }
+    },
     "javascript": {
       "assets": {
         "base_runtime": {"path":"javascript/runtimes.json","sha256":"sha256:ff706eb326ee1c8c6244c1379e3758fd8907a456bccce7dd66df1c86efb825ea","version":"javascript-runtime-v1"},

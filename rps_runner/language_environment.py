@@ -823,6 +823,68 @@ def _java_significant_source(source: str) -> str:
     return _c_like_significant_source(source, raw_delimiters=('"""',))
 
 
+def _validate_kotlin_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "Strategy.kt")
+    kotlin_sources = []
+    for item in files:
+        if not item.path.endswith(".kt"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Kotlin Team Source must be UTF-8: " + str(error),
+            )
+        significant = _c_like_significant_source(source, raw_delimiters=('"""',))
+        kotlin_sources.append((item, significant))
+        if re.search(r"(?m)^\s*package\s+", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Kotlin Team Source must use the organizer-owned default package",
+            )
+        if re.search(r"\b(?:object|class)\s+RpsWrapper\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned RpsWrapper object",
+            )
+        if re.search(r"\bfun\s+main\s*\(", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not define the organizer-owned main function",
+            )
+
+    strategy = _c_like_significant_source(
+        source_file.content.decode("utf-8"), raw_delimiters=('"""',)
+    )
+    if len(re.findall(r"\bobject\s+Strategy\b", strategy)) != 1:
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "Strategy.kt must define exactly one Strategy object",
+        )
+    signature = re.compile(
+        r"\bfun\s+chooseMove\s*\(\s*turn\s*:\s*Int\s*,\s*"
+        r"myHistory\s*:\s*String\s*,\s*opponentHistory\s*:\s*String\s*,\s*"
+        r"rng\s*:\s*RandomGenerator\s*\)\s*:\s*String\s*(?:=|\{)"
+    )
+    bindings = sum(
+        len(re.findall(r"\b(?:fun|val|var|class|object)\s+chooseMove\b", value))
+        for _, value in kotlin_sources
+    )
+    if bindings != 1 or not signature.search(strategy):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one fun chooseMove(turn: Int, myHistory: String, "
+            "opponentHistory: String, rng: RandomGenerator): String function",
+        )
+
+
 def _validate_csharp_strategy_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "Strategy.cs")
     sources = []
@@ -1466,6 +1528,7 @@ _PARTICIPANT_CONTRACT_VALIDATORS = {
     "go-strategy-contract-v1": _validate_go_strategy_contract,
     "java-strategy-contract-v1": _validate_java_strategy_contract,
     "javascript-strategy-contract-v1": _validate_javascript_strategy_contract,
+    "kotlin-strategy-contract-v1": _validate_kotlin_strategy_contract,
     "rust-strategy-contract-v1": _validate_rust_strategy_contract,
     "ruby-strategy-contract-v1": _validate_ruby_strategy_contract,
     "typescript-strategy-contract-v1": _validate_typescript_strategy_contract,
