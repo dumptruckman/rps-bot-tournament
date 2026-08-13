@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -22,7 +23,11 @@ from rps_runner.artifact_certification import (
     certify_artifact_candidate,
 )
 from rps_runner.engine import ContainerOperations
+from rps_runner.artifact_store import ArtifactSelection, preserve_artifact_set
+from rps_runner.execution_profile import INITIAL_EXECUTION_PROFILE
 from rps_runner.tournament.match_executor import ContainerMatchExecutor
+from rps_runner.tournament.retained_artifacts import canonical_artifact_identity
+from rps_runner.tournament_cli import main as tournament_main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -172,7 +177,7 @@ class BrainfCkLanguageEnvironmentDockerTests(unittest.TestCase):
             bundle, candidate, catalog, platform
         )
 
-    def test_brainf_ck_passes_complete_conformance_and_a_mixed_language_match(self) -> None:
+    def test_brainf_ck_passes_complete_conformance_and_a_mixed_language_plan(self) -> None:
         platform = os.environ.get("RPS_DOCKER_PLATFORM", "linux/amd64")
         mode = "organizer-final" if platform == "linux/arm64" else "github-advisory"
         python_source = (
@@ -192,7 +197,9 @@ class BrainfCkLanguageEnvironmentDockerTests(unittest.TestCase):
                 catalog,
                 CertificationInputs(mode, platform, "docker-execution-v1"),
             )
-            _, _, python_manifest = self._build(root, "python", python_source, platform)
+            _, python_candidate, python_manifest = self._build(
+                root, "python", python_source, platform
+            )
             references = {
                 brainf_ck_manifest["artifact_digest"]: brainf_ck_manifest["retention"]["local_image_id"],
                 python_manifest["artifact_digest"]: python_manifest["retention"]["local_image_id"],
@@ -209,6 +216,76 @@ class BrainfCkLanguageEnvironmentDockerTests(unittest.TestCase):
                     namespace="mixed-language-brainf-ck",
                 )
             )
+            tournament_exit = None
+            if platform == "linux/arm64":
+                python_certification = root / "python-certification"
+                python_result = certify_artifact_candidate(
+                    python_candidate,
+                    python_certification,
+                    catalog,
+                    CertificationInputs(mode, platform, "docker-execution-v1"),
+                )
+                store = root / "artifact-store"
+                index = preserve_artifact_set(
+                    store,
+                    [
+                        ArtifactSelection(brainf_ck_candidate, certification),
+                        ArtifactSelection(python_candidate, python_certification),
+                    ],
+                )
+                resources = dict(INITIAL_EXECUTION_PROFILE.as_mapping())
+                resources.pop("version")
+                resources.pop("recommended_match_parallelism")
+                plan = {
+                    "tournament_plan_format_version": "tournament-plan-v1",
+                    "status": "draft",
+                    "tournament_seed": 8675309,
+                    "execution": {"mode": "step", "parallelism": 1},
+                    "catalog": {"version": catalog.version, "identity": catalog.identity},
+                    "execution_profile": {
+                        "version": INITIAL_EXECUTION_PROFILE.version,
+                        "identity": INITIAL_EXECUTION_PROFILE.identity,
+                    },
+                    "global_resources": resources,
+                    "artifact_store": {"index_identity": index["integrity"]["index_identity"]},
+                    "teams": [],
+                }
+                for ordinal in range(4):
+                    manifest = [result["manifest"], python_result["manifest"]][ordinal % 2]
+                    plan["teams"].append(
+                        {
+                            "team_id": "mixed-brainf-ck-team-" + str(ordinal),
+                            "display_name": "Mixed Brainf-ck Team " + str(ordinal),
+                            "roster_ready": True,
+                            "selected_source": {"source_digest": manifest["source_digest"]},
+                            "bot_artifact_manifest": manifest,
+                            "canonical_artifact_identity": canonical_artifact_identity(manifest),
+                            "artifact_store_reference": {
+                                "index_identity": index["integrity"]["index_identity"],
+                                "artifact_digest": manifest["artifact_digest"],
+                                "platform": platform,
+                            },
+                        }
+                    )
+                plan_path = root / "tournament-plan.json"
+                plan_path.write_text(json.dumps(plan))
+                tournament_exit = tournament_main(
+                    [
+                        "plan",
+                        "--plan",
+                        str(plan_path),
+                        "--catalog",
+                        str(CATALOG_PATH),
+                        "--artifact-store",
+                        str(store),
+                        "--directory",
+                        str(root / "tournament"),
+                        "--tournament-id",
+                        "mixed-language-brainf-ck-proof",
+                    ],
+                    stdout=io.StringIO(),
+                    stderr=io.StringIO(),
+                )
 
         self.assertEqual(result["report"]["status"], "passed")
         self.assertFalse(match.infrastructure_failure)
@@ -216,6 +293,8 @@ class BrainfCkLanguageEnvironmentDockerTests(unittest.TestCase):
             match.competitive_outcome["faults"],
             {"candidate-a": None, "candidate-b": None},
         )
+        if platform == "linux/arm64":
+            self.assertEqual(tournament_exit, 0)
 
 
 if __name__ == "__main__":
