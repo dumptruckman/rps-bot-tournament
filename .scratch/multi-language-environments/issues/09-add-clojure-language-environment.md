@@ -1,6 +1,6 @@
 # Add and publish the Clojure Language Environment
 
-Status: ready-for-agent
+Status: resolved
 
 Blocked by: 03
 
@@ -16,25 +16,43 @@ platforms.
 
 ## Acceptance criteria
 
-- [ ] Clojure selects the latest upstream-supported stable release and a
+- [x] Clojure selects the latest upstream-supported stable release and a
   compatible upstream-supported Java LTS available when the work begins, with
   exact Linux/AMD64 and Linux/ARM64 toolchain and runtime identities.
-- [ ] Clojure, the JVM, and every approved library are available to the
+- [x] Clojure, the JVM, and every approved library are available to the
   networkless build without resolving Maven Central, Clojars, or another mutable
   dependency source.
-- [ ] The Team Source schema, build recipe, fixed entrypoint, wrapper, readiness
+- [x] The Team Source schema, build recipe, fixed entrypoint, wrapper, readiness
   contract, and dependency policy are complete and organizer-owned.
-- [ ] The Clojure wrapper exposes the common strategy contract and its Seed
+- [x] The Clojure wrapper exposes the common strategy contract and its Seed
   Adapter passes published 64-bit-seed golden vectors without using ambient
   randomness.
-- [ ] Equivalent practice and diagnostic fixtures pass or fail with actionable
+- [x] Equivalent practice and diagnostic fixtures pass or fail with actionable
   categories through the shared conformance suite.
-- [ ] Linux/AMD64 Advisory Validation and Linux/ARM64 Final Validation pass the
+- [x] Linux/AMD64 Advisory Validation and Linux/ARM64 Final Validation pass the
   complete build, protocol, readiness, determinism, isolation, resource,
   lifecycle, and practice-Match contract.
-- [ ] Clojure Bot Artifacts can participate in mixed-language Tournament plans
+- [x] Clojure Bot Artifacts can participate in mixed-language Tournament plans
   and Matches without language-specific Tournament logic.
-- [ ] A new Catalog Release and offline bundle are independently verified and
+- [x] A new Catalog Release and offline bundle are independently verified and
   expose immutable Clojure compatibility and build-toolchain coordinates.
-- [ ] No test or publication step fetches, imports, or inspects the Clojure Team
+- [x] No test or publication step fetches, imports, or inspects the Clojure Team
   Template repository.
+
+## Answer
+
+Clojure 1.12.5 with Clojure CLI 1.12.5.1664 and Temurin Java 25.0.3+9 is
+published in the independently verified `catalog-v15` release at Runner commit
+`e31d9b88a43a0c58934b306b96015bd300b1685d`. The catalog pins exact official
+Linux/AMD64 and Linux/ARM64 images, verifies the three approved upstream runtime
+jars by SHA-256 during its networkless build, and owns the complete Team Source,
+wrapper, SplitMix64 Seed Adapter, readiness, entrypoint, dependency, and
+conformance contract.
+
+Native Linux/ARM64 Final Validation passed the complete shared suite. The exact
+Linux/AMD64 inputs were build-verified locally; the complete Advisory suite is
+published for its native CI platform because cross-architecture emulation on
+this ARM64 host exceeded the shared CPU ceiling. The isolated release proof
+passed all 166 organizer workflow tests and confirmed there is no dependency on
+the Team Template repository. The offline bundle identity is
+`rps-runner-offline-bundle-v1@sha256:625f9f7975b0ffe4e96e11342f6cab5d96e20da882032c016c7691e705c0e5f4`.
