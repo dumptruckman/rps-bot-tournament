@@ -424,6 +424,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertIn("catalog-release-notes.md", workflow)
         self.assertIn("JavaLanguageEnvironmentDockerTests", workflow)
         self.assertIn("CSharpLanguageEnvironmentDockerTests", workflow)
+        self.assertIn("ClojureLanguageEnvironmentDockerTests", workflow)
         self.assertIn("RPS_DOCKER_PLATFORM: linux/amd64", workflow)
         self.assertRegex(
             workflow,
