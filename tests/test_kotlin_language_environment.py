@@ -4,8 +4,11 @@ import json
 import io
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
+import zipfile
 
 from rps_runner.language_environment import (
     SourceValidationError,
@@ -103,6 +106,51 @@ class KotlinLanguageEnvironmentTests(unittest.TestCase):
                 {"seed": "18446744073709551615", "first_long": [-1956407806741107680, -1612297016619662647, 4048727598324417001]},
             ],
         )
+
+        java = shutil.which("java")
+        if java is not None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                compiler = PROJECT_ROOT / self.environment.assets[
+                    "dependency_definition"
+                ].path
+                with zipfile.ZipFile(compiler) as archive:
+                    archive.extractall(root / "compiler")
+                source = root / "Vectors.kt"
+                source.write_text(
+                    "import java.util.SplittableRandom\n"
+                    "fun main() {\n"
+                    "  val seeds = arrayOf(\"0\", \"1\", \"9223372036854775807\", "
+                    "\"18446744073709551615\")\n"
+                    "  for (value in seeds) {\n"
+                    "    val rng = SplittableRandom(java.lang.Long.parseUnsignedLong(value))\n"
+                    "    println(\"$value:${rng.nextLong()},${rng.nextLong()},${rng.nextLong()}\")\n"
+                    "  }\n"
+                    "}\n"
+                )
+                compiler_command = root / "compiler/kotlinc/bin/kotlinc"
+                compiler_command.chmod(0o755)
+                subprocess.run(
+                    [str(compiler_command), str(source), "-include-runtime", "-d", "vectors.jar"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                completed = subprocess.run(
+                    [java, "-jar", "vectors.jar"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            observed = []
+            for line in completed.stdout.splitlines():
+                seed, values = line.split(":")
+                observed.append(
+                    {"seed": seed, "first_long": [int(value) for value in values.split(",")]}
+                )
+            self.assertEqual(observed, adapter["golden_vectors"])
 
     def test_networkless_recipe_compiles_to_the_fixed_kotlin_entrypoint(self) -> None:
         recipe = self.environment.assets["recipe"].content.decode()
