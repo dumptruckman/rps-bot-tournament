@@ -56,13 +56,13 @@ Linux/AMD64 Advisory Validation and Linux/ARM64 Final Validation passed,
 including isolation/resource/lifecycle checks, mixed-language Matches, and an
 ARM64 mixed-language Tournament plan.
 
-Published and independently verified `catalog-v17` at Runner commit
-`8b51ae363f359a74b516a65c9d0bb644c91b9cac`. Its Catalog identity is
+Published and independently verified `catalog-v18` at Runner commit
+`0ce3603722b04be9a617563a1f36f52c8cb7f465`. Its Catalog identity is
 `rps-language-environment-catalog-v1@sha256:47ce9003164c1fe9dfb4f1fd7c711e2fd11d45f041de1f5cb37fd7fad06f8c2d`,
 its Kotlin conformance identity is
 `kotlin-artifact-conformance-v1@sha256:f530c8e3e6719a48a0305afd7b33981c38e8a0cbf2d2aae305f1ca4606034af8`,
 and its offline bundle identity is
-`rps-runner-offline-bundle-v1@sha256:fe6d3e318aee296aea39f99873602233e42e4942e8841cf08e82993dedbfd460`.
+`rps-runner-offline-bundle-v1@sha256:035977c663d8c2e9613e26a75252799a802ab50e94d8a5c41cdb4c6cdfd34331`.
 The complete Python 3.9 suite passed 482 tests with 14 expected opt-in skips.
 Both review axes passed after addressing the initial publication, seed-vector,
 and ARM64 proof findings; no Runner workflow depends on the Team Template
