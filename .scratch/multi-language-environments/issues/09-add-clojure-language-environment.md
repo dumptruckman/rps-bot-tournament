@@ -55,4 +55,4 @@ published for its native CI platform because cross-architecture emulation on
 this ARM64 host exceeded the shared CPU ceiling. The isolated release proof
 passed all 166 organizer workflow tests and confirmed there is no dependency on
 the Team Template repository. The offline bundle identity is
-`rps-runner-offline-bundle-v1@sha256:625f9f7975b0ffe4e96e11342f6cab5d96e20da882032c016c7691e705c0e5f4`.
+`rps-runner-offline-bundle-v1@sha256:7449be32e529d29d7387c5a8c537a3708fec1a481a4344557d033b358c6d0656`.
