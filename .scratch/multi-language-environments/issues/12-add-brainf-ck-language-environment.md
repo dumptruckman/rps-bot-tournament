@@ -53,8 +53,10 @@ from immutable Catalog assets, with no build-time network or package resolution.
 
 The dialect uses a fixed zero-initialized 30,000-cell tape, wrapping unsigned
 8-bit cells, balanced standard loops, and a non-wrapping pointer. The
-organizer-owned wrapper encodes the complete unsigned 64-bit Bot-visible Seed,
-Turn, and both histories; publishes golden vectors; rejects ambient randomness;
+organizer-owned wrapper adapts the unsigned 64-bit Bot-visible Seed through a
+documented deterministic 64-bit LCG stream, then encodes its move, the complete
+Seed, Turn, and both histories. Published vectors cover both the stream and a
+complete encoded record byte-for-byte. The wrapper rejects ambient randomness
 and enforces source, tape, step, output, and time bounds. The shared conformance
 suite covers fixed, seeded, copycat, and protocol practice Bot Artifacts plus
 actionable syntax, readiness, protocol, tape, step, filesystem, process, and
@@ -65,13 +67,13 @@ complete build and conformance contract. The ARM64 proof also sealed a four-Team
 mixed Brainf-ck/Python Tournament plan and the mixed-language Match completed
 without faults.
 
-Published `catalog-v19` at Runner commit
-`d1ccc03975c14ca6ac539896587e8fa9402d3307`. Its Catalog identity is
-`rps-language-environment-catalog-v1@sha256:5cf3fc6de60bbf5da3256fd3987440fe098f99dfcff9450787b1683338d29f69`,
+Published the review-corrected `catalog-v20` at Runner commit
+`c7d96f969275812b0ec4a13408bd4e4f7ee65579`. Its Catalog identity is
+`rps-language-environment-catalog-v1@sha256:0f6af8f7c31924180c37c4d0cf2c142b171ee3c7786ef86f7aec826a1b6180be`,
 its Brainf-ck conformance identity is
-`brainf-ck-artifact-conformance-v1@sha256:4458ace4b58846542152c1eb334ded52ac102f85f57ad3514db4f32913ad3ecb`,
+`brainf-ck-artifact-conformance-v1@sha256:5a46b3e6010736ddc36e91d198d40a551c1f593d0408d684bd268155b8aa0074`,
 its catalog-owned interpreter identity is
 `catalog-brainf-ck-interpreter-v1@sha256:86d8652f905b9836171b74ebd0be063df740b457d5d343f27af35312cb9d0432`,
 and its independently verified offline bundle identity is
-`rps-runner-offline-bundle-v1@sha256:440fe7070f3811449970a23b7c4b581c517effe146987d80f820fb261d9ed7ee`.
+`rps-runner-offline-bundle-v1@sha256:b13435326549098feb0a3691e2d6f1b38e0f69e34ec16ead61ab930a18c37e69`.
 No Runner dependency surface references the Team Template repository.
