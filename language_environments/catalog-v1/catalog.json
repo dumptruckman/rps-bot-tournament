@@ -174,6 +174,40 @@
         "version": "java-source-schema-v1"
       }
     },
+    "javascript": {
+      "assets": {
+        "base_runtime": {"path":"javascript/runtimes.json","sha256":"sha256:ff706eb326ee1c8c6244c1379e3758fd8907a456bccce7dd66df1c86efb825ea","version":"javascript-runtime-v1"},
+        "build_toolchain": {"path":"javascript/runtimes.json","sha256":"sha256:ff706eb326ee1c8c6244c1379e3758fd8907a456bccce7dd66df1c86efb825ea","version":"javascript-build-toolchain-v1"},
+        "build_target": {"path":"javascript/Dockerfile","sha256":"sha256:e40b8a942ab784d72e417000a764b52961f893370b87b876483d9a29ce8334a3","version":"javascript-build-target-v1"},
+        "conformance": {"path":"javascript/conformance.json","sha256":"sha256:7c8de8485a6d643f0e93112f3bd319df03a6d93cd4472da7a9bfc3652941c91c","version":"javascript-conformance-v1"},
+        "dependency_definition": {"path":"javascript/dependencies.lock","sha256":"sha256:62f1ed5c4e9778d9bb1bb14e8eb4748e8bd05093e6790d343b97a010c5cb5366","version":"javascript-dependencies-v1"},
+        "entrypoint": {"path":"javascript/entrypoint.json","sha256":"sha256:84afd4cc38ef395b24699494ac2856dc3abcc28c295f80a1b7d65e42b94b79dd","version":"javascript-entrypoint-v1"},
+        "platform": {"path":"javascript/runtimes.json","sha256":"sha256:ff706eb326ee1c8c6244c1379e3758fd8907a456bccce7dd66df1c86efb825ea","version":"javascript-oci-platforms-v1"},
+        "readiness": {"path":"javascript/readiness.json","sha256":"sha256:d685b537ddbbd8bdca851284996c6441d264049fd2de006bfa5e6a77d8a0a458","version":"wrapper-readiness-v1"},
+        "recipe": {"path":"javascript/Dockerfile","sha256":"sha256:e40b8a942ab784d72e417000a764b52961f893370b87b876483d9a29ce8334a3","version":"javascript-build-recipe-v1"},
+        "workflow": {"path":"javascript/workflow.yml","sha256":"sha256:2e6a0218646133f63b56bff1076c31e9d074310f4e9f64e294ac54672f5c79f1","version":"source-validation-workflow-v1"},
+        "wrapper": {"path":"javascript/RpsWrapper.js","sha256":"sha256:0cdbbc0f99c43d8c24b249670364c4ef47d70e2cb3455f244e2833ee5d1b221e","version":"javascript-wrapper-v1"}
+      },
+      "contract_only": false,
+      "descriptor_version": "javascript-language-environment-v1",
+      "language": "javascript",
+      "publication": "production",
+      "participant_contract": {
+        "callable": "chooseMove",
+        "signature": "chooseMove(turn, myHistory, opponentHistory, rng) -> move",
+        "static_validation": "javascript-strategy-contract-v1",
+        "version": "choose-move-contract-v1"
+      },
+      "source_schema": {
+        "allowed_files": ["*.js","resources/*.csv","resources/*.json","resources/*.txt","resources/**/*.csv","resources/**/*.json","resources/**/*.txt"],
+        "forbidden_paths": [".git",".github",".hg",".gitlab-ci.yml",".svn","Dockerfile","Justfile","Makefile","compose.yml","docker-compose.yml","entrypoint.sh","node_modules","package-lock.json","package.json","pnpm-lock.yaml","vendor","yarn.lock","RpsWrapper.js","wrapper.js"],
+        "max_file_bytes": 262144,
+        "max_file_count": 64,
+        "max_total_bytes": 1048576,
+        "required_paths": ["strategy.js"],
+        "version": "javascript-source-schema-v1"
+      }
+    },
     "clojure": {
       "assets": {
         "base_runtime": {"path":"clojure/runtimes.json","sha256":"sha256:8ae7d50bff8abbd118b613eaded52d861b9c34e6637cd97270ac7fc8ca14bc92","version":"clojure-runtime-v1"},

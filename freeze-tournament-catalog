@@ -31,6 +31,7 @@ ORGANIZER_WORKFLOW_TESTS = (
     "tests/test_clojure_language_environment.py",
     "tests/test_csharp_language_environment.py",
     "tests/test_java_language_environment.py",
+    "tests/test_javascript_language_environment.py",
     "tests/test_rust_language_environment.py",
     "tests/test_ruby_language_environment.py",
     "tests/test_typescript_language_environment.py",
@@ -128,7 +129,11 @@ def _runtime_records(catalog: Any) -> Dict[str, Dict[str, Any]]:
 
 
 def _language_display_name(language: str) -> str:
-    names = {"csharp": "C#", "typescript": "TypeScript"}
+    names = {
+        "csharp": "C#",
+        "javascript": "JavaScript",
+        "typescript": "TypeScript",
+    }
     return names.get(language, language.title())
 
 
@@ -411,6 +416,23 @@ def _verify_typescript_release_policy(catalog: Any) -> None:
     )
 
 
+def _verify_javascript_release_policy(catalog: Any) -> None:
+    _verify_stable_runtime_policy(
+        catalog,
+        "javascript",
+        "node_version",
+        policy="latest-upstream-supported-lts",
+        additional_selection_fields=("node_lts_release",),
+    )
+    _verify_standard_library_dependency_policy(catalog, "javascript", "JavaScript")
+    _verify_networkless_recipe_policy(
+        catalog,
+        "javascript",
+        "JavaScript",
+        ("npm install", "npm ci", "npx ", "yarn ", "pnpm ", "curl ", "wget "),
+    )
+
+
 def _verify_csharp_release_policy(catalog: Any) -> None:
     environment = catalog.environment("csharp")
     try:
@@ -459,6 +481,7 @@ def _verify_release_policies(catalog: Any) -> None:
     _verify_clojure_release_policy(catalog)
     _verify_csharp_release_policy(catalog)
     _verify_typescript_release_policy(catalog)
+    _verify_javascript_release_policy(catalog)
 
 
 def _bundle_identity(bundle_path: Path) -> str:

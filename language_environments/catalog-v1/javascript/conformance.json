@@ -1,0 +1,41 @@
+{
+  "accepted_faults": {
+    "import-time": ["unexpected_exit"],
+    "memory": ["resource_oom", "unexpected_exit"],
+    "process": ["timeout"]
+  },
+  "contract": "choose-move-contract-v1",
+  "diagnostic_fixtures": ["syntax-build", "import-time", "nondeterministic", "protocol-fault", "slow-response", "memory", "process", "filesystem", "premature-output"],
+  "fixture_sources": {
+    "filesystem": "const fs = require('fs');\nconst limitEnforced = (() => { try { fs.writeFileSync('/tmp/conformance-fill', 'x'.repeat(32 * 1024 * 1024)); fs.unlinkSync('/tmp/conformance-fill'); return false; } catch { return true; } })();\nfunction chooseMove(turn, myHistory, opponentHistory, rng) { return limitEnforced ? 'R' : 'X'; }\nmodule.exports = { chooseMove };\n",
+    "import-time": "throw new Error('conformance initialization fixture');\nfunction chooseMove(turn, myHistory, opponentHistory, rng) { return 'R'; }\nmodule.exports = { chooseMove };\n",
+    "memory": "let retained;\nfunction chooseMove(turn, myHistory, opponentHistory, rng) { retained = new Uint8Array(512 * 1024 * 1024); for (let i = 0; i < retained.length; i += 4096) retained[i] = i; return 'R'; }\nmodule.exports = { chooseMove };\n",
+    "nondeterministic": "function chooseMove(turn, myHistory, opponentHistory, rng) { return ['R', 'P', 'S'][Math.floor(Math.random() * 3)]; }\nmodule.exports = { chooseMove };\n",
+    "premature-output": "console.log('R');\nfunction chooseMove(turn, myHistory, opponentHistory, rng) { return 'R'; }\nmodule.exports = { chooseMove };\n",
+    "process": "function chooseMove(turn, myHistory, opponentHistory, rng) { for (let i = 0; i < 60; i++) { const child = require('child_process').spawn('/bin/sleep', ['60']); child.on('error', () => {}); } while (true) {} }\nmodule.exports = { chooseMove };\n",
+    "protocol-fault": "function chooseMove(turn, myHistory, opponentHistory, rng) { return 'X'; }\nmodule.exports = { chooseMove };\n",
+    "slow-response": "function chooseMove(turn, myHistory, opponentHistory, rng) { const until = Date.now() + 200; while (Date.now() < until) {} return 'R'; }\nmodule.exports = { chooseMove };\n",
+    "syntax-build": "function chooseMove(turn, myHistory, opponentHistory, rng) { return 'R'; }\nconst broken = ;\nmodule.exports = { chooseMove };\n"
+  },
+  "practice_artifacts": {
+    "copycat": "function chooseMove(turn, myHistory, opponentHistory, rng) { return opponentHistory.length === 0 ? 'R' : opponentHistory.at(-1); }\nmodule.exports = { chooseMove };\n",
+    "fixed-move": "function chooseMove(turn, myHistory, opponentHistory, rng) { return 'R'; }\nmodule.exports = { chooseMove };\n",
+    "protocol-test": "function chooseMove(turn, myHistory, opponentHistory, rng) { if (turn !== myHistory.length || myHistory.length !== opponentHistory.length || !/^[RPS]*$/.test(myHistory + opponentHistory)) return 'X'; return ['R', 'P', 'S'][turn % 3]; }\nmodule.exports = { chooseMove };\n",
+    "random": "function chooseMove(turn, myHistory, opponentHistory, rng) { return ['R', 'P', 'S'][rng.nextInt(3)]; }\nmodule.exports = { chooseMove };\n"
+  },
+  "seed_adapter": {
+    "algorithm": "SplitMix64 seeded from the unsigned decimal RPS_SEED",
+    "golden_vectors": [
+      {"seed": "0", "first_uint64": ["16294208416658607535", "7960286522194355700", "487617019471545679"]},
+      {"seed": "1", "first_uint64": ["10451216379200822465", "13757245211066428519", "17911839290282890590"]},
+      {"seed": "9223372036854775807", "first_uint64": ["3055647633038352039", "17441316833444690247", "17011665146503905680"]},
+      {"seed": "18446744073709551615", "first_uint64": ["16490336266968443936", "16834447057089888969", "4048727598324417001"]}
+    ],
+    "system_randomness": false,
+    "version": "javascript-splitmix64-seed-adapter-v1"
+  },
+  "source_path": "strategy.js",
+  "syntax_diagnostic": "SyntaxError",
+  "syntax_stage": "build",
+  "suite_version": "javascript-artifact-conformance-v1"
+}

@@ -87,7 +87,7 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["catalog"]["identity"],
             "rps-language-environment-catalog-v1@sha256:"
-            "c1b2961447993653df86b8a58c4cb4662aa0bc6bfc8e2fe7ed388273968a9f53",
+            "c70dac15b4c0220cb9315a92db7e3be696fd44a1f944a30a6f6c771864ebfb97",
         )
         self.assertEqual(
             set(manifest["catalog"]["assets"]),
@@ -136,6 +136,17 @@ class CatalogReleaseTests(unittest.TestCase):
                 "java.recipe",
                 "java.workflow",
                 "java.wrapper",
+                "javascript.base_runtime",
+                "javascript.build_toolchain",
+                "javascript.build_target",
+                "javascript.conformance",
+                "javascript.dependency_definition",
+                "javascript.entrypoint",
+                "javascript.platform",
+                "javascript.readiness",
+                "javascript.recipe",
+                "javascript.workflow",
+                "javascript.wrapper",
                 "csharp.base_runtime",
                 "csharp.build_toolchain",
                 "csharp.build_target",
@@ -218,6 +229,8 @@ class CatalogReleaseTests(unittest.TestCase):
                 "d791f1719d0becbcb1b36bf4f94a006484637d8762685d9b7471ca1f8f39c1e8",
                 "java": "java-artifact-conformance-v1@sha256:"
                 "f29543b7644c0a65dc46ed3c88e5215b5177a2434f156f27130e81c613d4aa3f",
+                "javascript": "javascript-artifact-conformance-v1@sha256:"
+                "7c8de8485a6d643f0e93112f3bd319df03a6d93cd4472da7a9bfc3652941c91c",
                 "csharp": "csharp-artifact-conformance-v1@sha256:"
                 "a1715ef34a2bfef92976a30ac490d498e913cbf2ae0ad4f1a8b4ae8235b98c6f",
                 "clojure": "clojure-artifact-conformance-v1@sha256:"
@@ -234,7 +247,10 @@ class CatalogReleaseTests(unittest.TestCase):
         )
         self.assertEqual(
             set(manifest["platform_runtimes"]),
-            {"clojure", "csharp", "go", "java", "python", "ruby", "rust", "typescript"},
+            {
+                "clojure", "csharp", "go", "java", "javascript", "python",
+                "ruby", "rust", "typescript",
+            },
         )
         python_runtimes = manifest["platform_runtimes"]["python"]
         self.assertEqual(
@@ -542,10 +558,13 @@ class CatalogIndependenceProofTests(unittest.TestCase):
         self.assertIn("## Python Team Template build toolchains", notes)
         self.assertIn("## Go Team Template build toolchains", notes)
         self.assertIn("## Java Team Template build toolchains", notes)
+        self.assertIn("## JavaScript Team Template build toolchains", notes)
         self.assertIn("## C# Team Template build toolchains", notes)
         self.assertIn("## Rust Team Template build toolchains", notes)
         self.assertIn("## TypeScript Team Template build toolchains", notes)
-        for language in ("csharp", "go", "java", "python", "rust", "typescript"):
+        for language in (
+            "csharp", "go", "java", "javascript", "python", "rust", "typescript"
+        ):
             for platform in ("linux/amd64", "linux/arm64"):
                 build = manifest["platform_runtimes"][language]["platforms"][platform][
                     "build_toolchain"
@@ -599,6 +618,7 @@ class CatalogIndependenceProofTests(unittest.TestCase):
                 "tests/test_clojure_language_environment.py",
                 "tests/test_csharp_language_environment.py",
                 "tests/test_java_language_environment.py",
+                "tests/test_javascript_language_environment.py",
                 "tests/test_rust_language_environment.py",
                 "tests/test_ruby_language_environment.py",
                 "tests/test_typescript_language_environment.py",

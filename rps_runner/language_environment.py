@@ -933,6 +933,59 @@ def _validate_typescript_strategy_contract(files: Sequence[SourceFile]) -> None:
         )
 
 
+def _validate_javascript_strategy_contract(files: Sequence[SourceFile]) -> None:
+    source_file = next(item for item in files if item.path == "strategy.js")
+    sources = []
+    for item in files:
+        if not item.path.endswith(".js"):
+            continue
+        try:
+            source = item.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "JavaScript Team Source must be UTF-8: " + str(error),
+            )
+        significant = _c_like_significant_source(source, raw_delimiters=("`",))
+        sources.append((item, significant))
+        if re.search(r"\bprocess\s*\.\s*(?:stdin|stdout|stderr)\b", significant):
+            raise SourceValidationError(
+                item.path,
+                "participant_contract",
+                "Team Source must not redefine organizer-owned wrapper I/O "
+                "responsibilities",
+            )
+
+    strategy_source = _c_like_significant_source(
+        source_file.content.decode("utf-8"), raw_delimiters=("`",)
+    )
+    signature = re.compile(
+        r"\bfunction\s+chooseMove\s*\(\s*turn\s*,\s*myHistory\s*,\s*"
+        r"opponentHistory\s*,\s*rng\s*\)\s*\{"
+    )
+    bindings = sum(
+        len(re.findall(r"\b(?:function|const|let|var|class)\s+chooseMove\b", value))
+        for _, value in sources
+    )
+    exports = sum(
+        len(
+            re.findall(
+                r"\bmodule\s*\.\s*exports\s*=\s*\{\s*chooseMove\s*\}\s*;?",
+                value,
+            )
+        )
+        for _, value in sources
+    )
+    if bindings != 1 or exports != 1 or not signature.search(strategy_source):
+        raise SourceValidationError(
+            source_file.path,
+            "participant_contract",
+            "define exactly one function chooseMove(turn, myHistory, "
+            "opponentHistory, rng) and export it with module.exports",
+        )
+
+
 def _validate_rust_strategy_contract(files: Sequence[SourceFile]) -> None:
     source_file = next(item for item in files if item.path == "strategy.rs")
     sources = []
@@ -1412,6 +1465,7 @@ _PARTICIPANT_CONTRACT_VALIDATORS = {
     "csharp-strategy-contract-v1": _validate_csharp_strategy_contract,
     "go-strategy-contract-v1": _validate_go_strategy_contract,
     "java-strategy-contract-v1": _validate_java_strategy_contract,
+    "javascript-strategy-contract-v1": _validate_javascript_strategy_contract,
     "rust-strategy-contract-v1": _validate_rust_strategy_contract,
     "ruby-strategy-contract-v1": _validate_ruby_strategy_contract,
     "typescript-strategy-contract-v1": _validate_typescript_strategy_contract,

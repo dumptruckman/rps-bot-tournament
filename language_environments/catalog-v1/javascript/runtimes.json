@@ -1,0 +1,33 @@
+{
+  "selection": {
+    "policy": "latest-upstream-supported-lts",
+    "node_version": "24.19.0",
+    "node_lts_release": "24",
+    "rationale": "Node.js 24.19.0 is the latest release on the newest upstream-supported LTS line.",
+    "selected_on": "2026-08-13",
+    "upstream_release": "https://nodejs.org/en/download/archive/v24"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "build_toolchain": {
+        "image": "docker.io/library/node@sha256:65932751ed4073ed02f5c04e494e4b2572a891b7dbea0568a863dc80341bf848",
+        "version": "linux-amd64-node-24.19.0-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/node@sha256:65932751ed4073ed02f5c04e494e4b2572a891b7dbea0568a863dc80341bf848",
+        "version": "linux-amd64-node-24.19.0-execution-runtime-v1"
+      }
+    },
+    "linux/arm64": {
+      "build_toolchain": {
+        "image": "docker.io/library/node@sha256:c133efe216ffb6e785ed9a8be55a29fcb86775e8008ae0a9f0ed6af4f175bb03",
+        "version": "linux-arm64-node-24.19.0-build-toolchain-v1"
+      },
+      "execution_runtime": {
+        "image": "docker.io/library/node@sha256:c133efe216ffb6e785ed9a8be55a29fcb86775e8008ae0a9f0ed6af4f175bb03",
+        "version": "linux-arm64-node-24.19.0-execution-runtime-v1"
+      }
+    }
+  },
+  "version": "javascript-runtime-v1"
+}
