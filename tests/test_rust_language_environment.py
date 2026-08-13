@@ -75,8 +75,13 @@ class RustLanguageEnvironmentTests(unittest.TestCase):
             with self.assertRaisesRegex(SourceValidationError, "forbidden_paths"):
                 validate_source(source, self.environment)
 
-    def test_accepts_rust_character_and_byte_literals_before_the_contract(self) -> None:
-        for declaration in ("const ROCK: char = 'R';", "const ROCK: u8 = b'R';"):
+    def test_accepts_rust_literals_and_nested_comments_before_the_contract(self) -> None:
+        for declaration in (
+            "const ROCK: char = 'R';",
+            "const ROCK: u8 = b'R';",
+            'const TEXT: &str = r#"fn main() {}"#;',
+            "/* outer /* inner */ fn main() {} */",
+        ):
             with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as name:
                 source = Path(name)
                 (source / "strategy.rs").write_text(

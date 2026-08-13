@@ -1076,20 +1076,100 @@ def _ruby_significant_source(source: str) -> str:
 
 
 def _rust_significant_source(source: str) -> str:
-    """Blank Rust comments and literals while retaining lifetime identifiers."""
+    """Blank Rust comments and literals while preserving line structure."""
 
-    characters = list(source)
-    for index, character in enumerate(source):
-        if character != "'" or index + 1 >= len(source):
+    result = list(source)
+    index = 0
+    block_depth = 0
+    while index < len(source):
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if block_depth:
+            if source.startswith("/*", index):
+                _blank_rust_range(result, index, index + 2)
+                block_depth += 1
+                index += 2
+            elif source.startswith("*/", index):
+                _blank_rust_range(result, index, index + 2)
+                block_depth -= 1
+                index += 2
+            else:
+                if source[index] != "\n":
+                    result[index] = " "
+                index += 1
             continue
-        if not (source[index + 1].isalpha() or source[index + 1] == "_"):
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            end = len(source) if end == -1 else end
+            _blank_rust_range(result, index, end)
+            index = end
             continue
-        if _rust_character_literal_end(source, index) is None:
-            characters[index] = " "
-    without_lifetime_quotes = "".join(characters)
-    return _c_like_significant_source(
-        without_lifetime_quotes, raw_delimiters=('r#"', 'r"')
-    )
+        if source.startswith("/*", index):
+            _blank_rust_range(result, index, index + 2)
+            block_depth = 1
+            index += 2
+            continue
+        raw_end = _rust_raw_string_end(source, index)
+        if raw_end is not None:
+            _blank_rust_range(result, index, raw_end)
+            index = raw_end
+            continue
+        string_start = index + 1 if source[index] == "b" and following == '"' else index
+        if source[string_start : string_start + 1] == '"':
+            end = _rust_escaped_literal_end(source, string_start, '"')
+            _blank_rust_range(result, index, end)
+            index = end
+            continue
+        quote_index = index + 1 if source[index] == "b" and following == "'" else index
+        if source[quote_index : quote_index + 1] == "'":
+            end = _rust_character_literal_end(source, quote_index)
+            if end is not None:
+                _blank_rust_range(result, index, end)
+                index = end
+                continue
+            result[quote_index] = " "
+        index += 1
+    return "".join(result)
+
+
+def _blank_rust_range(result: list[str], start: int, end: int) -> None:
+    for index in range(start, min(end, len(result))):
+        if result[index] != "\n":
+            result[index] = " "
+
+
+def _rust_raw_string_end(source: str, index: int) -> Optional[int]:
+    cursor = index
+    if source.startswith("br", cursor):
+        cursor += 2
+    elif source.startswith("r", cursor):
+        cursor += 1
+    else:
+        return None
+    hashes = 0
+    while cursor < len(source) and source[cursor] == "#":
+        hashes += 1
+        cursor += 1
+    if cursor >= len(source) or source[cursor] != '"':
+        return None
+    closing = '"' + ("#" * hashes)
+    end = source.find(closing, cursor + 1)
+    return len(source) if end == -1 else end + len(closing)
+
+
+def _rust_escaped_literal_end(source: str, quote_index: int, quote: str) -> int:
+    cursor = quote_index + 1
+    escaped = False
+    while cursor < len(source):
+        character = source[cursor]
+        if character == quote and not escaped:
+            return cursor + 1
+        if character == "\n" and not escaped:
+            return cursor
+        escaped = character == "\\" and not escaped
+        if character != "\\":
+            escaped = False
+        cursor += 1
+    return len(source)
 
 
 def _rust_character_literal_end(source: str, quote_index: int) -> Optional[int]:
